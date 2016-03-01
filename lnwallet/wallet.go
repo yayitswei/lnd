@@ -17,6 +17,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcrpcclient"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/coinset"
 	"github.com/btcsuite/btcutil/txsort"
@@ -212,6 +213,9 @@ type LightningWallet struct {
 	// websockets are used for notifications. If using Bitcoin Core,
 	// notifications are either generated via long-polling or the usage of
 	// ZeroMQ.
+	// TODO(roasbeef): make into interface need: getrawtransaction + gettxout
+	//  * getrawtransaction -> verify proof of channel links
+	//  * gettxout -> verify inputs to funding tx exist and are unspent
 	rpc *chain.RPCClient
 
 	// All messages to the wallet are to be sent accross this channel.
@@ -314,7 +318,28 @@ func NewLightningWallet(config *Config) (*LightningWallet, walletdb.DB, error) {
 		log.Printf("stored identity key pubkey hash in channeldb\n")
 	}
 
-	chainNotifier, err := btcdnotify.NewBtcdNotifier(wallet)
+	// Create a special websockets rpc client for btcd which will be used
+	// by the wallet for notifications, calls, etc.
+	rpcc, err := chain.NewRPCClient(config.NetParams, config.RpcHost,
+		config.RpcUser, config.RpcPass, config.CACert, false, 20)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Using the same authentication info, create a config for a second
+	// rpcclient which will be used by the current default chain
+	// notifier implemenation.
+	rpcConfig := &btcrpcclient.ConnConfig{
+		Host:                 config.RpcHost,
+		Endpoint:             "ws",
+		User:                 config.RpcUser,
+		Pass:                 config.RpcPass,
+		Certificates:         config.CACert,
+		DisableTLS:           false,
+		DisableConnectOnNew:  true,
+		DisableAutoReconnect: false,
+	}
+	chainNotifier, err := btcdnotify.NewBtcdNotifier(rpcConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -323,6 +348,7 @@ func NewLightningWallet(config *Config) (*LightningWallet, walletdb.DB, error) {
 	return &LightningWallet{
 		db:            walletDB,
 		chainNotifier: chainNotifier,
+		rpc:           rpcc,
 		Wallet:        wallet,
 		ChannelDB:     cdb,
 		msgChan:       make(chan interface{}, msgBufferSize),
@@ -343,20 +369,22 @@ func (l *LightningWallet) Startup() error {
 	if atomic.AddInt32(&l.started, 1) != 1 {
 		return nil
 	}
-	// TODO(roasbeef): config...
 
-	rpcc, err := chain.NewRPCClient(l.cfg.NetParams, l.cfg.RpcHost,
-		l.cfg.RpcUser, l.cfg.RpcPass, l.cfg.CACert, false, 20)
-	if err != nil {
-		return err
-	}
-
-	// Start the goroutines in the underlying wallet.
-	l.rpc = rpcc
+	// Establish an RPC connection in additino to starting the goroutines
+	// in the underlying wallet.
 	if err := l.rpc.Start(); err != nil {
 		return err
 	}
 	l.Start()
+
+	// Start the notification server. This is used so channel managment
+	// goroutines can be notified when a funding transaction reaches a
+	// sufficient number of confirmations, or when the input for the funding
+	// transaction is spent in an attempt at an uncooperative close by the
+	// counter party.
+	if err := l.chainNotifier.Start(); err != nil {
+		return err
+	}
 
 	// Pass the rpc client into the wallet so it can sync up to the current
 	// main chain.
@@ -376,7 +404,10 @@ func (l *LightningWallet) Shutdown() error {
 	}
 
 	l.Stop()
+
 	l.rpc.Shutdown()
+
+	l.chainNotifier.Stop()
 
 	close(l.quit)
 	l.wg.Wait()
@@ -937,8 +968,7 @@ func (l *LightningWallet) handleFundingCounterPartySigs(msg *addCounterPartySigs
 	ourKeySer := ourKey.PubKey().SerializeCompressed()
 	theirKeySer := theirKey.SerializeCompressed()
 	scriptSig, err := spendMultiSig(redeemScript, ourKeySer, ourCommitSig,
-		theirKeySer,
-		theirCommitSig)
+		theirKeySer, theirCommitSig)
 	if err != nil {
 		msg.err <- err
 		return
@@ -984,17 +1014,14 @@ func (l *LightningWallet) handleFundingCounterPartySigs(msg *addCounterPartySigs
 func (l *LightningWallet) openChannelAfterConfirmations(res *ChannelReservation, numConfs uint32) {
 	// Register with the ChainNotifier for a notification once the funding
 	// transaction reaches `numConfs` confirmations.
-	trigger := &chainntnfs.NotificationTrigger{
-		TriggerChan: make(chan struct{}, 1),
-	}
 	txid := res.partialState.FundingTx.TxSha()
-	l.chainNotifier.RegisterConfirmationsNotification(&txid, numConfs, trigger)
+	confNtfn, _ := l.chainNotifier.RegisterConfirmationsNtfn(&txid, numConfs)
 
 	// Wait until the specified number of confirmations has been reached,
 	// or the wallet signals a shutdown.
 out:
 	select {
-	case <-trigger.TriggerChan:
+	case <-confNtfn.Confirmed:
 		break out
 	case <-l.quit:
 		res.chanOpen <- nil
