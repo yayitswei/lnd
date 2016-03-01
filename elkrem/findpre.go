@@ -10,7 +10,7 @@ import (
 /* findpre - find the pre-image for a given hash
 
 The worst (?) has happened and your channel counterparty has broadcast an old,
-invalid state.  That's bad.  But what, that means you get to take all the money.
+invalid state.  That's bad.  But wait, that means you get to take all the money.
 This is the fun part of the channel enforcement mechanism.
 
 The old transaction they broadcast has an nLockTime field which provides a hint
