@@ -172,18 +172,18 @@ func OutPointsEqual(a, b wire.OutPoint) bool {
 /*----- serialization for tx outputs ------- */
 
 // outPointToBytes turns an outpoint into 36 bytes.
-func outPointToBytes(op *wire.OutPoint) ([]byte, error) {
+func outPointToBytes(op wire.OutPoint) []byte {
 	var buf bytes.Buffer
 	_, err := buf.Write(op.Hash.Bytes())
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	// write 4 byte outpoint index within the tx to spend
 	err = binary.Write(&buf, binary.BigEndian, op.Index)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
 /*----- serialization for utxos ------- */

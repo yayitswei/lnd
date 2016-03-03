@@ -18,10 +18,13 @@ import (
 type SimplChannel struct {
 	FundPoint wire.OutPoint // outpoint of channel (in funding txid)
 	//	ImFunder bool // true if I'm the funder, false if I'm acceptor
+	Cap uint64 // channel capacity
 
 	MyKeyIdx uint32 // which key am I using for channel multisig
 	MyPub    btcec.PublicKey
-	TheirPub btcec.PublicKey // their pubkey for channel multisig
+
+	TheirLNId [20]byte        // LNId of counterparty
+	TheirPub  btcec.PublicKey // their pubkey for channel multisig
 
 	SendElkrem elkrem.ElkremSender
 	RecvElkrem elkrem.ElkremReceiver
@@ -30,13 +33,12 @@ type SimplChannel struct {
 	NextState    *StatCom // used when transitioning states
 
 	// height at which channel expires (all cltvs in statcoms use this)
-	//	Expiry uint32
+	Expiry uint32
 }
 
 // StatComs are State Commitments.
 type StatCom struct {
-	MyAmt    int64 // my channel allocation
-	TheirAmt int64 // their channel allocation
+	MyAmt int64 // my channel allocation
 
 	Idx uint64 // this is the n'th state commitment
 
