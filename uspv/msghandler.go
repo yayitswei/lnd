@@ -3,7 +3,9 @@ package uspv
 import (
 	"fmt"
 	"log"
+	"net"
 
+	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 )
@@ -25,7 +27,8 @@ func (s *SPVCon) incomingMessageHandler() {
 		case *wire.MsgVerAck:
 			log.Printf("Got verack.  Whatever.\n")
 		case *wire.MsgAddr:
-			log.Printf("got %d addresses.\n", len(m.AddrList))
+			s.AddrHandler(m)
+			// log.Printf("got %d addresses.\n", len(m.AddrList))
 		case *wire.MsgPing:
 			// log.Printf("Got a ping message.  We should pong back or they will kick us off.")
 			go s.PongBack(m.Nonce)
@@ -105,6 +108,22 @@ func (s *SPVCon) fPositiveHandler() {
 			// reset accumulator
 			fpAccumulator = 0
 		}
+	}
+}
+
+func (s *SPVCon) AddrHandler(m *wire.MsgAddr) {
+	fmt.Printf("--- ALL IP ADDRESSES:\n")
+	for i, a := range m.AddrList {
+		fmt.Printf("host %d %s\n", i, a.IP.String())
+	}
+
+	adm := addrmgr.New(".", nil)
+	// zero service flag because whatever
+	myip := wire.NewNetAddressIPPort(net.ParseIP("127.0.0.1"), 28333, 0)
+	adm.AddAddresses(m.AddrList, myip)
+	reread := adm.AddressCache()
+	for i, a := range reread {
+		fmt.Printf("host %d %s\n", i, a.IP.String())
 	}
 }
 
