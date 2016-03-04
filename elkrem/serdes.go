@@ -115,6 +115,9 @@ func (e *ElkremReceiver) ToBytes() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if node.sha == nil {
+			return nil, fmt.Errorf("node %d has nil hash", node.i)
+		}
 		// write 32 byte sha hash
 		n, err := buf.Write(node.sha.Bytes())
 		if err != nil {
@@ -163,6 +166,8 @@ func ElkremReceiverFromBytes(b []byte) (ElkremReceiver, error) {
 			(numOfNodes * 41), buf.Len())
 	}
 
+	e.s = make([]ElkremNode, numOfNodes)
+
 	for i := uint8(0); i < numOfNodes; i++ {
 		var node ElkremNode
 		node.sha = new(wire.ShaHash)
@@ -190,7 +195,7 @@ func ElkremReceiverFromBytes(b []byte) (ElkremReceiver, error) {
 			return e, fmt.Errorf("Node claims index %d; %d max at height %d",
 				node.i, max, node.h)
 		}
-		e.s = append(e.s, node)
+		e.s[i] = node
 		if i > 0 { // check that node heights are descending
 			if e.s[i-1].h < e.s[i].h {
 				return e, fmt.Errorf("Node heights out of order")
