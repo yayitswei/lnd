@@ -14,34 +14,12 @@ import (
 // if the acceptor gives a QR code or otherwise includes a pubkey
 // in their request for payment, the fund request and response can be
 // omitted entirely and the channel funder can start with FundDetails.
-//type PubRequest struct {
-//}
-
-// PubResponse is just a pubkey.
-type PubResponse struct {
-	MultiPub *btcec.PublicKey // funder's multisig pubkey
-}
 
 // ChanDesc lets the acceptor know what the channel looks like
 type ChanDesc struct {
 	Capacity  uint64           // how much funder puts in to channel
 	MultiPub  *btcec.PublicKey // funder's multisig pubkey
 	FundPoint wire.OutPoint
-}
-
-// ToBytes turns a PubResponse into some bytes. var-lenght sig at end
-func (p *PubResponse) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	// write 1 byte header
-	err := buf.WriteByte(MSGID_PUBRESP)
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write(p.MultiPub.SerializeCompressed()) // write 33 byte pubkey
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // ToBytes turns a FundDetails into some bytes.
