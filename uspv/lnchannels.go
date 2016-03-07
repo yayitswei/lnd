@@ -9,7 +9,6 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/fastsha256"
 )
 
@@ -56,38 +55,38 @@ func (s *SimplChannel) VerifyNextState(sig []byte) error {
 	return nil
 }
 
-func (s *SimplChannel) BuildStatComTx(
-	mine bool, R [20]byte) (*wire.MsgTx, error) {
-	// commitment is "mine" if I'm committing and sign; !mine if they sign.
-	comTx := wire.NewMsgTx()
+//func (s *SimplChannel) BuildStatComTx(
+//	mine bool, R [20]byte) (*wire.MsgTx, error) {
+//	// commitment is "mine" if I'm committing and sign; !mine if they sign.
+//	comTx := wire.NewMsgTx()
 
-	// no sigscript, given separately to WitnessScript() as subscript
-	fundIn := wire.NewTxIn(&s.FundPoint, nil, nil)
-	comTx.AddTxIn(fundIn)
+//	// no sigscript, given separately to WitnessScript() as subscript
+//	fundIn := wire.NewTxIn(&s.FundPoint, nil, nil)
+//	comTx.AddTxIn(fundIn)
 
-	var outPKH, outFancy *wire.TxOut
-	if mine { // I'm committing to me getting my funds unencumbered
-		pkh := btcutil.Hash160(s.MyPub.SerializeCompressed())
-		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
-		outPKH = wire.NewTxOut(s.NextState.MyAmt, wpkhScript)
-		// encumbered: they need time, I need a hash
-		// only errors are 'non cannonical script' so ignore errors
-		fancyScript, _ := commitScript(s.Expiry, &s.MyPub, &s.TheirPub, R)
-		outFancy = wire.NewTxOut(s.NextState.TheirAmt, fancyScript)
-	} else { // they're committing to getting their funds unencumbered
-		pkh := btcutil.Hash160(s.TheirPub.SerializeCompressed())
-		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
-		outPKH = wire.NewTxOut(s.NextState.TheirAmt, P2WSHify(wpkhScript))
+//	var outPKH, outFancy *wire.TxOut
+//	if mine { // I'm committing to me getting my funds unencumbered
+//		pkh := btcutil.Hash160(s.MyPub.SerializeCompressed())
+//		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
+//		outPKH = wire.NewTxOut(s.NextState.MyAmt, wpkhScript)
+//		// encumbered: they need time, I need a hash
+//		// only errors are 'non cannonical script' so ignore errors
+//		fancyScript, _ := commitScript(s.Expiry, &s.MyPub, &s.TheirPub, R)
+//		outFancy = wire.NewTxOut(s.NextState.TheirAmt, fancyScript)
+//	} else { // they're committing to getting their funds unencumbered
+//		pkh := btcutil.Hash160(s.TheirPub.SerializeCompressed())
+//		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
+//		outPKH = wire.NewTxOut(s.NextState.TheirAmt, P2WSHify(wpkhScript))
 
-		fancyScript, _ := commitScript(s.Expiry, &s.TheirPub, &s.MyPub, R)
-		outFancy = wire.NewTxOut(s.NextState.MyAmt, fancyScript)
-	}
+//		fancyScript, _ := commitScript(s.Expiry, &s.TheirPub, &s.MyPub, R)
+//		outFancy = wire.NewTxOut(s.NextState.MyAmt, fancyScript)
+//	}
 
-	comTx.AddTxOut(outPKH)
-	comTx.AddTxOut(outFancy)
+//	comTx.AddTxOut(outPKH)
+//	comTx.AddTxOut(outFancy)
 
-	return comTx, nil
-}
+//	return comTx, nil
+//}
 
 // commitScriptToSelf constructs the public key script for the output on the
 // commitment transaction paying to the "owner" of said commitment transaction.

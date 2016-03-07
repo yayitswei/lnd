@@ -15,8 +15,8 @@ func (ts *TxStore) SaveChanState(s SimplChannel) error {
 	var err error
 	// write to db file
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
-		chn := btx.Bucket(BKTChnls)
-		key := outPointToBytes(s.FundPoint)
+		//		chn := btx.Bucket(BKTChnls)
+		//		key := outPointToBytes(s.FundPoint)
 		return nil
 	})
 	if err != nil {
