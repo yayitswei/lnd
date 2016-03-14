@@ -70,14 +70,14 @@ func (c *LNDConn) Dial(
 
 	// Before dialing out to the remote host, verify that `remoteId` is either
 	// a pubkey or a pubkey hash.
-	if len(remoteId) != 33 && len(remoteId) != 20 {
+	if len(remoteId) != 33 && len(remoteId) != 20 && len(remoteId) != 16 {
 		return fmt.Errorf("must supply either remote pubkey or " +
 			"pubkey hash")
 	}
 
 	// Calc remote LNId; need this for creating pbx connections just because
 	// LNid is in the struct does not mean it's authed!
-	if len(remoteId) == 20 {
+	if len(remoteId) == 20 || len(remoteId) == 16 {
 		copy(c.RemoteLNId[:], remoteId[:16])
 	} else {
 		theirAdr := btcutil.Hash160(remoteId)

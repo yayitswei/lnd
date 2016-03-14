@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 
 	"github.com/boltdb/bolt"
@@ -76,6 +77,20 @@ func (t *TxStore) AddTxid(txid *wire.ShaHash, height int32) error {
 	t.OKTxids[*txid] = height
 	t.OKMutex.Unlock()
 	return nil
+}
+
+// IdKey returns the identity private key, which is child(0).child(0) from root
+func (t *TxStore) IdKey() (*btcec.PrivateKey, error) {
+	child, err := t.rootPrivKey.Child(hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, err
+	}
+	child2, err := child.Child(hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, err
+	}
+
+	return child2.ECPrivKey()
 }
 
 // ... or I'm gonna fade away

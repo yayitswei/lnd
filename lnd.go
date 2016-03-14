@@ -26,10 +26,10 @@ var (
 func main() {
 	flag.Parse()
 
-	if *spvMode == true {
-		shell()
-		return
-	}
+	//	if *spvMode == true {
+	shell()
+	return
+	//	}
 
 	go func() {
 		listenAddr := net.JoinHostPort("", "5009")

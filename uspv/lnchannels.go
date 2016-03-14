@@ -18,7 +18,7 @@ import (
 type SimplChannel struct {
 	FundPoint wire.OutPoint // outpoint of channel (in funding txid)
 	//	ImFunder bool // true if I'm the funder, false if I'm acceptor
-	Cap uint64 // channel capacity
+	Cap int64 // channel capacity
 
 	MyKeyIdx uint32 // which key am I using for channel multisig
 	MyPub    btcec.PublicKey
@@ -65,6 +65,8 @@ func (s *SimplChannel) BuildStatComTx(
 	fundIn := wire.NewTxIn(&s.FundPoint, nil, nil)
 	comTx.AddTxIn(fundIn)
 
+	TheirAmt := s.Cap - s.NextState.MyAmt
+
 	var outPKH, outFancy *wire.TxOut
 	if mine { // I'm committing to me getting my funds unencumbered
 		pkh := btcutil.Hash160(s.MyPub.SerializeCompressed())
@@ -73,11 +75,11 @@ func (s *SimplChannel) BuildStatComTx(
 		// encumbered: they need time, I need a hash
 		// only errors are 'non cannonical script' so ignore errors
 		fancyScript, _ := commitScript(s.Expiry, &s.MyPub, &s.TheirPub, R)
-		outFancy = wire.NewTxOut(s.NextState.TheirAmt, fancyScript)
+		outFancy = wire.NewTxOut(TheirAmt, fancyScript)
 	} else { // they're committing to getting their funds unencumbered
 		pkh := btcutil.Hash160(s.TheirPub.SerializeCompressed())
 		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
-		outPKH = wire.NewTxOut(s.NextState.TheirAmt, P2WSHify(wpkhScript))
+		outPKH = wire.NewTxOut(TheirAmt, P2WSHify(wpkhScript))
 
 		fancyScript, _ := commitScript(s.Expiry, &s.TheirPub, &s.MyPub, R)
 		outFancy = wire.NewTxOut(s.NextState.MyAmt, fancyScript)

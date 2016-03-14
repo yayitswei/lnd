@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
 
+	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -169,7 +170,42 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
+	if cmd == "con" {
+		err = Con(args)
+		if err != nil {
+			fmt.Printf("con error: %s\n", err)
+		}
+		return nil
+	}
+
 	fmt.Printf("Command not recognized. type help for command list.\n")
+	return nil
+}
+
+func Con(args []string) error {
+	var err error
+
+	if len(args) == 0 {
+		return fmt.Errorf("need: con pubkeyhash@hostname")
+	}
+
+	newNode, err := lndc.LnAddrFromString(args[0])
+	if err != nil {
+		return err
+	}
+
+	idPriv, err := SCon.TS.IdKey()
+	if err != nil {
+		return err
+	}
+
+	newConn := new(lndc.LNDConn)
+
+	err = newConn.Dial(idPriv, newNode.NetAddr.String(), newNode.LnID[:])
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
