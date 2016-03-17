@@ -43,29 +43,29 @@ func (l *Listener) Accept() (c net.Conn, err error) {
 		return nil, nil
 	}
 
-	lndc := NewConn(conn)
+	nLndc := NewConn(conn)
 
 	// Exchange an ephemeral public key with the remote connection in order
 	// to establish a confidential connection before we attempt to
 	// authenticated.
-	ephemeralKey, err := l.createCipherConn(lndc)
+	ephemeralPub, err := l.createCipherConn(nLndc)
 	if err != nil {
 		return nil, err
 	}
 
 	// Now that we've established an encrypted connection, authenticate the
 	// identity of the remote host.
-	ephemeralPub := ephemeralKey.PubKey().SerializeCompressed()
-	if err := l.authenticateConnection(l.longTermPriv, lndc, ephemeralPub); err != nil {
-		lndc.Close()
+	err = l.authenticateConnection(nLndc, ephemeralPub.SerializeCompressed())
+	if err != nil {
+		nLndc.Close()
 		return nil, err
 	}
 
-	return lndc, nil
+	return nLndc, nil
 }
 
 // createCipherConn....
-func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PrivateKey, error) {
+func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PublicKey, error) {
 	var err error
 	var theirEphPubBytes []byte
 
@@ -110,12 +110,12 @@ func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PrivateKey, error) 
 	lnConn.RemotePub = theirEphPub
 	lnConn.Authed = false
 
-	return myEph, nil
+	return myEph.PubKey(), nil
 }
 
 // AuthListen...
 func (l *Listener) authenticateConnection(
-	myId *btcec.PrivateKey, lnConn *LNDConn, localEphPubBytes []byte) error {
+	lnConn *LNDConn, localEphPubBytes []byte) error {
 	var err error
 
 	// TODO(roasbeef): should be using read/write clear here?

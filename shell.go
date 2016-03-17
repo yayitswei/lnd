@@ -31,13 +31,15 @@ const (
 )
 
 var (
-	Params = &chaincfg.SegNetParams
-	SCon   uspv.SPVCon // global here for now
+	Params   = &chaincfg.SegNetParams
+	SCon     uspv.SPVCon // global here for now
+	OmniChan chan []byte // channel for omnihandler
 )
 
 func shell() {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
+	OmniChan = make(chan []byte, 10)
 
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
@@ -177,9 +179,62 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
+	if cmd == "lis" {
+		err = Lis(args)
+		if err != nil {
+			fmt.Printf("lis error: %s\n", err)
+		}
+		return nil
+	}
 
 	fmt.Printf("Command not recognized. type help for command list.\n")
 	return nil
+}
+
+// Lis starts listening.  Takes no args for now.
+func Lis(ards []string) error {
+
+	go TCPListener()
+	return nil
+}
+
+func TCPListener() {
+
+	idPriv, err := SCon.TS.IdKey()
+	if err != nil {
+		log.Printf(err.Error())
+		return
+	}
+
+	listener, err := lndc.NewListener(idPriv, ":2448")
+	if err != nil {
+		log.Printf(err.Error())
+		return
+	}
+
+	myId := btcutil.Hash160(idPriv.PubKey().SerializeCompressed())
+	lisAdr, err := btcutil.NewAddressPubKeyHash(myId, Params)
+	fmt.Printf("Listening on %s\n", listener.Addr().String())
+	fmt.Printf("Listening with base58 address: %s lnid: %x\n",
+		lisAdr.String(), myId[:16])
+
+	for {
+		netConn, err := listener.Accept() // this blocks
+		if err != nil {
+			log.Printf("Listener error: %s\n", err.Error())
+			continue
+		}
+		newConn, ok := netConn.(*lndc.LNDConn)
+		if !ok {
+			fmt.Printf("Got something that wasn't a LNDC")
+			continue
+		}
+
+		idslice := btcutil.Hash160(newConn.RemotePub.SerializeCompressed())
+		var newId [16]byte
+		copy(newId[:], idslice[:16])
+		go LNDCReceiver(newConn, newId)
+	}
 }
 
 func Con(args []string) error {
