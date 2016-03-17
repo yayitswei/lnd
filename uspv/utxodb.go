@@ -6,9 +6,8 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/blockchain"
-
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
-
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/hdkeychain"
@@ -80,6 +79,26 @@ func (ts *TxStore) OpenDB(filename string) error {
 	return ts.PopulateAdrs(numKeys)
 }
 
+// NewPub generates and returns a new public key.  Also tells you the index
+// DOESN'T save it to disk yet; maybe use a different branch
+func (ts *TxStore) NewPub() (*btcec.PublicKey, uint32, error) {
+	// check number of multu pubkeys from db here
+	keynum := uint32(5) //hardcoded for now.
+
+	privMultTop, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, 0, err
+	}
+	priv, err := privMultTop.Child(keynum + hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, 0, err
+	}
+	// save the new incremented number of pubkeys to disk here
+
+	pub, err := priv.ECPubKey()
+	return pub, keynum, err
+}
+
 // NewAdr creates a new, never before seen address, and increments the
 // DB counter as well as putting it in the ram Adrs store, and returns it
 func (ts *TxStore) NewAdr() (btcutil.Address, error) {
@@ -89,10 +108,9 @@ func (ts *TxStore) NewAdr() (btcutil.Address, error) {
 
 	priv := new(hdkeychain.ExtendedKey)
 	var err error
-	var n uint32
 	var nAdr btcutil.Address
 
-	n = uint32(len(ts.Adrs))
+	n := uint32(len(ts.Adrs))
 	priv, err = ts.rootPrivKey.Child(n + hdkeychain.HardenedKeyStart)
 	if err != nil {
 		return nil, err
@@ -112,9 +130,7 @@ func (ts *TxStore) NewAdr() (btcutil.Address, error) {
 	// write to db file
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
 		sta := btx.Bucket(BKTState)
-
 		return sta.Put(KEYNumKeys, buf.Bytes())
-
 	})
 	if err != nil {
 		return nil, err

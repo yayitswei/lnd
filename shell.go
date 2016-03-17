@@ -63,7 +63,7 @@ func shell() {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 21900 // hardcoded; later base on keyfile date?
+		tip = 23700 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -189,10 +189,19 @@ func Shellparse(cmdslice []string) error {
 		return nil
 	}
 	// Peer to peer actions
+	// send text message
 	if cmd == "say" {
 		err = Say(args)
 		if err != nil {
 			fmt.Printf("say error: %s\n", err)
+		}
+		return nil
+	}
+	// request multisig pubkey
+	if cmd == "mult" {
+		err = Mult(args)
+		if err != nil {
+			fmt.Printf("mult error: %s\n", err)
 		}
 		return nil
 	}
@@ -202,7 +211,7 @@ func Shellparse(cmdslice []string) error {
 }
 
 // Lis starts listening.  Takes no args for now.
-func Lis(ards []string) error {
+func Lis(args []string) error {
 	go TCPListener()
 	return nil
 }

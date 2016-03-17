@@ -4,8 +4,55 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
+
+// Mult makes a multisig address with the node connected to
+func Mult(args []string) error {
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone\n")
+	}
+	msg := []byte{uwire.MSGID_PUBREQ}
+	_, err := RemoteCon.Write(msg)
+	return err
+}
+
+func MultiReqHandler(from [16]byte) {
+	pub, idx, err := SCon.TS.NewPub()
+	if err != nil {
+		fmt.Printf("MultiReqHandler error: %s", err.Error())
+	}
+	fmt.Printf("Generated pubkey %d: %x\n", idx, pub.SerializeCompressed())
+	msg := []byte{uwire.MSGID_PUBRESP}
+	msg = append(msg, pub.SerializeCompressed()...)
+
+	_, err = RemoteCon.Write(msg)
+	return
+}
+
+func MultiRespHandler(from [16]byte, pubbytes []byte) {
+	if len(pubbytes) != 33 {
+		fmt.Printf("pubkey is %d bytes, expect 33\n", len(pubbytes))
+		return
+	}
+	pub, err := btcec.ParsePubKey(pubbytes, btcec.S256())
+	if err != nil {
+		fmt.Printf(err.Error())
+		return
+	}
+	fmt.Printf("got pubkey response %x\n", pub.SerializeCompressed())
+	return
+}
+
+func MultiDescHandler(from [16]byte, descbytes []byte) {
+	// if len(descbytes) != 33 {
+	//		return
+	// }
+
+	fmt.Printf("got multisig output %x\n", descbytes)
+	return
+}
 
 // handles stuff that comes in over the wire.  Not user-initiated.
 func OmniHandler(OmniChan chan []byte) {
@@ -24,6 +71,24 @@ func OmniHandler(OmniChan chan []byte) {
 		if msgid == uwire.MSGID_TEXTCHAT { //it's text
 			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
+		}
+
+		// PUBKEY REQUEST
+		if msgid == uwire.MSGID_PUBREQ {
+			fmt.Printf("got pubkey req from %x\n", from)
+			MultiReqHandler(from) // goroutine ready
+			continue
+		}
+		// PUBKEY RESPONSE
+		if msgid == uwire.MSGID_PUBRESP {
+			fmt.Printf("got pubkey response from %x\n", from)
+			MultiRespHandler(from, msg[1:]) // goroutine ready
+			continue
+		}
+		// MULTISIG DESCTIPTION
+		if msgid == uwire.MSGID_MULTIDESC {
+			fmt.Printf("Got multisig description from %x\n", from)
+			MultiDescHandler(from, msg[1:])
 		}
 
 		fmt.Printf("Unknown message id byte %x", msgid)
