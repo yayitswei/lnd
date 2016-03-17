@@ -8,7 +8,7 @@ import (
 )
 
 // handles stuff that comes in over the wire.  Not user-initiated.
-func OmniHandler() {
+func OmniHandler(OmniChan chan []byte) {
 	var from [16]byte
 	for {
 		newdata := <-OmniChan // blocks here
@@ -22,7 +22,7 @@ func OmniHandler() {
 
 		// TEXT MESSAGE.  SIMPLE
 		if msgid == uwire.MSGID_TEXTCHAT { //it's text
-			fmt.Printf("msg from %x: %s\n", from, msg[1:])
+			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
 		}
 
@@ -34,7 +34,7 @@ func OmniHandler() {
 // Every lndc has one of these running
 // it listens for incoming messages on the lndc and hands it over
 // to the OmniHandler via omnichan
-func LNDCReceiver(l net.Conn, id [16]byte) error {
+func LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
 	for {
 		msg := make([]byte, 65535)
 		//	fmt.Printf("read message from %x\n", l.RemoteLNId)
@@ -47,6 +47,7 @@ func LNDCReceiver(l net.Conn, id [16]byte) error {
 		}
 		msg = msg[:n]
 		msg = append(id[:], msg...)
+		fmt.Printf("incoming msg %x\n", msg)
 		OmniChan <- msg
 	}
 }

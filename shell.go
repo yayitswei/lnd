@@ -14,6 +14,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/uspv"
+	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
 /* this is a CLI shell for testing out LND.  Right now it's only for uspv
@@ -31,16 +32,17 @@ const (
 )
 
 var (
-	Params   = &chaincfg.SegNetParams
-	SCon     uspv.SPVCon // global here for now
-	OmniChan chan []byte // channel for omnihandler
+	Params         = &chaincfg.SegNetParams
+	SCon           uspv.SPVCon   // global here for now
+	GlobalOmniChan chan []byte   // channel for omnihandler
+	RemoteCon      *lndc.LNDConn // one because simple
 )
 
 func shell() {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
-	OmniChan = make(chan []byte, 10)
-
+	GlobalOmniChan = make(chan []byte, 10)
+	go OmniHandler(GlobalOmniChan)
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
 	if err != nil {
@@ -186,6 +188,14 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
+	// Peer to peer actions
+	if cmd == "say" {
+		err = Say(args)
+		if err != nil {
+			fmt.Printf("say error: %s\n", err)
+		}
+		return nil
+	}
 
 	fmt.Printf("Command not recognized. type help for command list.\n")
 	return nil
@@ -193,7 +203,6 @@ func Shellparse(cmdslice []string) error {
 
 // Lis starts listening.  Takes no args for now.
 func Lis(ards []string) error {
-
 	go TCPListener()
 	return nil
 }
@@ -233,7 +242,11 @@ func TCPListener() {
 		idslice := btcutil.Hash160(newConn.RemotePub.SerializeCompressed())
 		var newId [16]byte
 		copy(newId[:], idslice[:16])
-		go LNDCReceiver(newConn, newId)
+		fmt.Printf("Authed incoming connection from remote %s lnid %x OK\n",
+			newConn.RemoteAddr().String(), newId)
+
+		go LNDCReceiver(newConn, newId, GlobalOmniChan)
+		RemoteCon = newConn
 	}
 }
 
@@ -254,14 +267,39 @@ func Con(args []string) error {
 		return err
 	}
 
-	newConn := new(lndc.LNDConn)
+	RemoteCon = new(lndc.LNDConn)
 
-	err = newConn.Dial(idPriv, newNode.NetAddr.String(), newNode.LnID[:])
+	err = RemoteCon.Dial(
+		idPriv, newNode.NetAddr.String(), newNode.Base58Adr.ScriptAddress())
 	if err != nil {
 		return err
 	}
+	idslice := btcutil.Hash160(RemoteCon.RemotePub.SerializeCompressed())
+	var newId [16]byte
+	copy(newId[:], idslice[:16])
+	go LNDCReceiver(RemoteCon, newId, GlobalOmniChan)
 
 	return nil
+}
+
+// Say sends a text string
+// For fun / testing.  Syntax: say hello world
+func Say(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("you have to say something")
+	}
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone\n")
+	}
+
+	var chat string
+	for _, s := range args {
+		chat += s + " "
+	}
+	msg := append([]byte{uwire.MSGID_TEXTCHAT}, []byte(chat)...)
+
+	_, err := RemoteCon.Write(msg)
+	return err
 }
 
 func Txs(args []string) error {

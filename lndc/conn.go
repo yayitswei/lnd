@@ -68,9 +68,9 @@ func (c *LNDConn) Dial(
 		}
 	}
 
-	// Before dialing out to the remote host, verify that `remoteId` is either
+	// Before dialing out to the remote host, verify that remoteId is either
 	// a pubkey or a pubkey hash.
-	if len(remoteId) != 33 && len(remoteId) != 20 && len(remoteId) != 16 {
+	if len(remoteId) != 33 && len(remoteId) != 20 { //&& len(remoteId) != 16 {
 		return fmt.Errorf("must supply either remote pubkey or " +
 			"pubkey hash")
 	}
@@ -89,10 +89,11 @@ func (c *LNDConn) Dial(
 	if err != nil {
 		return err
 	}
-	ourEphemeralPub := ourEphemeralPriv.PubKey()
+	ourEphPubBytes := ourEphemeralPriv.PubKey().SerializeCompressed()
 
-	// Sned 1. Send my ephemeral pubkey. Can add version bits.
-	if _, err = writeClear(c.Conn, ourEphemeralPub.SerializeCompressed()); err != nil {
+	// 1. Send my ephemeral pubkey. Can add version bits.
+	_, err = writeClear(c.Conn, ourEphPubBytes)
+	if err != nil {
 		return err
 	}
 
@@ -106,11 +107,9 @@ func (c *LNDConn) Dial(
 		return err
 	}
 
-	// Do non-interactive diffie with ephemeral pubkeys. Sha256 for good
-	// luck.
+	// Do non-interactive diffie with ephemeral pubkeys. Sha256 for good luck.
 	sessionKey := fastsha256.Sum256(
-		btcec.GenerateSharedSecret(ourEphemeralPriv, theirEphPub),
-	)
+		btcec.GenerateSharedSecret(ourEphemeralPriv, theirEphPub))
 
 	// Now that we've derive the session key, we can initialize the
 	// chacha20poly1305 AEAD instance which will be used for the remainder of
@@ -133,10 +132,12 @@ func (c *LNDConn) Dial(
 	// So auth!
 	if len(remoteId) == 20 {
 		// Only know pubkey hash (20 bytes).
-		err = c.authPKH(myId, remoteId, ourEphemeralPub.SerializeCompressed())
+		fmt.Printf("doing PKH auth\n")
+		err = c.authPKH(myId, remoteId, ourEphPubBytes)
 	} else {
 		// Must be 33 byte pubkey.
-		err = c.authPubKey(myId, remoteId, ourEphemeralPub.SerializeCompressed())
+		fmt.Printf("doing 33 byte PK auth\n")
+		err = c.authPubKey(myId, remoteId, ourEphPubBytes)
 	}
 	if err != nil {
 		return err
@@ -208,7 +209,7 @@ func (c *LNDConn) authPKH(
 	// Send 53 bytes: our pubkey, and the remote's pubkey hash.
 	var greetingMsg [53]byte
 	copy(greetingMsg[:33], myId.PubKey().SerializeCompressed())
-	copy(greetingMsg[:33], theirPKH)
+	copy(greetingMsg[33:], theirPKH)
 	if _, err := c.Conn.Write(greetingMsg[:]); err != nil {
 		return err
 	}

@@ -48,14 +48,14 @@ func (l *Listener) Accept() (c net.Conn, err error) {
 	// Exchange an ephemeral public key with the remote connection in order
 	// to establish a confidential connection before we attempt to
 	// authenticated.
-	ephemeralPub, err := l.createCipherConn(nLndc)
+	ephPubBytes, err := l.createCipherConn(nLndc)
 	if err != nil {
 		return nil, err
 	}
 
 	// Now that we've established an encrypted connection, authenticate the
 	// identity of the remote host.
-	err = l.authenticateConnection(nLndc, ephemeralPub.SerializeCompressed())
+	err = l.authenticateConnection(nLndc, ephPubBytes)
 	if err != nil {
 		nLndc.Close()
 		return nil, err
@@ -65,7 +65,7 @@ func (l *Listener) Accept() (c net.Conn, err error) {
 }
 
 // createCipherConn....
-func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PublicKey, error) {
+func (l *Listener) createCipherConn(lnConn *LNDConn) ([]byte, error) {
 	var err error
 	var theirEphPubBytes []byte
 
@@ -95,9 +95,7 @@ func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PublicKey, error) {
 
 	// Now that we have both keys, do non-interactive diffie with ephemeral
 	// pubkeys, sha256 for good luck.
-	sessionKey := fastsha256.Sum256(
-		btcec.GenerateSharedSecret(myEph, theirEphPub),
-	)
+	sessionKey := fastsha256.Sum256(btcec.GenerateSharedSecret(myEph, theirEphPub))
 
 	lnConn.chachaStream, err = chacha20poly1305.New(sessionKey[:])
 
@@ -110,7 +108,7 @@ func (l *Listener) createCipherConn(lnConn *LNDConn) (*btcec.PublicKey, error) {
 	lnConn.RemotePub = theirEphPub
 	lnConn.Authed = false
 
-	return myEph.PubKey(), nil
+	return myEph.PubKey().SerializeCompressed(), nil
 }
 
 // AuthListen...
@@ -144,13 +142,11 @@ func (l *Listener) authenticateConnection(
 	if err != nil {
 		return err
 	}
-	idDH := fastsha256.Sum256(
-		btcec.GenerateSharedSecret(l.longTermPriv, theirPub),
-	)
-
-	myDHproof := btcutil.Hash160(
-		append(lnConn.RemotePub.SerializeCompressed(), idDH[:]...),
-	)
+	idDH :=
+		fastsha256.Sum256(btcec.GenerateSharedSecret(l.longTermPriv, theirPub))
+	fmt.Printf("made idDH %x\n", idDH)
+	myDHproof :=
+		btcutil.Hash160(append(lnConn.RemotePub.SerializeCompressed(), idDH[:]...))
 	theirDHproof := btcutil.Hash160(append(localEphPubBytes, idDH[:]...))
 
 	// If they already know our public key, then execute the fast path.
@@ -175,7 +171,9 @@ func (l *Listener) authenticateConnection(
 		}
 
 		resp := make([]byte, 20)
-		if _, err := lnConn.Conn.Read(resp); err != nil {
+		_, err = lnConn.Conn.Read(resp)
+		if err != nil {
+			fmt.Printf("here it dies ")
 			return err
 		}
 
@@ -189,7 +187,7 @@ func (l *Listener) authenticateConnection(
 	copy(lnConn.RemoteLNId[:], theirAdr[:16])
 	lnConn.RemotePub = theirPub
 	lnConn.Authed = true
-
+	
 	return nil
 }
 
