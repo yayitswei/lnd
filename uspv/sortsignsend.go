@@ -107,6 +107,64 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 	return nil
 }
 
+// PickUtxos Picks Utxos for spending.  Tell it how much money you want.
+// It returns a tx-sortable utxoslice, and the overshoot amount.  Also errors.
+func (s *SPVCon) PickUtxos(amtWanted int64) (utxoSlice, int64, error) {
+	var score int64
+	satPerByte := int64(80) // satoshis per byte fee; have as arg later
+	rawUtxos, err := s.TS.GetAllUtxos()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var allUtxos SortableUtxoSlice
+	// start with utxos sorted by value.
+
+	for _, utxo := range rawUtxos {
+		score += utxo.Value
+		allUtxos = append(allUtxos, *utxo)
+	}
+	// smallest and unconfirmed last (because it's reversed)
+	sort.Sort(sort.Reverse(allUtxos))
+
+	// important rule in bitcoin: output total > input total is invalid.
+	if amtWanted > score {
+		return nil, 0, fmt.Errorf("wanted %d but %d available.",
+			amtWanted, score)
+	}
+
+	var rSlice utxoSlice
+	// add utxos until we've had enough
+	nokori := amtWanted // nokori is how much is needed on input side
+	for _, utxo := range allUtxos {
+		// skip unconfirmed.  Or de-prioritize?
+		//		if utxo.AtHeight == 0 {
+		//			continue
+		//		}
+
+		// yeah, lets add this utxo!
+		rSlice = append(rSlice, utxo)
+		nokori -= utxo.Value
+		// if nokori is positive, don't bother checking fee yet.
+		if nokori < 0 {
+			var byteSize int64
+			for _, txo := range rSlice {
+				if txo.IsWit {
+					byteSize += 70 // vsize of wit inputs is ~68ish
+				} else {
+					byteSize += 130 // vsize of non-wit input is ~130
+				}
+			}
+			fee := byteSize * satPerByte
+			if nokori < -fee { // done adding utxos: nokori below negative est fee
+				break
+			}
+		}
+	}
+	sort.Sort(rSlice) // send sorted
+	return rSlice, -nokori, nil
+}
+
 func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 	// fixed fee
 	fee := int64(5000)
@@ -192,31 +250,12 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		return fmt.Errorf("%d addresses and %d amounts", len(adrs), len(sendAmts))
 	}
 	var err error
-	var score, totalSend, fee int64
+	var totalSend int64
 	dustCutoff := int64(20000) // below this amount, just give to miners
 	satPerByte := int64(80)    // satoshis per byte fee; have as arg later
-	rawUtxos, err := s.TS.GetAllUtxos()
-	if err != nil {
-		return err
-	}
-	var allUtxos SortableUtxoSlice
-	// start with utxos sorted by value.
 
-	for _, utxo := range rawUtxos {
-		score += utxo.Value
-		allUtxos = append(allUtxos, *utxo)
-	}
-	// smallest and unconfirmed last (because it's reversed)
-	sort.Sort(sort.Reverse(allUtxos))
-
-	//	sort.Reverse(allUtxos)
 	for _, amt := range sendAmts {
 		totalSend += amt
-	}
-	// important rule in bitcoin, output total > input total is invalid.
-	if totalSend > score {
-		return fmt.Errorf("trying to send %d but %d available.",
-			totalSend, score)
 	}
 
 	tx := wire.NewMsgTx() // make new tx
@@ -232,52 +271,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		tx.AddTxOut(txout)
 	}
 
-	// generate a utxo slice for your inputs
-	var ins utxoSlice
-
-	// add utxos until we've had enough
-	nokori := totalSend // nokori is how much is needed on input side
-	for _, utxo := range allUtxos {
-		// skip unconfirmed.  Or de-prioritize?
-		//		if utxo.AtHeight == 0 {
-		//			continue
-		//		}
-
-		// yeah, lets add this utxo!
-		ins = append(ins, utxo)
-		// as we add utxos, fill in sigscripts
-		// generate previous pkscripts (subscritpt?) for all utxos
-		// then make txins with the utxo and prevpk, and insert them into the tx
-		// these are all zeroed out during signing but it's an easy way to keep track
-		var prevPKs []byte
-		if utxo.IsWit {
-			tx.Flags = 0x01
-			wa, err := btcutil.NewAddressWitnessPubKeyHash(
-				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
-			prevPKs, err = txscript.PayToAddrScript(wa)
-			if err != nil {
-				return err
-			}
-		} else { // otherwise generate directly
-			prevPKs, err = txscript.PayToAddrScript(
-				s.TS.Adrs[utxo.KeyIdx].PkhAdr)
-			if err != nil {
-				return err
-			}
-		}
-		tx.AddTxIn(wire.NewTxIn(&utxo.Op, prevPKs, nil))
-		nokori -= utxo.Value
-		// if nokori is positive, don't bother checking fee yet.
-		if nokori < 0 {
-			fee = EstFee(tx, satPerByte)
-			if nokori < -fee { // done adding utxos: nokori below negative est. fee
-				break
-			}
-		}
-	}
-
-	// see if there's enough left to also add a change output
-
+	// add change output (may be removed later)
 	changeOld, err := s.TS.NewAdr() // change is witnessy
 	if err != nil {
 		return err
@@ -287,31 +281,57 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 	if err != nil {
 		return err
 	}
-
 	changeScript, err := txscript.PayToAddrScript(changeAdr)
 	if err != nil {
 		return err
 	}
-
 	changeOut := wire.NewTxOut(0, changeScript)
 	tx.AddTxOut(changeOut)
-	fee = EstFee(tx, satPerByte)
-	changeOut.Value = -(nokori + fee)
+
+	// get inputs for this tx
+	utxos, overshoot, err := s.PickUtxos(totalSend)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Overshot by %d, can make change output\n", overshoot)
+	// add inputs into tx
+	for _, utxo := range utxos {
+		var prevPKScript []byte
+		if utxo.IsWit {
+			tx.Flags = 0x01
+			wa, err := btcutil.NewAddressWitnessPubKeyHash(
+				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
+			prevPKScript, err = txscript.PayToAddrScript(wa)
+			if err != nil {
+				return err
+			}
+		} else { // otherwise generate directly
+			prevPKScript, err = txscript.PayToAddrScript(
+				s.TS.Adrs[utxo.KeyIdx].PkhAdr)
+			if err != nil {
+				return err
+			}
+		}
+		tx.AddTxIn(wire.NewTxIn(&utxo.Op, prevPKScript, nil))
+	}
+
+	// estimate fee with outputs, see if change should be truncated
+	fee := EstFee(tx, satPerByte)
+	changeOut.Value = overshoot - fee
 	if changeOut.Value < dustCutoff {
+		if changeOut.Value < 0 {
+			fmt.Printf("Warning, tx probably has insufficient fee\n")
+		}
 		// remove last output (change) : not worth it
 		tx.TxOut = tx.TxOut[:len(tx.TxOut)-1]
 	}
-
-	// sort utxos on the input side.  use this instead of txsort
-	// because we want to remember which keys are associated with which inputs
-	sort.Sort(ins)
 
 	// sort tx -- this only will change txouts since inputs are already sorted
 	txsort.InPlaceSort(tx)
 
 	// tx is ready for signing,
-	sigStash := make([][]byte, len(ins))
-	witStash := make([][][]byte, len(ins))
+	sigStash := make([][]byte, len(utxos))
+	witStash := make([][][]byte, len(utxos))
 
 	// generate tx-wide hashCache for segwit stuff
 	// middle index number doesn't matter for sighashAll.
@@ -320,7 +340,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 	for i, txin := range tx.TxIn {
 		// pick key
 		child, err := s.TS.rootPrivKey.Child(
-			ins[i].KeyIdx + hdkeychain.HardenedKeyStart)
+			utxos[i].KeyIdx + hdkeychain.HardenedKeyStart)
 		if err != nil {
 			return err
 		}
@@ -331,9 +351,9 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 
 		// This is where witness based sighash types need to happen
 		// sign into stash
-		if ins[i].IsWit {
+		if utxos[i].IsWit {
 			witStash[i], err = txscript.WitnessScript(
-				tx, hCache, i, ins[i].Value, txin.SignatureScript,
+				tx, hCache, i, utxos[i].Value, txin.SignatureScript,
 				txscript.SigHashAll, priv, true)
 			if err != nil {
 				return err
@@ -359,7 +379,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 
 	}
 
-	//	fmt.Printf("tx: %s", TxToString(tx))
+	fmt.Printf("tx: %s", TxToString(tx))
 	//	buf := bytes.NewBuffer(make([]byte, 0, tx.SerializeSize()))
 
 	// send it out on the wire.  hope it gets there.

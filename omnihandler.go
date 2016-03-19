@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
@@ -36,12 +37,42 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 		fmt.Printf("pubkey is %d bytes, expect 33\n", len(pubbytes))
 		return
 	}
-	pub, err := btcec.ParsePubKey(pubbytes, btcec.S256())
+	theirPub, err := btcec.ParsePubKey(pubbytes, btcec.S256())
 	if err != nil {
 		fmt.Printf(err.Error())
 		return
 	}
-	fmt.Printf("got pubkey response %x\n", pub.SerializeCompressed())
+
+	fmt.Printf("got pubkey response %x\n", theirPub.SerializeCompressed())
+	// now build a multisig output
+
+	// make our own pubkey
+	myPub, idx, err := SCon.TS.NewPub()
+	if err != nil {
+		fmt.Printf(err.Error())
+		return
+	}
+
+	txo, err := uspv.FundMultiOut(
+		theirPub.SerializeCompressed(), myPub.SerializeCompressed(), 100000000)
+	if err != nil {
+		fmt.Printf(err.Error())
+		return
+	}
+
+	utxos, overshoot, err := SCon.PickUtxos(100000000)
+	if err != nil {
+		fmt.Printf(err.Error())
+		return
+	}
+
+	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
+		overshoot, idx, txo.PkScript)
+	for i, utxo := range utxos {
+		fmt.Printf("input %d: key %d val %d %s\n",
+			i, utxo.KeyIdx, utxo.Value, utxo.Op.String())
+	}
+
 	return
 }
 

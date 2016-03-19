@@ -373,10 +373,21 @@ func Bal(args []string) error {
 		}
 	}
 	height, _ := SCon.TS.GetDBSyncHeight()
-
+	if err != nil {
+		return err
+	}
 	atx, err := SCon.TS.GetAllTxs()
-
+	if err != nil {
+		return err
+	}
 	stxos, err := SCon.TS.GetAllStxos()
+	if err != nil {
+		return err
+	}
+	multi, err := SCon.TS.GetNumMultiKeys()
+	if err != nil {
+		return err
+	}
 
 	for i, a := range SCon.TS.Adrs {
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
@@ -386,6 +397,7 @@ func Bal(args []string) error {
 		}
 		fmt.Printf("address %d %s OR %s\n", i, a.PkhAdr.String(), wa.String())
 	}
+	fmt.Printf("Multisig Pubkeys generated: %d\n", multi)
 	fmt.Printf("Total known txs: %d\n", len(atx))
 	fmt.Printf("Known utxos: %d\tPreviously spent txos: %d\n",
 		len(allUtxos), len(stxos))

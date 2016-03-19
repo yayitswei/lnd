@@ -52,7 +52,7 @@ func PubResponseFromBytes(b []byte) (*btcec.PublicKey, error) {
 	return pub, nil
 }
 
-// ToBytes turns a FundDetails into some bytes.
+// ToBytes turns a MultiDesc into some bytes.
 func (m *MultiDesc) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	// write 1 byte header
@@ -82,7 +82,7 @@ func (m *MultiDesc) ToBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ChanDescFromBytes makes channel description from some bytes.
+// MultiDescFromBytes makes channel description from some bytes.
 func MultiDescFromBytes(b []byte) (*MultiDesc, error) {
 	m := new(MultiDesc)
 	if b == nil {

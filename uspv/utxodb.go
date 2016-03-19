@@ -368,6 +368,25 @@ func (ts *TxStore) GetPendingInv() (*wire.MsgInv, error) {
 }
 
 // PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
+func (ts *TxStore) GetNumMultiKeys() (uint32, error) {
+	var numkeys uint32
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		sta := btx.Bucket(BKTState)
+		nkB := sta.Get(KEYNumMulti)
+		if nkB == nil {
+			numkeys = 0
+		} else {
+			err := binary.Read(bytes.NewBuffer(nkB), binary.BigEndian, &numkeys)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return numkeys, err
+}
+
+// PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
 func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 	for k := uint32(0); k < lastKey; k++ {
 
