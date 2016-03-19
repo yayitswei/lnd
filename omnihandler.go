@@ -5,6 +5,8 @@ import (
 	"net"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil/txsort"
 	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
@@ -66,12 +68,24 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 		return
 	}
 
+	tx := wire.NewMsgTx() // make new tx
+	tx.AddTxOut(txo)      // add multisig output
+
+	changeOut, err := SCon.TS.NewChangeOut(overshoot)
+	if err != nil {
+		fmt.Printf(err.Error())
+		return
+	}
+	tx.AddTxOut(changeOut) // add change output
+	txsort.InPlaceSort(tx)
+
 	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
 		overshoot, idx, txo.PkScript)
-	for i, utxo := range utxos {
-		fmt.Printf("input %d: key %d val %d %s\n",
-			i, utxo.KeyIdx, utxo.Value, utxo.Op.String())
+	for _, utxo := range utxos {
+		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
 	}
+
+	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
 	return
 }

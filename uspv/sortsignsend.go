@@ -271,21 +271,10 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		tx.AddTxOut(txout)
 	}
 
-	// add change output (may be removed later)
-	changeOld, err := s.TS.NewAdr() // change is witnessy
+	changeOut, err := s.TS.NewChangeOut(0)
 	if err != nil {
 		return err
 	}
-	changeAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-		changeOld.ScriptAddress(), s.TS.Param)
-	if err != nil {
-		return err
-	}
-	changeScript, err := txscript.PayToAddrScript(changeAdr)
-	if err != nil {
-		return err
-	}
-	changeOut := wire.NewTxOut(0, changeScript)
 	tx.AddTxOut(changeOut)
 
 	// get inputs for this tx

@@ -123,6 +123,24 @@ func (ts *TxStore) NewPub() (*btcec.PublicKey, uint32, error) {
 	return pub, numkeys, err
 }
 
+func (ts *TxStore) NewChangeOut(amt int64) (*wire.TxOut, error) {
+	changeOld, err := ts.NewAdr() // change is always witnessy
+	if err != nil {
+		return nil, err
+	}
+	changeAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+		changeOld.ScriptAddress(), ts.Param)
+	if err != nil {
+		return nil, err
+	}
+	changeScript, err := txscript.PayToAddrScript(changeAdr)
+	if err != nil {
+		return nil, err
+	}
+	changeOut := wire.NewTxOut(amt, changeScript)
+	return changeOut, nil
+}
+
 // NewAdr creates a new, never before seen address, and increments the
 // DB counter as well as putting it in the ram Adrs store, and returns it
 func (ts *TxStore) NewAdr() (btcutil.Address, error) {
