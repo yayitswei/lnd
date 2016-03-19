@@ -22,6 +22,7 @@ var (
 	BKTState = []byte("MiscState") // last state of DB
 	// these are in the state bucket
 	KEYNumKeys   = []byte("NumKeys")   // number of p2pkh keys used
+	KEYNumMulti  = []byte("NumMulti")  // number of p2pkh keys used
 	KEYTipHeight = []byte("TipHeight") // height synced to
 )
 
@@ -82,21 +83,44 @@ func (ts *TxStore) OpenDB(filename string) error {
 // NewPub generates and returns a new public key.  Also tells you the index
 // DOESN'T save it to disk yet; maybe use a different branch
 func (ts *TxStore) NewPub() (*btcec.PublicKey, uint32, error) {
-	// check number of multu pubkeys from db here
-	keynum := uint32(5) //hardcoded for now.
+	// check number of multi pubkeys from db
+	var numkeys uint32
+	// also increment them.  Increment happens even if something later
+	// fails, which is OK (plenty of keys)
+	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
+		sta := btx.Bucket(BKTState)
+		nkB := sta.Get(KEYNumMulti)
+		if nkB == nil {
+			numkeys = 0
+		} else {
+			err := binary.Read(bytes.NewBuffer(nkB), binary.BigEndian, &numkeys)
+			if err != nil {
+				return err
+			}
+		}
+		numkeys++
+		var buf bytes.Buffer
+		err := binary.Write(&buf, binary.BigEndian, numkeys)
+		if err != nil {
+			return err
+		}
+		return sta.Put(KEYNumMulti, buf.Bytes())
+	})
+	if err != nil {
+		return nil, 0, err
+	}
 
 	privMultTop, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
 	if err != nil {
 		return nil, 0, err
 	}
-	priv, err := privMultTop.Child(keynum + hdkeychain.HardenedKeyStart)
+	priv, err := privMultTop.Child(numkeys + hdkeychain.HardenedKeyStart)
 	if err != nil {
 		return nil, 0, err
 	}
-	// save the new incremented number of pubkeys to disk here
 
 	pub, err := priv.ECPubKey()
-	return pub, keynum, err
+	return pub, numkeys, err
 }
 
 // NewAdr creates a new, never before seen address, and increments the
