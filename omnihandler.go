@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 
@@ -55,12 +56,13 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 		return
 	}
 
-	txo, err := uspv.FundMultiOut(
+	multiOut, err := uspv.FundMultiOut(
 		theirPub.SerializeCompressed(), myPub.SerializeCompressed(), 100000000)
 	if err != nil {
 		fmt.Printf(err.Error())
 		return
 	}
+	multiScript := multiOut.PkScript
 
 	utxos, overshoot, err := SCon.PickUtxos(100000000)
 	if err != nil {
@@ -69,7 +71,7 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 	}
 
 	tx := wire.NewMsgTx() // make new tx
-	tx.AddTxOut(txo)      // add multisig output
+	tx.AddTxOut(multiOut) // add multisig output
 
 	changeOut, err := SCon.TS.NewChangeOut(overshoot)
 	if err != nil {
@@ -80,12 +82,26 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 	txsort.InPlaceSort(tx)
 
 	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
-		overshoot, idx, txo.PkScript)
+		overshoot, idx, multiOut.PkScript)
 	for _, utxo := range utxos {
 		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
 	}
-
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
+
+	var m uspv.MultiOut
+
+	// find multisig output in the tx (might have gotten shuffled around)
+	for i, txo := range tx.TxOut {
+		if bytes.Equal(multiScript, txo.PkScript) {
+			fmt.Printf("multisig outpoint is %s : %d\n", tx.TxSha().String(), i)
+			sha := tx.TxSha()
+			m.Op = *wire.NewOutPoint(&sha, uint32(i))
+			m.Value = txo.Value
+		}
+	}
+	m.KeyIdx = idx
+	m.TheirPub = theirPub
+	err = SCon.TS.SaveMultiOut(m)
 
 	return
 }

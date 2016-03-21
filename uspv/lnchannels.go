@@ -21,10 +21,10 @@ type SimplChannel struct {
 	Cap int64 // channel capacity
 
 	MyKeyIdx uint32 // which key am I using for channel multisig
-	MyPub    btcec.PublicKey
+	MyPub    *btcec.PublicKey
 
-	TheirLNId [20]byte        // LNId of counterparty
-	TheirPub  btcec.PublicKey // their pubkey for channel multisig
+	TheirLNId [20]byte         // LNId of counterparty
+	TheirPub  *btcec.PublicKey // their pubkey for channel multisig
 
 	SendElkrem elkrem.ElkremSender
 	RecvElkrem elkrem.ElkremReceiver
@@ -34,6 +34,14 @@ type SimplChannel struct {
 
 	// height at which channel expires (all cltvs in statcoms use this)
 	Expiry uint32
+}
+
+// Not a channel, just multisig.  But channels evolve from it
+type MultiOut struct {
+	Utxo // most stuff is in here; flag bit is redundant in this implementation
+
+	//	MyPub    btcec.PublicKey // for convenience, not stored
+	TheirPub *btcec.PublicKey // their pubkey, stored
 }
 
 // StatComs are State Commitments.
@@ -74,14 +82,14 @@ func (s *SimplChannel) BuildStatComTx(
 		outPKH = wire.NewTxOut(s.NextState.MyAmt, wpkhScript)
 		// encumbered: they need time, I need a hash
 		// only errors are 'non cannonical script' so ignore errors
-		fancyScript, _ := commitScript(s.Expiry, &s.MyPub, &s.TheirPub, R)
+		fancyScript, _ := commitScript(s.Expiry, s.MyPub, s.TheirPub, R)
 		outFancy = wire.NewTxOut(TheirAmt, fancyScript)
 	} else { // they're committing to getting their funds unencumbered
 		pkh := btcutil.Hash160(s.TheirPub.SerializeCompressed())
 		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
 		outPKH = wire.NewTxOut(TheirAmt, P2WSHify(wpkhScript))
 
-		fancyScript, _ := commitScript(s.Expiry, &s.TheirPub, &s.MyPub, R)
+		fancyScript, _ := commitScript(s.Expiry, s.TheirPub, s.MyPub, R)
 		outFancy = wire.NewTxOut(s.NextState.MyAmt, fancyScript)
 	}
 

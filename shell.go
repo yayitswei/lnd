@@ -361,7 +361,7 @@ func Bal(args []string) error {
 
 	var score, confScore int64
 	for i, u := range allUtxos {
-		fmt.Printf("\tutxo %d height %d %s key:%d amt %d",
+		fmt.Printf("\tutxo %d height %d %s key:%d amt: %d",
 			i, u.AtHeight, u.Op.String(), u.KeyIdx, u.Value)
 		if u.IsWit {
 			fmt.Printf(" WIT")
@@ -372,6 +372,17 @@ func Bal(args []string) error {
 			confScore += u.Value
 		}
 	}
+
+	gmos, err := SCon.TS.GetAllMultiOuts()
+	if err != nil {
+		return err
+	}
+	for i, m := range gmos {
+		tk := m.TheirPub.SerializeCompressed()
+		fmt.Printf("  Multisig %d height %d %s key: %d amt: %d theirkey %x\n",
+			i, m.AtHeight, m.Op.String(), m.KeyIdx, m.Value, tk[:8])
+	}
+
 	height, _ := SCon.TS.GetDBSyncHeight()
 	if err != nil {
 		return err
@@ -397,6 +408,7 @@ func Bal(args []string) error {
 		}
 		fmt.Printf("address %d %s OR %s\n", i, a.PkhAdr.String(), wa.String())
 	}
+
 	fmt.Printf("Multisig Pubkeys generated: %d\n", multi)
 	fmt.Printf("Total known txs: %d\n", len(atx))
 	fmt.Printf("Known utxos: %d\tPreviously spent txos: %d\n",
