@@ -7,6 +7,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcutil/hdkeychain"
 )
 
 /*
@@ -45,7 +46,8 @@ var (
 // 4 byte slice to uin32.  Returns 0 if something doesn't work.
 func BtU32(b []byte) uint32 {
 	if len(b) != 4 {
-		return 0
+		fmt.Printf("Got %x to BtU32\n", b)
+		return 0xffffffff
 	}
 	var i uint32
 	buf := bytes.NewBuffer(b)
@@ -102,17 +104,83 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	return idx, err
 }
 
-// store a MultiSig output
-func (ts *TxStore) NewMultReq(m MultiOut) error {
+// Initiate a Multisig Request.  Get an index based on peer pubkey
+func (ts *TxStore) NewMultReq(peerBytes []byte) (uint32, error) {
+	var multIdx uint32
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
-
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes)
+		if pr == nil {
+			return fmt.Errorf("peer %x not found", peerBytes)
+		}
+		// chanIdx starts at 1, because there's another key in the peer bucket
+		// (pdx) for peer data (right now just peerIdx)
+		multIdx = uint32(pr.Stats().KeyN)
+		// make empty bucket for the new multisig
+		_, err := pr.CreateBucket(U32tB(multIdx))
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return multIdx, nil
+}
+
+// MutliResp responds to a multisig request.  It first checks that the peer
+// exists, and there is no existing multi index yet, and creates it.
+// After the DB stuff is done it makes a pubkey from the peerIdx and multIdx.
+func (ts *TxStore) MultiResp(
+	peerBytes []byte, idxBytes []byte) (*btcec.PublicKey, error) {
+	multIdx := BtU32(idxBytes)
+	var peerIdx uint32
+	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes)
+		if pr == nil {
+			return fmt.Errorf("peer %x not found", peerBytes)
+		}
+		peerIdxBytes := pr.Get(KEYPeerIdx)
+		if peerIdxBytes == nil {
+			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
+		}
+		peerIdx = BtU32(peerIdxBytes) // store for key creation
+
+		nextIdx := uint32(pr.Stats().KeyN)
+		if multIdx != nextIdx {
+			return fmt.Errorf("bad index; got %d, next is %d", multIdx, nextIdx)
+		}
+
+		_, err := pr.CreateBucket(U32tB(multIdx))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	multiRoot, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, err
+	}
+	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, err
+	}
+	multiPriv, err := peerRoot.Child(multIdx + hdkeychain.HardenedKeyStart)
+	if err != nil {
+		return nil, err
+	}
+
+	return multiPriv.ECPubKey()
 }
 
 // GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.

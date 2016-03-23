@@ -17,20 +17,26 @@ func Mult(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
+	// Get index of mult with this peer, attach after pubreq
+
+	multIdx, err := SCon.TS.NewMultReq(RemoteCon.RemotePub.SerializeCompressed())
+	if err != nil {
+		return err
+	}
 	msg := []byte{uwire.MSGID_PUBREQ}
-	_, err := RemoteCon.Write(msg)
+	msg = append(msg, uspv.U32tB(multIdx)...)
+	_, err = RemoteCon.Write(msg)
 	return err
 }
 
-func MultiReqHandler(from [16]byte) {
-	pub, idx, err := SCon.TS.NewPub()
-	if err != nil {
-		fmt.Printf("MultiReqHandler error: %s", err.Error())
-	}
-	// for multiple peers, record in DB what key was generated and the peer.
+func MultiReqHandler(from [16]byte, idxBytes []byte) {
+	// pub req; check that idx matches next idx of ours and create pubkey
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	pub, err := SCon.TS.MultiResp(peerBytes, idxBytes)
 
-	fmt.Printf("Generated pubkey %d: %x\n", idx, pub.SerializeCompressed())
+	fmt.Printf("Generated pubkey %x\n", pub.SerializeCompressed())
 	msg := []byte{uwire.MSGID_PUBRESP}
+	msg = append(msg, idxBytes...)
 	msg = append(msg, pub.SerializeCompressed()...)
 
 	_, err = RemoteCon.Write(msg)
