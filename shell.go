@@ -38,7 +38,7 @@ var (
 	RemoteCon      *lndc.LNDConn // one because simple
 )
 
-func shell() {
+func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
 	GlobalOmniChan = make(chan []byte, 10)
