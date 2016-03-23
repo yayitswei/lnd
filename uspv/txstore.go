@@ -23,7 +23,7 @@ type TxStore struct {
 
 	Adrs    []MyAdr  // endeavouring to acquire capital
 	StateDB *bolt.DB // place to write all this down
-
+	// can make a map of *bolt.DBs later for lots-o-channels
 	localFilter *bloom.Filter // local bloom filter for hard mode
 
 	// Params live here, not SCon

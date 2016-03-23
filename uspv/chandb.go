@@ -2,44 +2,110 @@ package uspv
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/boltdb/bolt"
 	"github.com/btcsuite/btcd/btcec"
 )
 
+/*
+Channels (& multisig) go in the DB here.
+first there's the peer bucket.
+
+Here's the structure:
+
+Peers
+|
+|-Pubkey
+	|
+	|-idx:uint32 - assign a 32bit number to this peer for HD keys and quick ref
+	|
+	|-0x00000000 - bucket 0 (channel)
+		|
+		|-CID: channelID
+		|
+		|-channel state data
+
+
+Right now these buckets are all in one boltDB.  This limits it to one db write
+at a time, which for super high thoughput could be too slow.
+Later on we can chop it up so that each channel gets it's own db file.
+
+*/
+
 var (
-	BKTChnls = []byte("Chanls") // leave the rest to collect interest
+	BKTPeers   = []byte("Peer") // all peer data is in this bucket.
+	KEYElkRecv = []byte("ElkR") // indicates elkrem receiver
+	KEYPeerIdx = []byte("Pdx")  // indicates elkrem receiver
 )
 
-// NewAdr creates a new, never before seen address, and increments the
-// DB counter as well as putting it in the ram Adrs store, and returns it
-func (ts *TxStore) SaveChanState(s SimplChannel) error {
+// I shouldn't even have to write these...
 
-	s.FundPoint.Hash.Bytes()
-
-	var err error
-	// write to db file
-	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
-		//		chn := btx.Bucket(BKTChnls)
-		//		key := outPointToBytes(s.FundPoint)
-		return nil
-	})
-	if err != nil {
-		return err
+// 4 byte slice to uin32.  Returns 0 if something doesn't work.
+func BtU32(b []byte) uint32 {
+	if len(b) != 4 {
+		return 0
 	}
-	return nil
+	var i uint32
+	buf := bytes.NewBuffer(b)
+	binary.Read(buf, binary.BigEndian, i)
+	return i
 }
 
-// store a MultiSig output
-func (ts *TxStore) SaveMultiOut(m MultiOut) error {
-	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
-		chn, _ := btx.CreateBucketIfNotExists(BKTChnls) // only errs on name
-		mBytes, err := m.ToBytes()
+// uint32 to 4 bytes.  Always works.
+func U32tB(i uint32) []byte {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, i)
+	return buf.Bytes()
+}
+
+// NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
+// the first time you connect to someone.
+func (ts *TxStore) NewPeer(pub *btcec.PublicKey) error {
+	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+		prs, _ := btx.CreateBucketIfNotExists(BKTPeers) // only errs on name
+
+		newPeerIdx := prs.Stats().KeyN // know this many peers already
+
+		pr, err := prs.CreateBucket(pub.SerializeCompressed())
+		if err != nil {
+			return err // peer already exists
+		}
+
+		var buf bytes.Buffer
+		// write 4 byte peer index
+		err = binary.Write(&buf, binary.BigEndian, newPeerIdx)
 		if err != nil {
 			return err
 		}
-		chn.Put(mBytes[:36], mBytes[36:])
+		return pr.Put(KEYPeerIdx, buf.Bytes())
+	})
+}
+
+// GetPeerIdx returns the peer index given a pubkey.
+func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
+	var idx uint32
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("No peers evar")
+		}
+		pr := prs.Bucket(pub.SerializeCompressed())
+		if pr == nil {
+			return fmt.Errorf("Peer %x has no index saved",
+				pub.SerializeCompressed())
+		}
+		idx = BtU32(pr.Get(KEYPeerIdx))
+		return nil
+	})
+	return idx, err
+}
+
+// store a MultiSig output
+func (ts *TxStore) NewMultReq(m MultiOut) error {
+	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
+
 		return nil
 	})
 	if err != nil {
@@ -53,22 +119,32 @@ func (ts *TxStore) SaveMultiOut(m MultiOut) error {
 func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 	var multis []*MultiOut
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
-		chn := btx.Bucket(BKTChnls)
-		if chn == nil {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
 			return nil
 		}
-		return chn.ForEach(func(k, v []byte) error {
-			// have to copy k and v here, otherwise append will crash it.
-			// not quite sure why but append does weird stuff I guess.
-			x := make([]byte, len(k)+len(v))
-			copy(x, k)
-			copy(x[len(k):], v)
-			newMult, err := MultiOutFromBytes(x)
-			if err != nil {
-				return err
+		return prs.ForEach(func(idPub, nothin []byte) error {
+			if nothin != nil {
+				return nil // non-bucket
 			}
-			// and add it to ram
-			multis = append(multis, &newMult)
+			var peerIdx uint32
+			pr := prs.Bucket(idPub) // go into this peer's bucket
+			peerIdx = BtU32(pr.Get(KEYPeerIdx))
+
+			return pr.ForEach(func(MultIdxBytes, pubkey []byte) error {
+				multIdx := BtU32(MultIdxBytes) // copy here safe...?
+				x := make([]byte, len(MultIdxBytes)+len(pubkey))
+				copy(x, MultIdxBytes)
+				copy(x[len(MultIdxBytes):], pubkey)
+				newMult, err := MultiOutFromBytes(x)
+				if err != nil {
+					return err
+				}
+				newMult.PeerIdx = peerIdx
+				newMult.MultIdx = multIdx
+				multis = append(multis, &newMult)
+				return nil
+			})
 			return nil
 		})
 		return nil
@@ -89,6 +165,8 @@ byte length   desc   at offset
 33	thrpub	86
 
 end len 	86
+
+peeridx and multidx are inferred from position in db.
 */
 
 func (m *MultiOut) ToBytes() ([]byte, error) {
@@ -104,6 +182,12 @@ func (m *MultiOut) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 
+	// write per-peer multiOut index (4 bytes)
+	err = binary.Write(&buf, binary.BigEndian, m.MultIdx)
+	if err != nil {
+		return nil, err
+	}
+
 	// write 33 byte pubkey (theirs)
 	_, err = buf.Write(m.TheirPub.SerializeCompressed())
 	if err != nil {
@@ -114,21 +198,31 @@ func (m *MultiOut) ToBytes() ([]byte, error) {
 }
 
 // MultiOutFromBytes turns bytes into a MultiOut.
-// the first 53 bytes are the utxo, then the next 33 is the pubkey
+// the first 53 bytes are the utxo, then 4 idx, then next 33 is the pubkey
 func MultiOutFromBytes(b []byte) (MultiOut, error) {
 	var m MultiOut
 
-	if len(b) < 86 {
-		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
+	if len(b) < 90 {
+		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 90", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:53])
 	if err != nil {
 		return m, err
 	}
+
+	buf := bytes.NewBuffer(b[53:])
+	// will be 37, size checked up there
+
 	m.Utxo = u // assign the utxo
 
-	m.TheirPub, err = btcec.ParsePubKey(b[53:], btcec.S256())
+	// read 4 byte outpoint index within the tx to spend
+	err = binary.Read(buf, binary.BigEndian, &m.MultIdx)
+	if err != nil {
+		return m, err
+	}
+
+	m.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
 	if err != nil {
 		return m, err
 	}

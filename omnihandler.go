@@ -27,6 +27,8 @@ func MultiReqHandler(from [16]byte) {
 	if err != nil {
 		fmt.Printf("MultiReqHandler error: %s", err.Error())
 	}
+	// for multiple peers, record in DB what key was generated and the peer.
+
 	fmt.Printf("Generated pubkey %d: %x\n", idx, pub.SerializeCompressed())
 	msg := []byte{uwire.MSGID_PUBRESP}
 	msg = append(msg, pub.SerializeCompressed()...)
@@ -101,7 +103,8 @@ func MultiRespHandler(from [16]byte, pubbytes []byte) {
 	}
 	m.KeyIdx = idx
 	m.TheirPub = theirPub
-	err = SCon.TS.SaveMultiOut(m)
+	// put back in! now!
+	//		err = SCon.TS.SaveMultiOut(m)
 
 	return
 }

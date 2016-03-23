@@ -13,6 +13,16 @@ import (
 	"github.com/btcsuite/fastsha256"
 )
 
+// Not a channel, just multisig.  But channels evolve from it
+type MultiOut struct {
+	Utxo // most stuff is in here; flag bit is redundant in this implementation
+
+	//	MyPub    btcec.PublicKey // for convenience, not stored
+	PeerIdx  uint32           // The peer which this multisig is with
+	MultIdx  uint32           // Index of the multisig tx with this peer
+	TheirPub *btcec.PublicKey // their pubkey, stored
+}
+
 // Simplified channel struct that doesn't include anything for multihop.
 // its real simplified.  Can make it fancier later.
 type SimplChannel struct {
@@ -34,14 +44,6 @@ type SimplChannel struct {
 
 	// height at which channel expires (all cltvs in statcoms use this)
 	Expiry uint32
-}
-
-// Not a channel, just multisig.  But channels evolve from it
-type MultiOut struct {
-	Utxo // most stuff is in here; flag bit is redundant in this implementation
-
-	//	MyPub    btcec.PublicKey // for convenience, not stored
-	TheirPub *btcec.PublicKey // their pubkey, stored
 }
 
 // StatComs are State Commitments.
