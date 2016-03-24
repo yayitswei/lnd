@@ -18,9 +18,12 @@ type MultiOut struct {
 	Utxo // most stuff is in here; flag bit is redundant in this implementation
 
 	//	MyPub    btcec.PublicKey // for convenience, not stored
-	PeerIdx  uint32           // The peer which this multisig is with
-	MultIdx  uint32           // Index of the multisig tx with this peer
+
 	TheirPub *btcec.PublicKey // their pubkey, stored
+
+	// peerIdx is for convenience; not serialized directly;
+	// peer index is derived from position in db.  mult index is utxo keyidx.
+	PeerIdx uint32
 }
 
 // Simplified channel struct that doesn't include anything for multihop.

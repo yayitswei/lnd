@@ -1,116 +1,95 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil/txsort"
 	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
-// Mult makes a multisig address with the node connected to
+// Mult makes a multisig address with the node connected to...
+// first just request one of their pubkeys (1 byte message)
 func Mult(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
-	// Get index of mult with this peer, attach after pubreq
-
-	multIdx, err := SCon.TS.NewMultReq(RemoteCon.RemotePub.SerializeCompressed())
-	if err != nil {
-		return err
-	}
 	msg := []byte{uwire.MSGID_PUBREQ}
-	msg = append(msg, uspv.U32tB(multIdx)...)
-	_, err = RemoteCon.Write(msg)
+	_, err := RemoteCon.Write(msg)
 	return err
 }
 
-func MultiReqHandler(from [16]byte, idxBytes []byte) {
+// get a (content-less) pubkey request.  Respond with a pubkey
+// note that this only causes a disk read, not a disk write.
+// so if someone sends 10 pubkeyreqs, they'll get the same pubkey back 10 times.
+// they have to provide an actual tx before the next pubkey will come out.
+func MultiReqHandler(from [16]byte) {
 	// pub req; check that idx matches next idx of ours and create pubkey
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	pub, err := SCon.TS.MultiResp(peerBytes, idxBytes)
-
-	fmt.Printf("Generated pubkey %x\n", pub.SerializeCompressed())
+	pub, err := SCon.TS.NextPubForPeer(peerBytes)
+	if err != nil {
+		fmt.Printf("MultiReqHandler err %s", err.Error())
+		return
+	}
+	fmt.Printf("Generated pubkey %x\n", pub)
 	msg := []byte{uwire.MSGID_PUBRESP}
-	msg = append(msg, idxBytes...)
-	msg = append(msg, pub.SerializeCompressed()...)
+	msg = append(msg, pub...)
 
 	_, err = RemoteCon.Write(msg)
 	return
 }
 
-func MultiRespHandler(from [16]byte, pubbytes []byte) {
-	if len(pubbytes) != 33 {
-		fmt.Printf("pubkey is %d bytes, expect 33\n", len(pubbytes))
-		return
-	}
-	theirPub, err := btcec.ParsePubKey(pubbytes, btcec.S256())
+// once the pubkey response comes back, we can create the transaction.
+// create, save to DB, sign and send over the wire (and broadcast)
+func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
+	multiCapacity := int64(100000000) // this will be an arg
+
+	// make sure their pubkey is a pubkey
+	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("MultiRespHandler err %s", err.Error())
 		return
 	}
 
 	fmt.Printf("got pubkey response %x\n", theirPub.SerializeCompressed())
-	// now build a multisig output
-
-	// make our own pubkey
-	myPub, idx, err := SCon.TS.NewPub()
-	if err != nil {
-		fmt.Printf(err.Error())
-		return
-	}
-
-	multiOut, err := uspv.FundMultiOut(
-		theirPub.SerializeCompressed(), myPub.SerializeCompressed(), 100000000)
-	if err != nil {
-		fmt.Printf(err.Error())
-		return
-	}
-	multiScript := multiOut.PkScript
-
-	utxos, overshoot, err := SCon.PickUtxos(100000000)
-	if err != nil {
-		fmt.Printf(err.Error())
-		return
-	}
 
 	tx := wire.NewMsgTx() // make new tx
-	tx.AddTxOut(multiOut) // add multisig output
 
-	changeOut, err := SCon.TS.NewChangeOut(overshoot)
+	// first get inputs
+	utxos, overshoot, err := SCon.PickUtxos(multiCapacity, true)
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("MultiRespHandler err %s", err.Error())
 		return
 	}
-	tx.AddTxOut(changeOut) // add change output
-	txsort.InPlaceSort(tx)
-
-	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
-		overshoot, idx, multiOut.PkScript)
+	// add all the inputs to the tx
 	for _, utxo := range utxos {
 		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
 	}
-	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
-	var m uspv.MultiOut
-
-	// find multisig output in the tx (might have gotten shuffled around)
-	for i, txo := range tx.TxOut {
-		if bytes.Equal(multiScript, txo.PkScript) {
-			fmt.Printf("multisig outpoint is %s : %d\n", tx.TxSha().String(), i)
-			sha := tx.TxSha()
-			m.Op = *wire.NewOutPoint(&sha, uint32(i))
-			m.Value = txo.Value
-		}
+	// create change output
+	changeOut, err := SCon.TS.NewChangeOut(overshoot)
+	if err != nil {
+		fmt.Printf("MultiRespHandler err %s", err.Error())
+		return
 	}
-	m.KeyIdx = idx
-	m.TheirPub = theirPub
-	// put back in! now!
-	//		err = SCon.TS.SaveMultiOut(m)
+
+	tx.AddTxOut(changeOut) // add change output
+
+	//	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
+	//		overshoot, idx, multiOut.PkScript)
+
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	// send partial tx to db to be saved and have output populated
+	err = SCon.TS.MakeMultiTx(tx, multiCapacity, peerBytes, theirPub)
+	if err != nil {
+		fmt.Printf("MultiRespHandler err %s", err.Error())
+		return
+	}
+
+	// tx saved in DB.  Next sign, then broadcast / notify peer
+	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
 	return
 }
@@ -170,6 +149,11 @@ func OmniHandler(OmniChan chan []byte) {
 // it listens for incoming messages on the lndc and hands it over
 // to the OmniHandler via omnichan
 func LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
+	// first store peer in DB if not yet known
+	_, err := SCon.TS.NewPeer(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
 	for {
 		msg := make([]byte, 65535)
 		//	fmt.Printf("read message from %x\n", l.RemoteLNId)

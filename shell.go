@@ -256,6 +256,7 @@ func TCPListener() {
 
 		go LNDCReceiver(newConn, newId, GlobalOmniChan)
 		RemoteCon = newConn
+
 	}
 }
 
@@ -283,6 +284,12 @@ func Con(args []string) error {
 	if err != nil {
 		return err
 	}
+	// store this peer
+	_, err = SCon.TS.NewPeer(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+
 	idslice := btcutil.Hash160(RemoteCon.RemotePub.SerializeCompressed())
 	var newId [16]byte
 	copy(newId[:], idslice[:16])
@@ -379,8 +386,8 @@ func Bal(args []string) error {
 	}
 	for i, m := range gmos {
 		tk := m.TheirPub.SerializeCompressed()
-		fmt.Printf("  Multisig %d height %d %s key: %d amt: %d theirkey %x\n",
-			i, m.AtHeight, m.Op.String(), m.KeyIdx, m.Value, tk[:8])
+		fmt.Printf("%d peerIdx %d multIdx %d height %d %s amt: %d theirkey %x\n",
+			i, m.PeerIdx, m.KeyIdx, m.AtHeight, m.Op.String(), m.Value, tk[:8])
 	}
 
 	height, _ := SCon.TS.GetDBSyncHeight()
@@ -395,10 +402,6 @@ func Bal(args []string) error {
 	if err != nil {
 		return err
 	}
-	multi, err := SCon.TS.GetNumMultiKeys()
-	if err != nil {
-		return err
-	}
 
 	for i, a := range SCon.TS.Adrs {
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
@@ -409,7 +412,6 @@ func Bal(args []string) error {
 		fmt.Printf("address %d %s OR %s\n", i, a.PkhAdr.String(), wa.String())
 	}
 
-	fmt.Printf("Multisig Pubkeys generated: %d\n", multi)
 	fmt.Printf("Total known txs: %d\n", len(atx))
 	fmt.Printf("Known utxos: %d\tPreviously spent txos: %d\n",
 		len(allUtxos), len(stxos))

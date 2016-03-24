@@ -82,7 +82,7 @@ func (ts *TxStore) OpenDB(filename string) error {
 
 // NewPub generates and returns a new public key.  Also tells you the index
 // DOESN'T save it to disk yet; maybe use a different branch
-func (ts *TxStore) NewPub() (*btcec.PublicKey, uint32, error) {
+func (ts *TxStore) NewPubx() (*btcec.PublicKey, uint32, error) {
 	// check number of multi pubkeys from db
 	var numkeys uint32
 	// also increment them.  Increment happens even if something later
@@ -123,6 +123,8 @@ func (ts *TxStore) NewPub() (*btcec.PublicKey, uint32, error) {
 	return pub, numkeys, err
 }
 
+// make a new change output.  I guess this is supposed to be on a different
+// branch than regular addresses...
 func (ts *TxStore) NewChangeOut(amt int64) (*wire.TxOut, error) {
 	changeOld, err := ts.NewAdr() // change is always witnessy
 	if err != nil {
@@ -386,25 +388,6 @@ func (ts *TxStore) GetPendingInv() (*wire.MsgInv, error) {
 }
 
 // PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
-func (ts *TxStore) GetNumMultiKeys() (uint32, error) {
-	var numkeys uint32
-	err := ts.StateDB.View(func(btx *bolt.Tx) error {
-		sta := btx.Bucket(BKTState)
-		nkB := sta.Get(KEYNumMulti)
-		if nkB == nil {
-			numkeys = 0
-		} else {
-			err := binary.Read(bytes.NewBuffer(nkB), binary.BigEndian, &numkeys)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return numkeys, err
-}
-
-// PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
 func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 	for k := uint32(0); k < lastKey; k++ {
 
@@ -457,7 +440,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	wPKscripts := make([][]byte, len(ts.Adrs))
 	aPKscripts := make([][]byte, len(ts.Adrs))
 
-	for i, _ := range ts.Adrs {
+	for i, _ := range wPKscripts {
 		// iterate through all our addresses
 		// convert regular address to witness address.  (split adrs later)
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(

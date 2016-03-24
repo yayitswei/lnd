@@ -109,7 +109,8 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 
 // PickUtxos Picks Utxos for spending.  Tell it how much money you want.
 // It returns a tx-sortable utxoslice, and the overshoot amount.  Also errors.
-func (s *SPVCon) PickUtxos(amtWanted int64) (utxoSlice, int64, error) {
+// if "ow" is true, only gives witness utxos (for channel funding)
+func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	var score int64
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
 	rawUtxos, err := s.TS.GetAllUtxos()
@@ -141,6 +142,10 @@ func (s *SPVCon) PickUtxos(amtWanted int64) (utxoSlice, int64, error) {
 		//		if utxo.AtHeight == 0 {
 		//			continue
 		//		}
+
+		if ow && !utxo.IsWit {
+			continue // skip non-witness
+		}
 
 		// yeah, lets add this utxo!
 		rSlice = append(rSlice, utxo)
@@ -278,7 +283,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 	tx.AddTxOut(changeOut)
 
 	// get inputs for this tx
-	utxos, overshoot, err := s.PickUtxos(totalSend)
+	utxos, overshoot, err := s.PickUtxos(totalSend, false)
 	if err != nil {
 		return err
 	}
