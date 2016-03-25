@@ -45,7 +45,7 @@ func MultiReqHandler(from [16]byte) {
 // create, save to DB, sign and send over the wire (and broadcast)
 func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	multiCapacity := int64(100000000) // this will be an arg
-
+	capBytes := uspv.I64tB(multiCapacity)
 	// make sure their pubkey is a pubkey
 	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
 	if err != nil {
@@ -82,15 +82,22 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
-	err = SCon.TS.MakeMultiTx(tx, multiCapacity, peerBytes, theirPub)
+	op, myPubBytes, err := SCon.TS.MakeMultiTx(
+		tx, multiCapacity, peerBytes, theirPub)
 	if err != nil {
 		fmt.Printf("MultiRespHandler err %s", err.Error())
 		return
 	}
 
-	// tx saved in DB.  Next sign, then broadcast / notify peer
+	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
+	msg := []byte{uwire.MSGID_MULTIDESC}
+	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, myPubBytes...)
+	msg = append(msg, capBytes...)
+
+	_, err = RemoteCon.Write(msg)
 	return
 }
 
@@ -138,6 +145,7 @@ func OmniHandler(OmniChan chan []byte) {
 		if msgid == uwire.MSGID_MULTIDESC {
 			fmt.Printf("Got multisig description from %x\n", from)
 			MultiDescHandler(from, msg[1:])
+			continue
 		}
 
 		fmt.Printf("Unknown message id byte %x", msgid)

@@ -428,7 +428,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	spentOPs := make([][]byte, len(tx.TxIn))
 	// before entering into db, serialize all inputs of the ingested tx
 	for i, txin := range tx.TxIn {
-		spentOPs[i] = outPointToBytes(txin.PreviousOutPoint)
+		spentOPs[i] = OutPointToBytes(txin.PreviousOutPoint)
 		if spentOPs[i] == nil {
 			return hits, fmt.Errorf("got nil outpoint")
 		}

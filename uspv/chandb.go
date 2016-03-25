@@ -69,6 +69,13 @@ func U32tB(i uint32) []byte {
 	return buf.Bytes()
 }
 
+// int64 to 8 bytes.  Always works.
+func I64tB(i int64) []byte {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, i)
+	return buf.Bytes()
+}
+
 // GetPubkeyBytes generates and returns the pubkey for a given index.
 // It will return nil if there's an error / problem
 func (ts *TxStore) GetPubkeyBytes(peerIdx, cIdx uint32) []byte {
@@ -206,10 +213,14 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 // It then creates the local multisig pubkey, makes the output, and stores
 // the multi tx info in the db.  Only returns an error, BUT, the *tx you
 // hand it will be filled in.  (but not signed!)
-func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64,
-	peerBytes []byte, theirPub *btcec.PublicKey) error {
+// Returns the multi outpoint and myPubkey (bytes)
+func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
+	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
 
 	var peerIdx, multIdx uint32
+	var op *wire.OutPoint
+	var myPubBytes []byte
+
 	theirPubBytes := theirPub.SerializeCompressed()
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
@@ -225,9 +236,9 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64,
 			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
 		}
 		peerIdx = BtU32(peerIdxBytes) // store for key creation
-		multIdx = uint32(pr.Stats().KeyN) + localIdx
+		multIdx = uint32(pr.Stats().BucketN) + localIdx
 
-		myPubBytes := ts.GetPubkeyBytes(peerIdx, multIdx)
+		myPubBytes = ts.GetPubkeyBytes(peerIdx, multIdx)
 
 		multiTxOut, err := FundMultiOut(theirPubBytes, myPubBytes, amt)
 		if err != nil {
@@ -239,7 +250,7 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64,
 		// figure out outpoint of new multiacct
 		txsort.InPlaceSort(tx) // sort before getting outpoint
 		txid := tx.TxSha()
-		var op *wire.OutPoint
+
 		for i, out := range tx.TxOut {
 			if bytes.Equal(out.PkScript, outScript) {
 				op = wire.NewOutPoint(&txid, uint32(i))
@@ -247,7 +258,7 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64,
 			}
 		}
 		// make new bucket for this mutliout
-		cn, err := pr.CreateBucket(outPointToBytes(*op))
+		cn, err := pr.CreateBucket(OutPointToBytes(*op))
 		if err != nil {
 			return err
 		}
@@ -275,10 +286,10 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64,
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	return nil
+	return op, myPubBytes, nil
 }
 
 // GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.

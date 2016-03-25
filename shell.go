@@ -217,7 +217,6 @@ func Lis(args []string) error {
 }
 
 func TCPListener() {
-
 	idPriv, err := SCon.TS.IdKey()
 	if err != nil {
 		log.Printf(err.Error())
@@ -256,7 +255,6 @@ func TCPListener() {
 
 		go LNDCReceiver(newConn, newId, GlobalOmniChan)
 		RemoteCon = newConn
-
 	}
 }
 

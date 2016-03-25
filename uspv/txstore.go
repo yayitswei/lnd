@@ -187,7 +187,7 @@ func OutPointsEqual(a, b wire.OutPoint) bool {
 /*----- serialization for tx outputs ------- */
 
 // outPointToBytes turns an outpoint into 36 bytes.
-func outPointToBytes(op wire.OutPoint) []byte {
+func OutPointToBytes(op wire.OutPoint) []byte {
 	var buf bytes.Buffer
 	_, err := buf.Write(op.Hash.Bytes())
 	if err != nil {
