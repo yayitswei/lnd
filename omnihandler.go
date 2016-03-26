@@ -92,6 +92,7 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
+	// description is outpoint (36), myPubkey(33), multisig capacity (8)
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
@@ -101,10 +102,14 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	return
 }
 
+// MultiDescHandler takes in a description of a multisig output.  It then
+// saves it to the local db.
+
 func MultiDescHandler(from [16]byte, descbytes []byte) {
-	// if len(descbytes) != 33 {
-	//		return
-	// }
+	if len(descbytes) != 77 {
+		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
+		return
+	}
 
 	fmt.Printf("got multisig output %x\n", descbytes)
 	return
