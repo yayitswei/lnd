@@ -45,7 +45,7 @@ func MultiReqHandler(from [16]byte) {
 // create, save to DB, sign and send over the wire (and broadcast)
 func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	multiCapacity := int64(100000000) // this will be an arg
-	capBytes := uspv.I64tB(multiCapacity)
+	//	capBytes := uspv.I64tB(multiCapacity)
 	// make sure their pubkey is a pubkey
 	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
 	if err != nil {
@@ -96,7 +96,8 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
-	msg = append(msg, capBytes...)
+	// do you actually need to say the capacity?  They'll figure it out...
+	//	msg = append(msg, capBytes...)
 
 	_, err = RemoteCon.Write(msg)
 	return
@@ -104,12 +105,24 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 
 // MultiDescHandler takes in a description of a multisig output.  It then
 // saves it to the local db.
-
 func MultiDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) != 77 {
-		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
+	if len(descbytes) != 69 {
+		fmt.Printf("got %d byte multiDesc, expect 69\n", len(descbytes))
 		return
 	}
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	// make sure their pubkey is a pubkey
+	theirPub, err := btcec.ParsePubKey(descbytes[36:69], btcec.S256())
+	if err != nil {
+		fmt.Printf("MultiDescHandler err %s", err.Error())
+		return
+	}
+	// deserialize outpoint
+	var opBytes [36]byte
+	copy(opBytes[:], descbytes[:36])
+	op := uspv.OutPointFromBytes(opBytes)
+	// save to db
+	SCon.TS.SaveMultiTx(op, peerBytes, theirPub)
 
 	fmt.Printf("got multisig output %x\n", descbytes)
 	return

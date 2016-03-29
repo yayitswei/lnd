@@ -211,9 +211,9 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 // (everything but the multisig output), the amout of the multisig output,
 // the peerID, and the peer's multisig pubkey.
 // It then creates the local multisig pubkey, makes the output, and stores
-// the multi tx info in the db.  Only returns an error, BUT, the *tx you
+// the multi tx info in the db.  Doesn't RETURN a tx, but the *tx you
 // hand it will be filled in.  (but not signed!)
-// Returns the multi outpoint and myPubkey (bytes)
+// Returns the multi outpoint and myPubkey (bytes) & err
 func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
 
@@ -223,63 +223,67 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 
 	theirPubBytes := theirPub.SerializeCompressed()
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
-		prs := btx.Bucket(BKTPeers)
+		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
 			return fmt.Errorf("no peers")
 		}
-		pr := prs.Bucket(peerBytes)
+		pr := prs.Bucket(peerBytes) // go into this peers bucket
 		if pr == nil {
 			return fmt.Errorf("peer %x not found", peerBytes)
 		}
-		peerIdxBytes := pr.Get(KEYIdx)
+		peerIdxBytes := pr.Get(KEYIdx) // find peer index
 		if peerIdxBytes == nil {
 			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
 		}
-		peerIdx = BtU32(peerIdxBytes) // store for key creation
+		peerIdx = BtU32(peerIdxBytes) // store peer index for key creation
 		multIdx = uint32(pr.Stats().BucketN) + localIdx
 
+		// generate pubkey from peer, multi indexes
 		myPubBytes = ts.GetPubkeyBytes(peerIdx, multIdx)
 
+		// generate multisig output from two pubkeys
 		multiTxOut, err := FundMultiOut(theirPubBytes, myPubBytes, amt)
 		if err != nil {
 			return err
 		}
+		// stash script for post-sort detection (kindof ugly)
 		outScript := multiTxOut.PkScript
-		tx.AddTxOut(multiTxOut)
+		tx.AddTxOut(multiTxOut) // add mutlisig output to tx
 
 		// figure out outpoint of new multiacct
 		txsort.InPlaceSort(tx) // sort before getting outpoint
-		txid := tx.TxSha()
+		txid := tx.TxSha()     // got the txid
 
+		// find index... it will actually be 1 or 0 but do this anyway
 		for i, out := range tx.TxOut {
 			if bytes.Equal(out.PkScript, outScript) {
 				op = wire.NewOutPoint(&txid, uint32(i))
-				break
+				break // found it
 			}
 		}
 		// make new bucket for this mutliout
-		cn, err := pr.CreateBucket(OutPointToBytes(*op))
+		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
 		if err != nil {
 			return err
 		}
 
-		var mUtxo Utxo // create new utxo and copy into it
-		mUtxo.AtHeight = 0
+		var mUtxo Utxo      // create new utxo and copy into it
+		mUtxo.AtHeight = -1 // not even broadcast yet
 		mUtxo.KeyIdx = multIdx
 		mUtxo.Value = amt
-		mUtxo.IsWit = true
+		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
 		var mOut MultiOut
 		mOut.Utxo = mUtxo
 		mOut.TheirPub = theirPub
-
+		// serialize multiOut
 		mOutBytes, err := mOut.ToBytes()
 		if err != nil {
 			return err
 		}
 
 		// save multiout in the bucket
-		err = cn.Put(KEYutxo, mOutBytes)
+		err = multiBucket.Put(KEYutxo, mOutBytes)
 		if err != nil {
 			return err
 		}
@@ -292,9 +296,57 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	return op, myPubBytes, nil
 }
 
-func (ts *TxStore) SaveMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
-	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
-	return nil, nil, nil
+// SaveMultiTx saves the data in a multiDesc to DB.  We know the outpoint
+// but that's about it.  Do detection, verification, and capacity check
+// once the outpoint is seen on 8333.
+func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, peerBytes []byte,
+	theirPub *btcec.PublicKey) error {
+
+	var multIdx uint32
+
+	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes) // go into this peers bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not found", peerBytes)
+		}
+		peerIdxBytes := pr.Get(KEYIdx) // find peer index
+		if peerIdxBytes == nil {
+			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
+		}
+		multIdx = uint32(pr.Stats().BucketN) + localIdx
+
+		// make new bucket for this mutliout
+		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
+		if err != nil {
+			return err
+		}
+
+		var mUtxo Utxo      // create new utxo and copy into it
+		mUtxo.AtHeight = -1 // not even broadcast yet
+		mUtxo.KeyIdx = multIdx
+		mUtxo.Value = -1   // unknown for now
+		mUtxo.IsWit = true // multi/chan always wit
+		mUtxo.Op = *op
+		var mOut MultiOut
+		mOut.Utxo = mUtxo
+		mOut.TheirPub = theirPub
+		// serialize multiOut
+		mOutBytes, err := mOut.ToBytes()
+		if err != nil {
+			return err
+		}
+
+		// save multiout in the bucket
+		err = multiBucket.Put(KEYutxo, mOutBytes)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.

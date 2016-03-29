@@ -201,6 +201,15 @@ func OutPointToBytes(op wire.OutPoint) []byte {
 	return buf.Bytes()
 }
 
+// OutPointFromBytes gives you an outpoint from 36 bytes.
+// since 36 is enforced, it doesn't error
+func OutPointFromBytes(b [36]byte) *wire.OutPoint {
+	op := new(wire.OutPoint)
+	_ = op.Hash.SetBytes(b[:32])
+	op.Index = BtU32(b[32:])
+	return op
+}
+
 /*----- serialization for utxos ------- */
 /* Utxos serialization:
 byte length   desc   at offset
