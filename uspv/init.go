@@ -27,6 +27,11 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	if err != nil {
 		return s, err
 	}
+	// open db file
+	err = inTs.OpenDB(dbfn)
+	if err != nil {
+		return s, err
+	}
 	// open TCP connection
 	s.con, err = net.Dial("tcp", remoteNode)
 	if err != nil {
@@ -34,11 +39,6 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	}
 	// assign version bits for local node
 	s.localVersion = VERSION
-	// transaction store for this SPV connection
-	err = inTs.OpenDB(dbfn)
-	if err != nil {
-		return s, err
-	}
 	myMsgVer, err := wire.NewMsgVersionFromConn(s.con, 0, 0)
 	if err != nil {
 		return s, err

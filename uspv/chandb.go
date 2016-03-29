@@ -294,6 +294,8 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 
 func (ts *TxStore) SaveMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
+	return nil, nil, nil
+}
 
 // GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.
 func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {

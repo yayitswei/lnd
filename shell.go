@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 
 	"github.com/lightningnetwork/lnd/lndc"
@@ -55,27 +57,28 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	SCon, err = uspv.OpenSPV(
 		SPVHostAdr, headerFileName, dbFileName, &Store, true, false, Params)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("can't connect: %s", err.Error())
+		//		log.Fatal(err)
 	}
-
-	tip, err := SCon.TS.GetDBSyncHeight() // ask for sync height
-	if err != nil {
-		log.Fatal(err)
-	}
-	if tip == 0 { // DB has never been used, set to birthday
-		tip = 23700 // hardcoded; later base on keyfile date?
-		err = SCon.TS.SetDBSyncHeight(tip)
+	/*
+		tip, err := SCon.TS.GetDBSyncHeight() // ask for sync height
 		if err != nil {
 			log.Fatal(err)
 		}
-	}
+		if tip == 0 { // DB has never been used, set to birthday
+			tip = 23700 // hardcoded; later base on keyfile date?
+			err = SCon.TS.SetDBSyncHeight(tip)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 
-	//	 once we're connected, initiate headers sync
-	err = SCon.AskForHeaders()
-	if err != nil {
-		log.Fatal(err)
-	}
-
+		//	 once we're connected, initiate headers sync
+		err = SCon.AskForHeaders()
+		if err != nil {
+			log.Fatal(err)
+		}
+	*/
 	// main shell loop
 	for {
 		// setup reader with max 4K input chars
@@ -128,7 +131,13 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-
+	if cmd == "fake" { // give yourself fake utxos.
+		err = Fake(args)
+		if err != nil {
+			fmt.Printf("fake error: %s\n", err)
+		}
+		return nil
+	}
 	// bal shows the current set of utxos, addresses and score
 	if cmd == "bal" {
 		err = Bal(args)
@@ -146,42 +155,35 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	if cmd == "fan" {
+	if cmd == "fan" { // fan-out tx
 		err = Fan(args)
 		if err != nil {
 			fmt.Printf("fan error: %s\n", err)
 		}
 		return nil
 	}
-	if cmd == "sweep" {
+	if cmd == "sweep" { // make lots of 1-in 1-out txs
 		err = Sweep(args)
 		if err != nil {
 			fmt.Printf("sweep error: %s\n", err)
 		}
 		return nil
 	}
-	if cmd == "txs" {
+	if cmd == "txs" { // show all txs
 		err = Txs(args)
 		if err != nil {
 			fmt.Printf("txs error: %s\n", err)
 		}
 		return nil
 	}
-	if cmd == "blk" {
-		err = Blk(args)
-		if err != nil {
-			fmt.Printf("blk error: %s\n", err)
-		}
-		return nil
-	}
-	if cmd == "con" {
+	if cmd == "con" { // connect to lnd host
 		err = Con(args)
 		if err != nil {
 			fmt.Printf("con error: %s\n", err)
 		}
 		return nil
 	}
-	if cmd == "lis" {
+	if cmd == "lis" { // listen for lnd peers
 		err = Lis(args)
 		if err != nil {
 			fmt.Printf("lis error: %s\n", err)
@@ -327,23 +329,48 @@ func Txs(args []string) error {
 	return nil
 }
 
-func Blk(args []string) error {
-	if SCon.RBytes == 0 {
-		return fmt.Errorf("Can't check block, spv connection broken")
+// Fake generates a fake tx and ingests it.  Needed in airplane mode.
+// syntax is the same as send, but the inputs are invalid.
+func Fake(args []string) error {
+
+	// need args, fail
+	if len(args) < 2 {
+		return fmt.Errorf("need args: ssend address amount(satoshis) wit?")
 	}
-	if len(args) == 0 {
-		return fmt.Errorf("must specify height")
+	adr, err := btcutil.DecodeAddress(args[0], SCon.TS.Param)
+	if err != nil {
+		fmt.Printf("error parsing %s as address\t", args[0])
+		return err
 	}
-	height, err := strconv.ParseInt(args[0], 10, 32)
+
+	amt, err := strconv.ParseInt(args[1], 10, 64)
 	if err != nil {
 		return err
 	}
 
-	// request most recent block just to test
-	err = SCon.AskForOneBlock(int32(height))
+	tx := wire.NewMsgTx() // make new tx
+	// make address script 76a914...88ac or 0014...
+	outAdrScript, err := txscript.PayToAddrScript(adr)
 	if err != nil {
 		return err
 	}
+	// make user specified txout and add to tx
+	txout := wire.NewTxOut(amt, outAdrScript)
+	tx.AddTxOut(txout)
+
+	hash, err := wire.NewShaHashFromStr("23")
+	if err != nil {
+		return err
+	}
+	op := wire.NewOutPoint(hash, 25)
+	txin := wire.NewTxIn(op, nil, nil)
+	tx.AddTxIn(txin)
+
+	_, err = SCon.TS.Ingest(tx, 0)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
