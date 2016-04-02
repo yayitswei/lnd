@@ -231,7 +231,7 @@ func (s *SPVCon) IngestHeaders(m *wire.MsgHeaders) (bool, error) {
 			// since they're giving us invalid headers.
 			return true, fmt.Errorf(
 				"Header %d - %s doesn't fit, dropping 100 headers.",
-				resphdr.BlockSha().String(), tip)
+				tip, resphdr.BlockSha().String())
 		}
 	}
 	log.Printf("Headers to height %d OK.", tip)

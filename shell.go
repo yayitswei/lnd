@@ -30,7 +30,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "127.0.0.1:28333"
+	SPVHostAdr = "127.0.0.1:28901"
 )
 
 var (
@@ -58,27 +58,27 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		SPVHostAdr, headerFileName, dbFileName, &Store, true, false, Params)
 	if err != nil {
 		log.Printf("can't connect: %s", err.Error())
-		//		log.Fatal(err)
+		log.Fatal(err) // back to fatal when can't connect
 	}
-	/*
-		tip, err := SCon.TS.GetDBSyncHeight() // ask for sync height
-		if err != nil {
-			log.Fatal(err)
-		}
-		if tip == 0 { // DB has never been used, set to birthday
-			tip = 23700 // hardcoded; later base on keyfile date?
-			err = SCon.TS.SetDBSyncHeight(tip)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
 
-		//	 once we're connected, initiate headers sync
-		err = SCon.AskForHeaders()
+	tip, err := SCon.TS.GetDBSyncHeight() // ask for sync height
+	if err != nil {
+		log.Fatal(err)
+	}
+	if tip == 0 { // DB has never been used, set to birthday
+		tip = 10500 // hardcoded; later base on keyfile date?
+		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
 		}
-	*/
+	}
+
+	//	 once we're connected, initiate headers sync
+	err = SCon.AskForHeaders()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// main shell loop
 	for {
 		// setup reader with max 4K input chars
