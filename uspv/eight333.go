@@ -60,7 +60,8 @@ type SPVCon struct {
 // I don't like this function because SPV shouldn't even ask...
 func (s *SPVCon) AskForTx(txid wire.ShaHash) {
 	gdata := wire.NewMsgGetData()
-	inv := wire.NewInvVect(wire.InvTypeTx, &txid)
+	// should get & save wit TXs.  Check that handling works...
+	inv := wire.NewInvVect(wire.InvTypeWitnessTx, &txid)
 	gdata.AddInvVect(inv)
 	s.outMsgQueue <- gdata
 }

@@ -50,18 +50,6 @@ var (
 
 // I shouldn't even have to write these...
 
-// 4 byte slice to uin32.  Returns 0 if something doesn't work.
-func BtU32(b []byte) uint32 {
-	if len(b) != 4 {
-		fmt.Printf("Got %x to BtU32\n", b)
-		return 0xffffffff
-	}
-	var i uint32
-	buf := bytes.NewBuffer(b)
-	binary.Read(buf, binary.BigEndian, i)
-	return i
-}
-
 // uint32 to 4 bytes.  Always works.
 func U32tB(i uint32) []byte {
 	var buf bytes.Buffer
@@ -69,11 +57,35 @@ func U32tB(i uint32) []byte {
 	return buf.Bytes()
 }
 
+// 4 byte slice to uin32.  Returns ffffffff if something doesn't work.
+func BtU32(b []byte) uint32 {
+	if len(b) != 4 {
+		fmt.Printf("Got %x to BtU32\n", b)
+		return 0xffffffff
+	}
+	var i uint32
+	buf := bytes.NewBuffer(b)
+	binary.Read(buf, binary.BigEndian, &i)
+	return i
+}
+
 // int64 to 8 bytes.  Always works.
 func I64tB(i int64) []byte {
 	var buf bytes.Buffer
 	binary.Write(&buf, binary.BigEndian, i)
 	return buf.Bytes()
+}
+
+// 8 bytes to int64 (bitcoin amounts).  returns 8x ff if it doesn't work.
+func BtI64(b []byte) int64 {
+	if len(b) != 8 {
+		fmt.Printf("Got %x to BtI64\n", b)
+		return -0x7fffffffffffffff
+	}
+	var i int64
+	buf := bytes.NewBuffer(b)
+	binary.Read(buf, binary.BigEndian, &i)
+	return i
 }
 
 // GetPubkeyBytes generates and returns the pubkey for a given index.
@@ -299,8 +311,8 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 // SaveMultiTx saves the data in a multiDesc to DB.  We know the outpoint
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
-func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, peerBytes []byte,
-	theirPub *btcec.PublicKey) error {
+func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
+	peerBytes []byte, theirPub *btcec.PublicKey) error {
 
 	var multIdx uint32
 
@@ -328,7 +340,7 @@ func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, peerBytes []byte,
 		var mUtxo Utxo      // create new utxo and copy into it
 		mUtxo.AtHeight = -1 // not even broadcast yet
 		mUtxo.KeyIdx = multIdx
-		mUtxo.Value = -1   // unknown for now
+		mUtxo.Value = amt
 		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
 		var mOut MultiOut

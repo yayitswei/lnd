@@ -66,14 +66,14 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 10500 // hardcoded; later base on keyfile date?
+		tip = 16384 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	//	 once we're connected, initiate headers sync
+	// once we're connected, initiate headers sync
 	err = SCon.AskForHeaders()
 	if err != nil {
 		log.Fatal(err)
