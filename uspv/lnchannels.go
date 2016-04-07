@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"li.lan/labs/plasma/elkrem"
+	"github.com/lightningnetwork/lnd/elkrem"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
