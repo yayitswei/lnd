@@ -30,7 +30,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "127.0.0.1:28901"
+	SPVHostAdr = "104.154.71.200:28901"
 )
 
 var (

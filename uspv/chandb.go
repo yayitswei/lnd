@@ -329,7 +329,7 @@ func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
 		if peerIdxBytes == nil {
 			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
 		}
-		multIdx = uint32(pr.Stats().BucketN) + localIdx
+		multIdx = uint32(pr.Stats().BucketN) // new non local, high bit 0
 
 		// make new bucket for this mutliout
 		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
@@ -378,9 +378,9 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 			peerIdx := BtU32(pr.Get(KEYIdx))
 
 			return pr.ForEach(func(op, nthin []byte) error {
-				fmt.Printf("key %x ", op)
+				//				fmt.Printf("key %x ", op)
 				if nthin != nil {
-					fmt.Printf("val %x\n", nthin)
+					//					fmt.Printf("val %x\n", nthin)
 					return nil // non-bucket / outpoint
 				}
 				multBkt := pr.Bucket(op)
