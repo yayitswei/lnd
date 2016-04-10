@@ -7,7 +7,9 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcutil/txsort"
 )
@@ -43,9 +45,10 @@ const (
 
 var (
 	BKTPeers   = []byte("Peer") // all peer data is in this bucket.
-	KEYElkRecv = []byte("ElkR") // indicates elkrem receiver
-	KEYIdx     = []byte("idx")  // indicates elkrem receiver
-	KEYutxo    = []byte("utx")  // indicates channel remote pubkey
+	KEYElkRecv = []byte("ElkR") // elkrem receiver
+	KEYIdx     = []byte("idx")  // index for key derivation
+	KEYutxo    = []byte("utx")  // serialized mutxo / cutxo
+	KEYUnsig   = []byte("usig") // unsigned fund tx
 )
 
 // I shouldn't even have to write these...
@@ -148,11 +151,11 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
-			return fmt.Errorf("No peers evar")
+			return fmt.Errorf("GetPeerIdx: No peers evar")
 		}
 		pr := prs.Bucket(pub.SerializeCompressed())
 		if pr == nil {
-			return fmt.Errorf("Peer %x has no index saved",
+			return fmt.Errorf("GetPeerIdx: Peer %x has no index saved",
 				pub.SerializeCompressed())
 		}
 		idx = BtU32(pr.Get(KEYIdx))
@@ -167,11 +170,11 @@ func (ts *TxStore) NewMultReq(peerBytes []byte) (uint32, error) {
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
-			return fmt.Errorf("no peers")
+			return fmt.Errorf("NewMultReq: no peers")
 		}
 		pr := prs.Bucket(peerBytes)
 		if pr == nil {
-			return fmt.Errorf("peer %x not found", peerBytes)
+			return fmt.Errorf("NewMultReq: peer %x not found", peerBytes)
 		}
 		// chanIdx starts at 1, because there's another key in the peer bucket
 		// (pdx) for peer data (right now just peerIdx)
@@ -197,15 +200,15 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
-			return fmt.Errorf("no peers")
+			return fmt.Errorf("NextPubForPeer: no peers")
 		}
 		pr := prs.Bucket(peerBytes)
 		if pr == nil {
-			return fmt.Errorf("peer %x not found", peerBytes)
+			return fmt.Errorf("NextPubForPeer: peer %x not found", peerBytes)
 		}
 		peerIdxBytes := pr.Get(KEYIdx)
 		if peerIdxBytes == nil {
-			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
+			return fmt.Errorf("NextPubForPeer: peer %x has no index? db bad", peerBytes)
 		}
 		peerIdx = BtU32(peerIdxBytes) // store for key creation
 		multIdx = uint32(pr.Stats().KeyN)
@@ -227,6 +230,10 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 // the multi tx info in the db.  Doesn't RETURN a tx, but the *tx you
 // hand it will be filled in.  (but not signed!)
 // Returns the multi outpoint and myPubkey (bytes) & err
+// also... this is kindof ugly.  It could be re-written as a more integrated func
+// which figures out the inputs and outputs.  So basically move
+// most of the code from MultiRespHandler() into here.  Yah.. should do that.
+//TODO ^^^^^^^^^^
 func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
 
@@ -238,18 +245,18 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
-			return fmt.Errorf("no peers")
+			return fmt.Errorf("MakeMultiTx: no peers")
 		}
 		pr := prs.Bucket(peerBytes) // go into this peers bucket
 		if pr == nil {
-			return fmt.Errorf("peer %x not found", peerBytes)
+			return fmt.Errorf("MakeMultiTx: peer %x not found", peerBytes)
 		}
 		peerIdxBytes := pr.Get(KEYIdx) // find peer index
 		if peerIdxBytes == nil {
-			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
+			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerBytes)
 		}
-		peerIdx = BtU32(peerIdxBytes) // store peer index for key creation
-		multIdx = uint32(pr.Stats().BucketN) + localIdx
+		peerIdx = BtU32(peerIdxBytes)                   // store peer index for key creation
+		multIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
 
 		// generate pubkey from peer, multi indexes
 		myPubBytes = ts.GetPubkeyBytes(peerIdx, multIdx)
@@ -295,12 +302,23 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 			return err
 		}
 
-		// save multiout in the bucket
+		// save multioutpoint in the bucket
 		err = multiBucket.Put(KEYutxo, mOutBytes)
 		if err != nil {
 			return err
 		}
-		return nil
+		// stash whole TX in unsigned bucket
+		// you don't need to remember which key goes to which txin
+		// since the outpoint is right there and quick to look up.
+
+		//TODO -- Problem!  These utxos are not flagged or removed until
+		// the TX is signed and sent.  If other txs happen before the
+		// ack comes in, the signing could fail.  So... call utxos
+		// spent here I guess.
+
+		var buf bytes.Buffer
+		tx.SerializeWitness(&buf) // no witness yet, but it will be witty
+		return multiBucket.Put(KEYUnsig, buf.Bytes())
 	})
 	if err != nil {
 		return nil, nil, err
@@ -320,15 +338,16 @@ func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
 	return ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
-			return fmt.Errorf("no peers")
+			return fmt.Errorf("SaveMultiTx: no peers")
 		}
 		pr := prs.Bucket(peerBytes) // go into this peers bucket
 		if pr == nil {
-			return fmt.Errorf("peer %x not found", peerBytes)
+			return fmt.Errorf("SaveMultiTx: peer %x not found", peerBytes)
 		}
+		// just sanity checking here, not used
 		peerIdxBytes := pr.Get(KEYIdx) // find peer index
 		if peerIdxBytes == nil {
-			return fmt.Errorf("peer %x has no index? db bad", peerBytes)
+			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerBytes)
 		}
 		multIdx = uint32(pr.Stats().BucketN) // new non local, high bit 0
 
@@ -361,6 +380,104 @@ func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
 		return nil
 	})
 }
+
+// SignMultiTx happens once everything's ready for the tx to be signed and
+// broadcast (once you get it ack'd.  It finds the mutli tx, signs it and
+// returns it.  Presumably you send this tx out to the network once it's returned.
+// this function itself doesn't modify height, so it'll still be at -1 untill
+// Ingest() makes it 0 or an acutal block height.
+func (ts *TxStore) SignMultiTx(
+	op *wire.OutPoint, peerBytes []byte) (*wire.MsgTx, error) {
+
+	tx := wire.NewMsgTx()
+
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		duf := btx.Bucket(BKTUtxos)
+		if duf == nil {
+			return fmt.Errorf("SignMultiTx: no duffel bag")
+		}
+
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("SignMultiTx: no peers")
+		}
+		pr := prs.Bucket(peerBytes) // go into this peers bucket
+		if pr == nil {
+			return fmt.Errorf("SignMultiTx: peer %x not found", peerBytes)
+		}
+		// just sanity checking here, not used
+		peerIdxBytes := pr.Get(KEYIdx) // find peer index
+		if peerIdxBytes == nil {
+			return fmt.Errorf("SignMultiTx: peer %x has no index? db bad", peerBytes)
+		}
+		opBytes := OutPointToBytes(*op)
+		multiBucket := pr.Bucket(opBytes)
+		if multiBucket == nil {
+			return fmt.Errorf("SignMultiTx: outpoint %s not in db", op.String())
+		}
+		txBytes := multiBucket.Get(KEYUnsig)
+
+		buf := bytes.NewBuffer(txBytes)
+		err := tx.Deserialize(buf)
+		if err != nil {
+			return err
+		}
+		hCache := txscript.CalcHashCache(tx, 0, txscript.SigHashAll)
+		// got tx, now figure out keys for the inputs and sign.
+		for i, txin := range tx.TxIn {
+			halfUtxo := duf.Get(OutPointToBytes(txin.PreviousOutPoint))
+			if halfUtxo == nil {
+				return fmt.Errorf("SignMultiTx: input %d not in utxo set", i)
+			}
+
+			// key index is 4 bytes in to the val (36 byte outpoint is key)
+			kIdx := BtU32(halfUtxo[4:8])
+			// amt is 8 bytes in
+			amt := BtI64(halfUtxo[8:16])
+
+			child, err := ts.rootPrivKey.Child(
+				kIdx + hdkeychain.HardenedKeyStart)
+			if err != nil {
+				return err
+			}
+			priv, err := child.ECPrivKey()
+			if err != nil {
+				return err
+			}
+			// gotta add subscripts to sign
+			witAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+				ts.Adrs[kIdx].PkhAdr.ScriptAddress(), ts.Param)
+			if err != nil {
+				return err
+			}
+			subScript, err := txscript.PayToAddrScript(witAdr)
+			if err != nil {
+				return err
+			}
+			tx.TxIn[i].Witness, err = txscript.WitnessScript(
+				tx, hCache, i, amt, subScript,
+				txscript.SigHashAll, priv, true)
+			if err != nil {
+				return err
+			}
+			// witness added OK
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+//wa, err := btcutil.NewAddressWitnessPubKeyHash(
+//			SCon.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), SCon.TS.Param)
+//		prevPKScript, err := txscript.PayToAddrScript(wa)
+//		if err != nil {
+//			fmt.Printf("MultiRespHandler err %s", err.Error())
+//			return
+//		}
 
 // GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.
 func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {

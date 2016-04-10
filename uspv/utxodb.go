@@ -254,7 +254,6 @@ func (ts *TxStore) GetAllUtxos() ([]*Utxo, error) {
 			utxos = append(utxos, &newU)
 			return nil
 		})
-		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -288,7 +287,6 @@ func (ts *TxStore) GetAllStxos() ([]*Stxo, error) {
 			stxos = append(stxos, &newS)
 			return nil
 		})
-		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -307,7 +305,7 @@ func (ts *TxStore) GetTx(txid *wire.ShaHash) (*wire.MsgTx, error) {
 		}
 		txbytes := txns.Get(txid.Bytes())
 		if txbytes == nil {
-			return fmt.Errorf("tx %x not in db", txid.String())
+			return fmt.Errorf("tx %s not in db", txid.String())
 		}
 		buf := bytes.NewBuffer(txbytes)
 		return rtx.Deserialize(buf)
@@ -506,15 +504,14 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 
 		prs := btx.Bucket(BKTPeers)
 		if prs != nil { // there are peers, check this TX for chan/mult
-			return prs.ForEach(func(idPub, nothin []byte) error {
+			err = prs.ForEach(func(idPub, nothin []byte) error {
 				if nothin != nil {
 					return nil // non-bucket
 				}
 				pr := prs.Bucket(idPub) // go into this peer's bucket
 				return pr.ForEach(func(opBytes, nthin []byte) error {
-					//				fmt.Printf("key %x ", op)
 					if nthin != nil {
-						//					fmt.Printf("val %x\n", nthin)
+						//	fmt.Printf("val %x\n", nthin)
 						return nil // non-bucket / outpoint
 					}
 					multiBucket := pr.Bucket(opBytes)
@@ -525,7 +522,6 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 					if err != nil {
 						return err
 					}
-
 					if bytes.Equal(cachedSha.Bytes(), hitMult.Op.Hash.Bytes()) {
 						// hit; ingesting tx which matches chan/multi
 						// all we do is assign height and increment hits
@@ -541,13 +537,14 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 						if err != nil {
 							return err
 						}
-
 					}
-
 					return nil
 				})
-				return nil
 			})
+			if err != nil {
+				return err
+			}
+			// end of peer checking
 		}
 
 		// iterate through duffel bag and look for matches
@@ -595,8 +592,9 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 			}
 		}
 
+		fmt.Printf("ingest tx %s with %d hits\n", tx.TxSha().String(), hits)
 		// if hits is nonzero it's a relevant tx and we should store it
-		if hits > 0 {
+		if hits != 0 {
 			var buf bytes.Buffer
 			tx.SerializeWitness(&buf) // always store witness version
 			err = txns.Put(cachedSha.Bytes(), buf.Bytes())
@@ -604,8 +602,8 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 				return err
 			}
 		}
-
 		return nil
 	})
+
 	return hits, err
 }

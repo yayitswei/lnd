@@ -198,7 +198,6 @@ func P2WSHify(scriptBytes []byte) []byte {
 	bldr.AddOp(txscript.OP_0)
 	wsh := fastsha256.Sum256(scriptBytes)
 	bldr.AddData(wsh[:])
-	bldr.AddOp(txscript.OP_EQUAL)
 	b, _ := bldr.Script() // ignore script errors
 	return b
 }

@@ -192,6 +192,7 @@ func (s *SPVCon) GetDataHandler(m *wire.MsgGetData) {
 			if err != nil {
 				log.Printf("error getting tx %s: %s",
 					thing.Hash.String(), err.Error())
+				continue
 			}
 			s.outMsgQueue <- tx
 			sent++

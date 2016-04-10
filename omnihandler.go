@@ -44,7 +44,8 @@ func MultiReqHandler(from [16]byte) {
 // once the pubkey response comes back, we can create the transaction.
 // create, save to DB, sign and send over the wire (and broadcast)
 func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
-	multiCapacity := int64(100000000) // this will be an arg
+	multiCapacity := int64(2000000) // this will be an arg
+	satPerByte := int64(80)
 	capBytes := uspv.I64tB(multiCapacity)
 
 	// make sure their pubkey is a pubkey
@@ -57,20 +58,26 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	fmt.Printf("got pubkey response %x\n", theirPub.SerializeCompressed())
 
 	tx := wire.NewMsgTx() // make new tx
+	tx.Flags = 0x01       // tx will be witty
 
-	// first get inputs
+	// first get inputs. comes sorted from PickUtxos.
 	utxos, overshoot, err := SCon.PickUtxos(multiCapacity, true)
 	if err != nil {
 		fmt.Printf("MultiRespHandler err %s", err.Error())
+		return
+	}
+	if overshoot < 0 {
+		fmt.Printf("witness utxos undershoot by %d", -overshoot)
 		return
 	}
 	// add all the inputs to the tx
 	for _, utxo := range utxos {
 		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
 	}
-
+	// estimate fee
+	fee := uspv.EstFee(tx, satPerByte)
 	// create change output
-	changeOut, err := SCon.TS.NewChangeOut(overshoot)
+	changeOut, err := SCon.TS.NewChangeOut(overshoot - fee)
 	if err != nil {
 		fmt.Printf("MultiRespHandler err %s", err.Error())
 		return
@@ -131,8 +138,13 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("MultiDescHandler err %s", err.Error())
 		return
 	}
-	fmt.Printf("got multisig output %d coins %x\n", amt, descbytes)
+	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
 	// before acking, add to bloom filter.
+	err = SCon.TS.RefilterLocal()
+	if err != nil {
+		fmt.Printf("MultiDescHandler err %s", err.Error())
+		return
+	}
 
 	// ACK the multi address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), that's all.
@@ -144,36 +156,28 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 
 // MultiAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
-func MultiAckHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) != 77 {
-		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
+func MultiAckHandler(from [16]byte, ackbytes []byte) {
+	if len(ackbytes) != 36 {
+		fmt.Printf("got %d byte multiAck, expect 36\n", len(ackbytes))
 		return
 	}
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	// make sure their pubkey is a pubkey
-	theirPub, err := btcec.ParsePubKey(descbytes[36:69], btcec.S256())
-	if err != nil {
-		fmt.Printf("MultiDescHandler err %s", err.Error())
-		return
-	}
 	// deserialize outpoint
 	var opBytes [36]byte
-	copy(opBytes[:], descbytes[:36])
+	copy(opBytes[:], ackbytes)
 	op := uspv.OutPointFromBytes(opBytes)
-	amt := uspv.BtI64(descbytes[69:])
-
-	// save to db
-	err = SCon.TS.SaveMultiTx(op, amt, peerBytes, theirPub)
+	// sign multi tx
+	tx, err := SCon.TS.SignMultiTx(op, peerBytes)
 	if err != nil {
-		fmt.Printf("MultiDescHandler err %s", err.Error())
+		fmt.Printf("MultiAckHandler err %s", err.Error())
 		return
 	}
-	fmt.Printf("got multisig output %d coins %x\n", amt, descbytes)
-	// ACK the multi address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), that's all.
-	msg := []byte{uwire.MSGID_MULTIACK}
-	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	_, err = RemoteCon.Write(msg)
+	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
+	err = SCon.NewOutgoingTx(tx)
+	if err != nil {
+		fmt.Printf("MultiAckHandler err %s", err.Error())
+		return
+	}
 	return
 }
 
@@ -212,6 +216,12 @@ func OmniHandler(OmniChan chan []byte) {
 		if msgid == uwire.MSGID_MULTIDESC {
 			fmt.Printf("Got multisig description from %x\n", from)
 			MultiDescHandler(from, msg[1:])
+			continue
+		}
+		// MULTISIG ACK
+		if msgid == uwire.MSGID_MULTIACK {
+			fmt.Printf("Got multisig ack from %x\n", from)
+			MultiAckHandler(from, msg[1:])
 			continue
 		}
 

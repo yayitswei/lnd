@@ -119,11 +119,11 @@ func calcRoot(hashes []*wire.ShaHash) *wire.ShaHash {
 // RefilterLocal reconstructs the local in-memory bloom filter.  It does
 // this by calling GimmeFilter() but doesn't broadcast the result.
 func (ts *TxStore) RefilterLocal() error {
-	f, err := ts.GimmeFilter()
+	var err error
+	ts.localFilter, err = ts.GimmeFilter()
 	if err != nil {
 		return err
 	}
-	ts.localFilter.Reload(f.MsgFilterLoad())
 	return nil
 }
 
