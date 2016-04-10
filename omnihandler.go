@@ -96,6 +96,8 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 		fmt.Printf("MultiRespHandler err %s", err.Error())
 		return
 	}
+	// don't need to add to filters; we'll pick the TX up anyway because it
+	// spends our utxos.
 
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
@@ -139,7 +141,8 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
-	// before acking, add to bloom filter.
+	// before acking, add to bloom filter.  Otherwise we won't see it as
+	// it doesn't involve our utxos / adrs.
 	err = SCon.TS.RefilterLocal()
 	if err != nil {
 		fmt.Printf("MultiDescHandler err %s", err.Error())

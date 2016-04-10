@@ -122,7 +122,8 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 		f.AddOutPoint(&u.Op)
 	}
 	for _, m := range allMulti {
-		f.AddOutPoint(&m.Op)
+		// aha, add HASH here, not the outpoint!
+		f.AddShaHash(&m.Op.Hash)
 	}
 
 	fmt.Printf("made %d element filter\n", filterElements)
