@@ -122,7 +122,8 @@ func (ts *TxStore) NewPeer(pub *btcec.PublicKey) (bool, error) {
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs, _ := btx.CreateBucketIfNotExists(BKTPeers) // only errs on name
 
-		newPeerIdx := uint32(prs.Stats().KeyN) // know this many peers already
+		newPeerIdx := uint32(prs.Stats().KeyN) + 1 // new peer index.
+		// starts at 1. There IS NO PEER 0, so you can consider peer 0 invalid.
 
 		pr, err := prs.CreateBucket(pub.SerializeCompressed())
 		if err != nil {

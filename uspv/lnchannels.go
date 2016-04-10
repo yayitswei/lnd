@@ -19,7 +19,7 @@ type MultiOut struct {
 
 	//	MyPub    btcec.PublicKey // for convenience, not stored
 
-	TheirPub *btcec.PublicKey // their pubkey, stored
+	TheirPub *btcec.PublicKey // their p2wsh pubkey, stored
 
 	// peerIdx is for convenience; not serialized directly;
 	// peer index is derived from position in db.  mult index is utxo keyidx.

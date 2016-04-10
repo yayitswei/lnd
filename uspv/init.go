@@ -92,7 +92,7 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	go s.fPositiveHandler()
 
 	if hard {
-		err = s.TS.Refilter()
+		err = s.TS.RefilterLocal()
 		if err != nil {
 			return s, err
 		}

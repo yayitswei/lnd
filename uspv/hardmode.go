@@ -7,7 +7,6 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/bloom"
 )
 
 var (
@@ -117,24 +116,14 @@ func calcRoot(hashes []*wire.ShaHash) *wire.ShaHash {
 	return hashes[0]
 }
 
-func (ts *TxStore) Refilter() error {
-	allUtxos, err := ts.GetAllUtxos()
+// RefilterLocal reconstructs the local in-memory bloom filter.  It does
+// this by calling GimmeFilter() but doesn't broadcast the result.
+func (ts *TxStore) RefilterLocal() error {
+	f, err := ts.GimmeFilter()
 	if err != nil {
 		return err
 	}
-	filterElements := uint32(len(allUtxos) + len(ts.Adrs))
-
-	ts.localFilter = bloom.NewFilter(filterElements, 0, 0, wire.BloomUpdateAll)
-
-	for _, u := range allUtxos {
-		ts.localFilter.AddOutPoint(&u.Op)
-	}
-	for _, a := range ts.Adrs {
-		ts.localFilter.Add(a.PkhAdr.ScriptAddress())
-	}
-
-	msg := ts.localFilter.MsgFilterLoad()
-	fmt.Printf("made %d element filter: %x\n", filterElements, msg.Filter)
+	ts.localFilter.Reload(f.MsgFilterLoad())
 	return nil
 }
 
@@ -198,7 +187,7 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 
 	if fPositive > reFilter {
 		fmt.Printf("%d filter false positives in this block\n", fPositive)
-		err = s.TS.Refilter()
+		err = s.TS.RefilterLocal()
 		if err != nil {
 			log.Printf("Refilter error: %s\n", err.Error())
 			return

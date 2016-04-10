@@ -101,6 +101,7 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	// nah, better to send capacity; needed for channel refund
 	msg = append(msg, capBytes...)
 	_, err = RemoteCon.Write(msg)
+
 	return
 }
 
@@ -131,6 +132,48 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	fmt.Printf("got multisig output %d coins %x\n", amt, descbytes)
+	// before acking, add to bloom filter.
+
+	// ACK the multi address, which causes the funder to sign / broadcast
+	// ACK is outpoint (36), that's all.
+	msg := []byte{uwire.MSGID_MULTIACK}
+	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	_, err = RemoteCon.Write(msg)
+	return
+}
+
+// MultiAckHandler takes in an acknowledgement multisig description.
+// when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
+func MultiAckHandler(from [16]byte, descbytes []byte) {
+	if len(descbytes) != 77 {
+		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
+		return
+	}
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	// make sure their pubkey is a pubkey
+	theirPub, err := btcec.ParsePubKey(descbytes[36:69], btcec.S256())
+	if err != nil {
+		fmt.Printf("MultiDescHandler err %s", err.Error())
+		return
+	}
+	// deserialize outpoint
+	var opBytes [36]byte
+	copy(opBytes[:], descbytes[:36])
+	op := uspv.OutPointFromBytes(opBytes)
+	amt := uspv.BtI64(descbytes[69:])
+
+	// save to db
+	err = SCon.TS.SaveMultiTx(op, amt, peerBytes, theirPub)
+	if err != nil {
+		fmt.Printf("MultiDescHandler err %s", err.Error())
+		return
+	}
+	fmt.Printf("got multisig output %d coins %x\n", amt, descbytes)
+	// ACK the multi address, which causes the funder to sign / broadcast
+	// ACK is outpoint (36), that's all.
+	msg := []byte{uwire.MSGID_MULTIACK}
+	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	_, err = RemoteCon.Write(msg)
 	return
 }
 

@@ -210,7 +210,6 @@ func (s *SPVCon) GetDataHandler(m *wire.MsgGetData) {
 		}
 		// didn't match, so it's not something we're responding to
 		log.Printf("We only respond to tx requests, ignoring")
-
 	}
 	log.Printf("sent %d of %d requested items", sent, len(m.InvList))
 }

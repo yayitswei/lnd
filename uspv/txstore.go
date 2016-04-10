@@ -104,20 +104,28 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	if err != nil {
 		return nil, err
 	}
+	allMulti, err := t.GetAllMultiOuts()
+	if err != nil {
+		return nil, err
+	}
 
-	elem := uint32(len(t.Adrs) + len(allUtxos))
-	f := bloom.NewFilter(elem, 0, 0.000001, wire.BloomUpdateAll)
+	filterElements := uint32(len(allUtxos) + len(t.Adrs) + len(allMulti))
+
+	f := bloom.NewFilter(filterElements, 0, 0.000001, wire.BloomUpdateAll)
 
 	// note there could be false positives since we're just looking
 	// for the 20 byte PKH without the opcodes.
 	for _, a := range t.Adrs { // add 20-byte pubkeyhash
 		f.Add(a.PkhAdr.ScriptAddress())
 	}
-
 	for _, u := range allUtxos {
 		f.AddOutPoint(&u.Op)
 	}
+	for _, m := range allMulti {
+		f.AddOutPoint(&m.Op)
+	}
 
+	fmt.Printf("made %d element filter\n", filterElements)
 	return f, nil
 }
 

@@ -2,10 +2,13 @@ package uwire
 
 //  message type identifyer bytes
 const (
-	MSGID_PUBREQ    = 0x30
-	MSGID_PUBRESP   = 0x31
-	MSGID_CHANDESC  = 0x32
+	MSGID_PUBREQ  = 0x30
+	MSGID_PUBRESP = 0x31
+
+	MSGID_CHANDESC = 0x32
+
 	MSGID_MULTIDESC = 0x3A
+	MSGID_MULTIACK  = 0x3B
 
 	MSGID_CLOSEREQ  = 0x40
 	MSGID_CLOSERESP = 0x41
