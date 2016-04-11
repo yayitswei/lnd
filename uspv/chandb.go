@@ -49,6 +49,7 @@ var (
 	KEYIdx     = []byte("idx")  // index for key derivation
 	KEYutxo    = []byte("utx")  // serialized mutxo / cutxo
 	KEYUnsig   = []byte("usig") // unsigned fund tx
+	KEYCladr   = []byte("cdr")  // close address (Don't make fun of my lisp)
 )
 
 // I shouldn't even have to write these...
@@ -91,30 +92,44 @@ func BtI64(b []byte) int64 {
 	return i
 }
 
-// GetPubkeyBytes generates and returns the pubkey for a given index.
-// It will return nil if there's an error / problem
-func (ts *TxStore) GetPubkeyBytes(peerIdx, cIdx uint32) []byte {
+// GetFundPrivkey generates and returns the private key for a given index.
+// It will return nil if there's an error / problem, but there shouldn't be
+// unless the root key itself isn't there or something.
+func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
+	fmt.Printf("\tgenerating key for peerindex %d, keyindex %d\n", peerIdx, cIdx)
+
 	multiRoot, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
 	if err != nil {
-		fmt.Printf("GetPubkeyBytes err %s", err.Error())
+		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
 	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
 	if err != nil {
-		fmt.Printf("GetPubkeyBytes err %s", err.Error())
+		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
-	multiPriv, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
+	multiChild, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
 	if err != nil {
-		fmt.Printf("GetPubkeyBytes err %s", err.Error())
+		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
-	pub, err := multiPriv.ECPubKey()
+	priv, err := multiChild.ECPrivKey()
 	if err != nil {
-		fmt.Printf("GetPubkeyBytes err %s", err.Error())
+		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
-	return pub.SerializeCompressed()
+	return priv
+}
+
+// GetFundPubkeyBytes generates and returns the pubkey for a given index.
+// It will return nil if there's an error / problem
+func (ts *TxStore) GetFundPubkeyBytes(peerIdx, cIdx uint32) []byte {
+	priv := ts.GetFundPrivkey(peerIdx, cIdx)
+	if priv == nil {
+		fmt.Printf("GetFundPubkeyBytes peer %d idx %d failed", peerIdx, cIdx)
+		return nil
+	}
+	return priv.PubKey().SerializeCompressed()
 }
 
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
@@ -218,7 +233,7 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	pubBytes := ts.GetPubkeyBytes(peerIdx, multIdx)
+	pubBytes := ts.GetFundPubkeyBytes(peerIdx, multIdx)
 	return pubBytes, nil
 }
 
@@ -234,7 +249,7 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 // which figures out the inputs and outputs.  So basically move
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
-func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
+func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
 
 	var peerIdx, multIdx uint32
@@ -259,7 +274,7 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 		multIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
 
 		// generate pubkey from peer, multi indexes
-		myPubBytes = ts.GetPubkeyBytes(peerIdx, multIdx)
+		myPubBytes = ts.GetFundPubkeyBytes(peerIdx, multIdx)
 
 		// generate multisig output from two pubkeys
 		multiTxOut, err := FundMultiOut(theirPubBytes, myPubBytes, amt)
@@ -330,7 +345,7 @@ func (ts *TxStore) MakeMultiTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 // SaveMultiTx saves the data in a multiDesc to DB.  We know the outpoint
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
-func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
+func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 	peerBytes []byte, theirPub *btcec.PublicKey) error {
 
 	var multIdx uint32
@@ -386,7 +401,7 @@ func (ts *TxStore) SaveMultiTx(op *wire.OutPoint, amt int64,
 // returns it.  Presumably you send this tx out to the network once it's returned.
 // this function itself doesn't modify height, so it'll still be at -1 untill
 // Ingest() makes it 0 or an acutal block height.
-func (ts *TxStore) SignMultiTx(
+func (ts *TxStore) SignFundTx(
 	op *wire.OutPoint, peerBytes []byte) (*wire.MsgTx, error) {
 
 	tx := wire.NewMsgTx()
@@ -435,8 +450,7 @@ func (ts *TxStore) SignMultiTx(
 			// amt is 8 bytes in
 			amt := BtI64(halfUtxo[8:16])
 
-			child, err := ts.rootPrivKey.Child(
-				kIdx + hdkeychain.HardenedKeyStart)
+			child, err := ts.rootPrivKey.Child(kIdx + hdkeychain.HardenedKeyStart)
 			if err != nil {
 				return err
 			}
@@ -522,6 +536,102 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 		return nil, err
 	}
 	return multis, nil
+}
+
+// GetMultiOut returns a single multi out.  You need to specify the peer
+// pubkey and outpoint bytes.
+func (ts *TxStore) GetMultiOut(
+	peerBytes []byte, opArr [36]byte) (*MultiOut, error) {
+
+	var multi MultiOut
+	var err error
+	op := OutPointFromBytes(opArr)
+	err = ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not in db", peerBytes)
+		}
+		multiBucket := pr.Bucket(opArr[:])
+		if multiBucket == nil {
+			return fmt.Errorf("outpoint %s not in db under peer %x",
+				op.String(), peerBytes)
+		}
+
+		multi, err = MultiOutFromBytes(multiBucket.Get(KEYutxo))
+		if err != nil {
+			return err
+		}
+		// note that peerIndex is not set from deserialization!  set it here!
+		multi.PeerIdx = BtU32(pr.Get(KEYIdx))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &multi, nil
+}
+
+// SetMultiClose sets the address to close to.
+func (ts *TxStore) SetMultiClose(
+	peerBytes []byte, opArr [36]byte, adrArr [20]byte) error {
+
+	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not in db", peerBytes)
+		}
+		multiBucket := pr.Bucket(opArr[:])
+		if multiBucket == nil {
+			return fmt.Errorf("outpoint (reversed) %x not in db under peer %x",
+				opArr, peerBytes)
+		}
+		err := multiBucket.Put(KEYCladr, adrArr[:])
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// GetMultiClose recalls the address the multisig/channel has been requested to
+// close to.  If there's nothing there it returns a nil slice and an error.
+func (ts *TxStore) GetMultiClose(peerBytes []byte, opArr [36]byte) ([]byte, error) {
+	adrBytes := make([]byte, 20)
+
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not in db", peerBytes)
+		}
+		multiBucket := pr.Bucket(opArr[:])
+		if multiBucket == nil {
+			return fmt.Errorf("outpoint (reversed) %x not in db under peer %x",
+				opArr, peerBytes)
+		}
+		adrToxicBytes := multiBucket.Get(KEYCladr)
+		if adrToxicBytes == nil {
+			return fmt.Errorf("%x in peer %x has no close address",
+				opArr, peerBytes)
+		}
+		copy(adrBytes, adrToxicBytes)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adrBytes, nil
 }
 
 /*----- serialization for MultiOuts ------- */

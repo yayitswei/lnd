@@ -142,11 +142,11 @@ func commitScript(cltvTime uint32, HKey,
 // Give it the two pubkeys and it'll give you the p2sh'd txout.
 // You don't have to remember the p2sh preimage, as long as you remember the
 // pubkeys involved.
-func FundMultiOut(aPub, bPub []byte, amt int64) (*wire.TxOut, error) {
+func FundMultiOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
 	if amt < 0 {
 		return nil, fmt.Errorf("Can't create FundTx script with negative coins")
 	}
-	scriptBytes, err := FundMultiPre(aPub, bPub)
+	scriptBytes, _, err := FundMultiPre(pubA, puB)
 	if err != nil {
 		return nil, err
 	}
@@ -157,12 +157,15 @@ func FundMultiOut(aPub, bPub []byte, amt int64) (*wire.TxOut, error) {
 
 // FundMultiPre generates the non-p2sh'd multisig script for 2 of 2 pubkeys.
 // useful for making transactions spending the fundtx.
-func FundMultiPre(aPub, bPub []byte) ([]byte, error) {
+// returns a bool which is true if swapping occurs.
+func FundMultiPre(aPub, bPub []byte) ([]byte, bool, error) {
 	if len(aPub) != 33 || len(bPub) != 33 {
-		return nil, fmt.Errorf("Pubkey size error. Compressed pubkeys only")
+		return nil, false, fmt.Errorf("Pubkey size error. Compressed pubkeys only")
 	}
+	var swapped bool
 	if bytes.Compare(aPub, bPub) == -1 { // swap to sort pubkeys if needed
 		aPub, bPub = bPub, aPub
+		swapped = true
 	}
 	bldr := txscript.NewScriptBuilder()
 	// Require 2 signatures, so from both of the pubkeys
@@ -175,22 +178,34 @@ func FundMultiPre(aPub, bPub []byte) ([]byte, error) {
 	// Good ol OP_CHECKMULTISIG.  Don't forget the zero!
 	bldr.AddOp(txscript.OP_CHECKMULTISIG)
 	// get byte slice
-	return bldr.Script()
+	pre, err := bldr.Script()
+	return pre, swapped, err
 }
 
-// the scriptsig to put on a P2SH input
-func SpendMultiSig(pre, sigA, sigB []byte) ([]byte, error) {
-	bldr := txscript.NewScriptBuilder()
-	// add a 0 for some multisig fun
-	bldr.AddOp(txscript.OP_0)
-	// add sigA
-	bldr.AddData(sigA)
-	// add sigB
-	bldr.AddData(sigB)
-	// preimage goes on AT THE ENDDDD
-	bldr.AddData(pre)
-	// that's all, get bytes
-	return bldr.Script()
+// the scriptsig to put on a P2SH input.  Sigs need to be in order!
+func SpendMultiSigWitStack(pre, sigA, sigB []byte) [][]byte {
+
+	witStack := make([][]byte, 4)
+
+	witStack[0] = nil // it's not an OP_0 !!!! argh!
+	witStack[1] = sigA
+	witStack[2] = sigB
+	witStack[3] = pre
+
+	/*
+		bldr := txscript.NewScriptBuilder()
+		// add a 0 for some multisig fun
+		bldr.AddOp(txscript.OP_0)
+		// add sigA
+		bldr.AddData(sigA)
+		// add sigB
+		bldr.AddData(sigB)
+		// preimage goes on AT THE ENDDDD
+		bldr.AddData(pre)
+		// that's all, get bytes
+		return bldr.Script()
+	*/
+	return witStack
 }
 
 func P2WSHify(scriptBytes []byte) []byte {

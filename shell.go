@@ -199,11 +199,18 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	// request multisig pubkey
+	// request multisig pubkey, leading to creation of a shared multi tx
 	if cmd == "mult" {
 		err = Mult(args)
 		if err != nil {
 			fmt.Printf("mult error: %s\n", err)
+		}
+		return nil
+	}
+	if cmd == "msend" {
+		err = MultSend(args)
+		if err != nil {
+			fmt.Printf("MultSend error: %s\n", err)
 		}
 		return nil
 	}
