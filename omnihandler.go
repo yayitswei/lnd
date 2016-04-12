@@ -402,6 +402,10 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	hCache := txscript.CalcHashCache(tx, 0, txscript.SigHashAll)
 
+	// check their sig.
+	//	err = txscript.CheckSig(tx, hCache, 0, mult.Value, subScript,
+	//		txscript.SigHashAll, mult.TheirPub, theirSig)
+
 	// generate sig.  Use Raw because we don't want the pubkey
 	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, mult.Value, subScript, txscript.SigHashAll, priv)

@@ -118,6 +118,7 @@ func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
+	fmt.Printf("-----generated %x\n", priv.PubKey().SerializeCompressed())
 	return priv
 }
 
