@@ -10,9 +10,10 @@ import (
 
 func (s *SPVCon) incomingMessageHandler() {
 	for {
-		n, xm, _, err := wire.ReadMessageN(s.con, s.localVersion, s.TS.Param.Net)
+		n, xm, _, err := wire.ReadMessageWithEncodingN(
+			s.con, s.localVersion, s.TS.Param.Net, wire.LatestEncoding)
 		if err != nil {
-			log.Printf("ReadMessageN error.  Disconnecting: %s\n", err.Error())
+			log.Printf("ReadMessageWithEncodingN error.  Disconnecting: %s\n", err.Error())
 			return
 		}
 		s.RBytes += uint64(n)
@@ -60,11 +61,11 @@ func (s *SPVCon) incomingMessageHandler() {
 }
 
 // this one seems kindof pointless?  could get ridf of it and let
-// functions call WriteMessageN themselves...
+// functions call WriteMessageWithEncodingN themselves...
 func (s *SPVCon) outgoingMessageHandler() {
 	for {
 		msg := <-s.outMsgQueue
-		n, err := wire.WriteMessageN(s.con, msg, s.localVersion, s.TS.Param.Net)
+		n, err := wire.WriteMessageWithEncodingN(s.con, msg, s.localVersion, s.TS.Param.Net, wire.LatestEncoding)
 		if err != nil {
 			log.Printf("Write message error: %s", err.Error())
 		}

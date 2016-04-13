@@ -308,7 +308,7 @@ func (ts *TxStore) GetTx(txid *wire.ShaHash) (*wire.MsgTx, error) {
 			return fmt.Errorf("tx %s not in db", txid.String())
 		}
 		buf := bytes.NewBuffer(txbytes)
-		return rtx.Deserialize(buf)
+		return rtx.DeserializeWitness(buf)
 	})
 	if err != nil {
 		return nil, err
@@ -329,7 +329,7 @@ func (ts *TxStore) GetAllTxs() ([]*wire.MsgTx, error) {
 		return txns.ForEach(func(k, v []byte) error {
 			tx := wire.NewMsgTx()
 			buf := bytes.NewBuffer(v)
-			err := tx.Deserialize(buf)
+			err := tx.DeserializeWitness(buf)
 			if err != nil {
 				return err
 			}

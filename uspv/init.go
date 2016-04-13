@@ -52,14 +52,14 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	// set this to enable segWit
 	myMsgVer.AddService(wire.SFNodeWitness)
 	// this actually sends
-	n, err := wire.WriteMessageN(s.con, myMsgVer, s.localVersion, s.TS.Param.Net)
+	n, err := wire.WriteMessageWithEncodingN(s.con, myMsgVer, s.localVersion, s.TS.Param.Net, wire.LatestEncoding)
 	if err != nil {
 		return s, err
 	}
 	s.WBytes += uint64(n)
 	log.Printf("wrote %d byte version message to %s\n",
 		n, s.con.RemoteAddr().String())
-	n, m, b, err := wire.ReadMessageN(s.con, s.localVersion, s.TS.Param.Net)
+	n, m, b, err := wire.ReadMessageWithEncodingN(s.con, s.localVersion, s.TS.Param.Net, wire.LatestEncoding)
 	if err != nil {
 		return s, err
 	}
@@ -76,7 +76,7 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	// set remote height
 	s.remoteHeight = mv.LastBlock
 	mva := wire.NewMsgVerAck()
-	n, err = wire.WriteMessageN(s.con, mva, s.localVersion, s.TS.Param.Net)
+	n, err = wire.WriteMessageWithEncodingN(s.con, mva, s.localVersion, s.TS.Param.Net, wire.LatestEncoding)
 	if err != nil {
 		return s, err
 	}
