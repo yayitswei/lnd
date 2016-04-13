@@ -24,13 +24,23 @@ func BlockOK(blk wire.MsgBlock) bool {
 	var witMode bool
 
 	for _, tx := range blk.Transactions { // make slice of (w)/txids
+
 		txid := tx.TxSha()
-		wtxid := tx.WTxSha()
-		if !witMode && !txid.IsEqual(&wtxid) {
+		wtxid := tx.WitnessHash()
+		fmt.Printf("witty: %t txid: %s wtxid: %s\n", !tx.NoWitness(),
+			txid.String(), wtxid.String())
+		fmt.Printf("size:%d witsize:%d \n",
+			tx.SerializeSize(), tx.SerializeSizeWitness())
+		txids = append(txids, &txid)
+		if !tx.NoWitness() {
 			witMode = true
 		}
-		txids = append(txids, &txid)
-		wtxids = append(wtxids, &wtxid)
+	}
+	if witMode {
+		for _, wtx := range blk.Transactions {
+			wtxid := wtx.WitnessHash()
+			wtxids = append(wtxids, &wtxid)
+		}
 	}
 
 	var commitBytes []byte

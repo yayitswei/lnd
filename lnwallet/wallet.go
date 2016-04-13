@@ -8,10 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/LightningNetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/chainntfs"
 	"github.com/lightningnetwork/lnd/chainntfs/btcdnotify"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/elkrem"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
@@ -926,8 +926,9 @@ func (l *LightningWallet) handleFundingCounterPartySigs(msg *addCounterPartySigs
 			}
 
 			// Ensure that the signature is valid.
-			vm, err := txscript.NewEngine(pkscript,
-				fundingTx, i, txscript.StandardVerifyFlags, nil)
+			//TODO the 0 is broken!  Don't know where to get input amt -- t909
+			vm, err := txscript.NewEngine(pkscript, fundingTx, i,
+				txscript.StandardVerifyFlags, nil, nil, 0)
 			if err != nil {
 				// TODO(roasbeef): cancel at this stage if invalid sigs?
 				msg.err <- fmt.Errorf("cannot create script engine: %s", err)
@@ -981,9 +982,10 @@ func (l *LightningWallet) handleFundingCounterPartySigs(msg *addCounterPartySigs
 
 	// Finally, create an instance of a Script VM, and ensure that the
 	// Script executes succesfully.
+	//TODO broken-- where to get input amt?
 	commitTx.TxIn[0].SignatureScript = scriptSig
 	vm, err := txscript.NewEngine(p2sh, commitTx, 0,
-		txscript.StandardVerifyFlags, nil)
+		txscript.StandardVerifyFlags, nil, nil, 0)
 	if err != nil {
 		msg.err <- err
 		return

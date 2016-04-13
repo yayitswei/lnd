@@ -156,7 +156,7 @@ func loadConfig() (*config, error) {
 	}
 	if cfg.SegNet {
 		numNets++
-		activeNetParams = &chaincfg.SegNetParams
+		activeNetParams = &chaincfg.SegNet4Params
 	}
 	if cfg.SimNet {
 		numNets++

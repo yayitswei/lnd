@@ -438,7 +438,8 @@ func (ts *TxStore) SignFundTx(
 		if err != nil {
 			return err
 		}
-		hCache := txscript.CalcHashCache(tx, 0, txscript.SigHashAll)
+
+		hCache := txscript.NewTxSigHashes(tx)
 		// got tx, now figure out keys for the inputs and sign.
 		for i, txin := range tx.TxIn {
 			halfUtxo := duf.Get(OutPointToBytes(txin.PreviousOutPoint))

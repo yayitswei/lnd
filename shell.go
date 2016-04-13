@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	Params         = &chaincfg.SegNetParams
+	Params         = &chaincfg.SegNet4Params
 	SCon           uspv.SPVCon   // global here for now
 	GlobalOmniChan chan []byte   // channel for omnihandler
 	RemoteCon      *lndc.LNDConn // one because simple
@@ -66,7 +66,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 17050 // hardcoded; later base on keyfile date?
+		tip = 16754 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)

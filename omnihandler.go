@@ -60,7 +60,7 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	fmt.Printf("got pubkey response %x\n", theirPub.SerializeCompressed())
 
 	tx := wire.NewMsgTx() // make new tx
-	tx.Flags = 0x01       // tx will be witty
+	//	tx.Flags = 0x01       // tx will be witty
 
 	// first get inputs. comes sorted from PickUtxos.
 	utxos, overshoot, err := SCon.PickUtxos(multiCapacity, true)
@@ -271,7 +271,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	// we have the data needed to make the tx; make tx, sign, and send sig.
 	tx := wire.NewMsgTx() // make new tx
-	tx.Flags = 0x01       // tx will be witty
+	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(mult.PeerIdx, mult.KeyIdx)
@@ -307,8 +307,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	tx.AddTxOut(wire.NewTxOut(mult.Value-fee, outputScript))
 
-	hCache := txscript.CalcHashCache(tx, 0, txscript.SigHashAll)
-
+	hCache := txscript.NewTxSigHashes(tx)
 	// generate sig.  Use Raw because we don't want the pubkey
 	sig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, mult.Value, subScript, txscript.SigHashAll, priv)
@@ -365,7 +364,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	// we have the data needed to make the tx; make tx, sign, and send sig.
 	tx := wire.NewMsgTx() // make new tx
-	tx.Flags = 0x01       // tx will be witty
+	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(mult.PeerIdx, mult.KeyIdx)
@@ -400,8 +399,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	tx.AddTxOut(wire.NewTxOut(mult.Value-fee, outputScript))
 
-	hCache := txscript.CalcHashCache(tx, 0, txscript.SigHashAll)
-
+	hCache := txscript.NewTxSigHashes(tx)
 	// check their sig.
 	//	err = txscript.CheckSig(tx, hCache, 0, mult.Value, subScript,
 	//		txscript.SigHashAll, mult.TheirPub, theirSig)

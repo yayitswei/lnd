@@ -7,12 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LightningNetwork/lnd/elkrem"
 	"github.com/boltdb/bolt"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcwallet/walletdb"
+	"github.com/lightningnetwork/lnd/elkrem"
 )
 
 var (
@@ -162,8 +161,8 @@ type ChannelSnapshot struct {
 	OpenChannel
 
 	// TODO(roasbeef): active HTLC's + their direction
-	updateNum      uint64
-	deltaNamespace walletdb.Namespace
+	updateNum uint64
+	//	deltaNamespace walletdb.Namespace
 }
 
 // FindPreviousState...
