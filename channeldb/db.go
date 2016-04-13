@@ -3,12 +3,12 @@ package channeldb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/boltdb/bolt"
-	"github.com/btcsuite/btcwallet/waddrmgr"
 )
 
 const (
@@ -16,64 +16,133 @@ const (
 )
 
 var (
-	endian = binary.BigEndian
+	// Big endian is the preferred byte order, due to cursor scans over integer
+	// keys iterating in order.
+	byteOrder = binary.BigEndian
 )
 
 var bufPool = &sync.Pool{
 	New: func() interface{} { return new(bytes.Buffer) },
 }
 
-// Store...
-// TODO(roasbeef): CHECKSUMS, REDUNDANCY, etc etc.
+// EncryptorDecryptor...
+// TODO(roasbeef): ability to rotate EncryptorDecryptor's across DB
+type EncryptorDecryptor interface {
+	Encrypt(in []byte) ([]byte, error)
+	Decrypt(in []byte) ([]byte, error)
+	OverheadSize() uint32
+}
+
+// DB...
 type DB struct {
-	// TODO(roasbeef): caching, etc?
-	addrmgr *waddrmgr.Manager
+	store *bolt.DB
 
-	db *bolt.DB
+	cryptoSystem EncryptorDecryptor
 }
 
-// Wipe...
-func (d *DB) Wipe() error {
-	return d.db.Update(func(tx *bolt.Tx) error {
-		return tx.DeleteBucket(openChannelBucket)
-	})
-}
+// Open opens an existing channeldb created under the passed namespace with
+// sensitive data encrypted by the passed EncryptorDecryptor implementation.
+// TODO(roasbeef): versioning?
+func Open(dbPath string) (*DB, error) {
+	path := filepath.Join(dbPath, dbName)
 
-// New...
-// TODO(roasbeef): re-visit this dependancy...
-func New(dbPath string, addrmgr *waddrmgr.Manager) (*DB, error) {
-	if _, err := os.Stat(dbPath); err != nil {
-		if os.IsNotExist(err) {
-			if err := os.MkdirAll(dbPath, 0700); err != nil {
-				return nil, err
-			}
+	if !fileExists(path) {
+		if err := createChannelDB(dbPath); err != nil {
+			return nil, err
 		}
 	}
 
-	path := filepath.Join(dbPath, dbName)
-	boltDB, err := bolt.Open(path, 0600, nil)
+	bdb, err := bolt.Open(path, 0600, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return &DB{addrmgr, boltDB}, nil
+	return &DB{store: bdb}, nil
 }
 
-// Open...
-// TODO(roasbeef): create+open, ditch New, fixes above
-func Open() *DB {
-	return nil
+// RegisterCryptoSystem...
+func (d *DB) RegisterCryptoSystem(ed EncryptorDecryptor) {
+	d.cryptoSystem = ed
 }
 
-// Create...
-func Create() *DB {
-	return nil
+// Wipe...
+func (d *DB) Wipe() error {
+	return d.store.Update(func(tx *bolt.Tx) error {
+		// TODO(roasbee): delete all other top-level buckets.
+		return tx.DeleteBucket(openChannelBucket)
+	})
 }
 
 // Close...
 func (d *DB) Close() error {
-	return d.db.Close()
+	return d.store.Close()
 }
 
-// TODO(roasbeef): SetCryptoSystem method...
-//  * don't have waddrmgr up before..
+// createChannelDB...
+func createChannelDB(dbPath string) error {
+	if !fileExists(dbPath) {
+		if err := os.MkdirAll(dbPath, 0700); err != nil {
+			return err
+		}
+	}
+
+	path := filepath.Join(dbPath, dbName)
+	bdb, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		return err
+	}
+
+	err = bdb.Update(func(tx *bolt.Tx) error {
+		if _, err := tx.CreateBucket(openChannelBucket); err != nil {
+			return err
+		}
+
+		if _, err := tx.CreateBucket(closedChannelBucket); err != nil {
+			return err
+		}
+
+		if _, err := tx.CreateBucket(channelLogBucket); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("unable to create new channeldb")
+	}
+
+	return bdb.Close()
+}
+
+// fileExists...
+func fileExists(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// FetchOpenChannel...
+func (d *DB) FetchOpenChannel(nodeID [32]byte) (*OpenChannel, error) {
+	var channel *OpenChannel
+	err := d.store.View(func(tx *bolt.Tx) error {
+		// Get the bucket dedicated to storing the meta-data for open
+		// channels.
+		openChanBucket := tx.Bucket(openChannelBucket)
+		if openChannelBucket == nil {
+			return fmt.Errorf("open channel bucket does not exist")
+		}
+
+		oChannel, err := fetchOpenChannel(openChanBucket, nodeID, d.cryptoSystem)
+		if err != nil {
+			return err
+		}
+		channel = oChannel
+		return nil
+	})
+
+	return channel, err
+}
