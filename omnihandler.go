@@ -270,10 +270,11 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
 	}
+	fmt.Printf("___Got close req for %s. our key is %d, %d, their key is %x\n",
+		op.String(), mult.PeerIdx, mult.KeyIdx, mult.TheirPub.SerializeCompressed())
 
 	// we have the data needed to make the tx; make tx, sign, and send sig.
 	tx := wire.NewMsgTx() // make new tx
-	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(mult.PeerIdx, mult.KeyIdx)

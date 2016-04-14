@@ -281,8 +281,13 @@ func (s *SPVCon) AskForHeaders() error {
 		len(ghdr.BlockLocatorHashes), ghdr.BlockLocatorHashes[0].String())
 
 	s.outMsgQueue <- ghdr
-
 	return nil
+}
+
+// Ask for their mempool.  2 line func. 1 of which is "return"
+func (s *SPVCon) AskForMempool() {
+	s.outMsgQueue <- wire.NewMsgMemPool()
+	return
 }
 
 // AskForOneBlock is for testing only, so you can ask for a specific block height
@@ -347,6 +352,11 @@ func (s *SPVCon) AskForBlocks() error {
 		s.inWaitState <- true
 		// also advertise any unconfirmed txs here
 		s.Rebroadcast()
+		// ask for mempool each time...?  put something in to only ask the
+		// first time we sync...?
+		if !s.Ironman {
+			s.AskForMempool()
+		}
 		return nil
 	}
 

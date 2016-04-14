@@ -545,8 +545,8 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 					for _, spentOP := range spentOPs {
 						if bytes.Equal(spentOP, opBytes) {
 							// this multixo is now spent.
-							// for now, delete it.  But actually we can't
-							// delete and need to just flag it as spent.
+							// CHANGE THIS!  can't actually delete.
+							hits++
 							err = pr.DeleteBucket(opBytes)
 							if err != nil {
 								return err

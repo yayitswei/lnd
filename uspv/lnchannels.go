@@ -17,7 +17,7 @@ import (
 type MultiOut struct {
 	Utxo // most stuff is in here; flag bit is redundant in this implementation
 
-	MyPub    *btcec.PublicKey // for convenience, not stored on disk
+	MyPubx   *btcec.PublicKey // for convenience, not stored on disk
 	TheirPub *btcec.PublicKey // their p2wsh pubkey, stored
 
 	// peerIdx is for convenience; not serialized directly;
@@ -60,14 +60,14 @@ type StatCom struct {
 
 // ScriptAddress returns the *34* byte address of the outpoint.
 // note that it's got the 0020 in front.  [2:] if you want to get rid of that.
-func (m *MultiOut) ScriptAddress() ([]byte, error) {
-	script, _, err := FundMultiPre(
-		m.MyPub.SerializeCompressed(), m.TheirPub.SerializeCompressed())
-	if err != nil {
-		return nil, err
-	}
-	return script, nil
-}
+//func (m *MultiOut) ScriptAddress() ([]byte, error) {
+//	script, _, err := FundMultiPre(
+//		m.MyPub.SerializeCompressed(), m.TheirPub.SerializeCompressed())
+//	if err != nil {
+//		return nil, err
+//	}
+//	return script, nil
+//}
 
 // generate a signature for the next state
 func (s *SimplChannel) SignNextState() error {

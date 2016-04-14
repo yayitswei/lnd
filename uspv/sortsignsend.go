@@ -85,6 +85,7 @@ func (s SortableUtxoSlice) Less(i, j int) bool {
 	return s[i].Value < s[j].Value
 }
 
+// NewOutgoingTx runs a tx though the db first, then sends it out to the network.
 func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 	txid := tx.TxSha()
 	// assign height of zero for txs we create
