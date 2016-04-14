@@ -168,7 +168,7 @@ func FundMultiPre(aPub, bPub []byte) ([]byte, bool, error) {
 		swapped = true
 	}
 	bldr := txscript.NewScriptBuilder()
-	// Require 2 signatures, so from both of the pubkeys
+	// Require 1 signatures, either key// so from both of the pubkeys
 	bldr.AddOp(txscript.OP_2)
 	// add both pubkeys (sorted)
 	bldr.AddData(aPub)

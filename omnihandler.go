@@ -310,7 +310,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	hCache := txscript.NewTxSigHashes(tx)
 	// generate sig.  Use Raw because we don't want the pubkey
 	sig, err := txscript.RawTxInWitnessSignature(
-		tx, hCache, 0, mult.Value, subScript, txscript.SigHashAll, priv)
+		tx, hCache, 0, mult.Value, pre, txscript.SigHashAll, priv)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -405,8 +405,9 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	//		txscript.SigHashAll, mult.TheirPub, theirSig)
 
 	// generate sig.  Use Raw because we don't want the pubkey
+	// subscript is the preimage.  mkay.
 	mySig, err := txscript.RawTxInWitnessSignature(
-		tx, hCache, 0, mult.Value, subScript, txscript.SigHashAll, priv)
+		tx, hCache, 0, mult.Value, pre, txscript.SigHashAll, priv)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return

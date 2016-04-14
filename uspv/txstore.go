@@ -165,7 +165,7 @@ func CheckDoubleSpends(
 func TxToString(tx *wire.MsgTx) string {
 	str := fmt.Sprintf("size %d vsize %d wsize %d locktime %d wit: %x txid %s\n",
 		tx.SerializeSize(), tx.VirtualSize(), tx.SerializeSizeWitness(),
-		tx.LockTime, !tx.NoWitness(), tx.TxSha().String())
+		tx.LockTime, tx.HasWitness(), tx.TxSha().String())
 	for i, in := range tx.TxIn {
 		str += fmt.Sprintf("Input %d spends %s\n", i, in.PreviousOutPoint.String())
 		str += fmt.Sprintf("\tSigScript: %x\n", in.SignatureScript)

@@ -21,18 +21,12 @@ var (
 func BlockOK(blk wire.MsgBlock) bool {
 	var txids, wtxids []*wire.ShaHash // txids and wtxids
 	// witMode true if any tx has a wintess OR coinbase has wit commit
-	var witMode bool
+	witMode := false
 
 	for _, tx := range blk.Transactions { // make slice of (w)/txids
-
 		txid := tx.TxSha()
-		wtxid := tx.WitnessHash()
-		fmt.Printf("witty: %t txid: %s wtxid: %s\n", !tx.NoWitness(),
-			txid.String(), wtxid.String())
-		fmt.Printf("size:%d witsize:%d \n",
-			tx.SerializeSize(), tx.SerializeSizeWitness())
 		txids = append(txids, &txid)
-		if !tx.NoWitness() {
+		if !witMode && tx.HasWitness() {
 			witMode = true
 		}
 	}
