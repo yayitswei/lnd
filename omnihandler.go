@@ -137,6 +137,8 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 	amt := uspv.BtI64(descbytes[69:])
 
 	// save to db
+	// it should go into the next bucket and get the right key index.
+	// but we can't actually check that.
 	err = SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub)
 	if err != nil {
 		fmt.Printf("MultiDescHandler err %s", err.Error())
@@ -415,9 +417,6 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	fmt.Printf("generated sig %x\n", mySig)
 	// -----uglyness end-----
-
-	// clear sigscript (subscript/ prev script) after signing.
-	tx.TxIn[0].SignatureScript = nil
 
 	// 2 sigs and a preimage.  AND A ZERO IN THE BEGINNING. STILL.
 	if swap {

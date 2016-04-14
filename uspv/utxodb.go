@@ -410,6 +410,8 @@ func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 
 // Ingest puts a tx into the DB atomically.  This can result in a
 // gain, a loss, or no result.  Gain or loss in satoshis is returned.
+// This function seems too big and complicated.  Maybe can split it up
+// or simplify it.
 func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	var hits uint32
 	var err error
@@ -501,7 +503,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 		// but haven't seen yet.  This means iterating through peer buckets.
 		// This basically copies code in chandb.go so it's a little ugly,
 		// merge/cleanup later.
-
+		// Also check if this tx SPENDS a multisig outpoint we know of.
 		prs := btx.Bucket(BKTPeers)
 		if prs != nil { // there are peers, check this TX for chan/mult
 			err = prs.ForEach(func(idPub, nothin []byte) error {
@@ -516,12 +518,13 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 					}
 					multiBucket := pr.Bucket(opBytes)
 					if multiBucket == nil {
-						return nil // nothing stored
+						return nil // nothing stored / not a bucket
 					}
 					hitMult, err := MultiOutFromBytes(multiBucket.Get(KEYutxo))
 					if err != nil {
 						return err
 					}
+					// check if we gain a known txid but unknown tx
 					if bytes.Equal(cachedSha.Bytes(), hitMult.Op.Hash.Bytes()) {
 						// hit; ingesting tx which matches chan/multi
 						// all we do is assign height and increment hits
@@ -536,6 +539,18 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 						err = multiBucket.Put(KEYutxo, mOutBytes)
 						if err != nil {
 							return err
+						}
+					}
+					// check if it's spending the multiout
+					for _, spentOP := range spentOPs {
+						if bytes.Equal(spentOP, opBytes) {
+							// this multixo is now spent.
+							// for now, delete it.  But actually we can't
+							// delete and need to just flag it as spent.
+							err = pr.DeleteBucket(opBytes)
+							if err != nil {
+								return err
+							}
 						}
 					}
 					return nil

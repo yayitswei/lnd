@@ -121,9 +121,17 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	for _, u := range allUtxos {
 		f.AddOutPoint(&u.Op)
 	}
+	// actually... we should monitor addresses, not txids, right?
+	// or no...?
 	for _, m := range allMulti {
+
 		// aha, add HASH here, not the outpoint!
 		f.AddShaHash(&m.Op.Hash)
+		// also add outpoint...?  wouldn't the hash be enough?
+		// not sure why I have to do both of these, but seems like close txs get
+		// ignored without the outpoint, and fund txs get ignored without the
+		// shahash. Might be that shahash operates differently (on txids, not txs)
+		f.AddOutPoint(&m.Op)
 	}
 
 	fmt.Printf("made %d element filter\n", filterElements)

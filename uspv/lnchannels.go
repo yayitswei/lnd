@@ -17,8 +17,7 @@ import (
 type MultiOut struct {
 	Utxo // most stuff is in here; flag bit is redundant in this implementation
 
-	//	MyPub    btcec.PublicKey // for convenience, not stored
-
+	MyPub    *btcec.PublicKey // for convenience, not stored on disk
 	TheirPub *btcec.PublicKey // their p2wsh pubkey, stored
 
 	// peerIdx is for convenience; not serialized directly;
@@ -57,6 +56,17 @@ type StatCom struct {
 
 	Revc [20]byte // preimage of R is required to sweep immediately
 	Sig  []byte   // Counterparty's signature (for StatCom tx)
+}
+
+// ScriptAddress returns the *34* byte address of the outpoint.
+// note that it's got the 0020 in front.  [2:] if you want to get rid of that.
+func (m *MultiOut) ScriptAddress() ([]byte, error) {
+	script, _, err := FundMultiPre(
+		m.MyPub.SerializeCompressed(), m.TheirPub.SerializeCompressed())
+	if err != nil {
+		return nil, err
+	}
+	return script, nil
 }
 
 // generate a signature for the next state
@@ -192,19 +202,6 @@ func SpendMultiSigWitStack(pre, sigA, sigB []byte) [][]byte {
 	witStack[2] = sigB
 	witStack[3] = pre
 
-	/*
-		bldr := txscript.NewScriptBuilder()
-		// add a 0 for some multisig fun
-		bldr.AddOp(txscript.OP_0)
-		// add sigA
-		bldr.AddData(sigA)
-		// add sigB
-		bldr.AddData(sigB)
-		// preimage goes on AT THE ENDDDD
-		bldr.AddData(pre)
-		// that's all, get bytes
-		return bldr.Script()
-	*/
 	return witStack
 }
 
@@ -215,4 +212,66 @@ func P2WSHify(scriptBytes []byte) []byte {
 	bldr.AddData(wsh[:])
 	b, _ := bldr.Script() // ignore script errors
 	return b
+}
+
+/*----- serialization for MultiOuts ------- */
+
+/* MultiOuts serialization:
+(it's just a utxo with their pubkey)
+byte length   desc   at offset
+
+53	utxo		0
+33	thrpub	86
+
+end len 	86
+
+peeridx and multidx are inferred from position in db.
+*/
+
+func (m *MultiOut) ToBytes() ([]byte, error) {
+	var buf bytes.Buffer
+	// first serialize the utxo part
+	uBytes, err := m.Utxo.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	// write that into the buffer first
+	_, err = buf.Write(uBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// write 33 byte pubkey (theirs)
+	_, err = buf.Write(m.TheirPub.SerializeCompressed())
+	if err != nil {
+		return nil, err
+	}
+	// done
+	return buf.Bytes(), nil
+}
+
+// MultiOutFromBytes turns bytes into a MultiOut.
+// the first 53 bytes are the utxo, then next 33 is the pubkey
+func MultiOutFromBytes(b []byte) (MultiOut, error) {
+	var m MultiOut
+
+	if len(b) < 86 {
+		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
+	}
+
+	u, err := UtxoFromBytes(b[:53])
+	if err != nil {
+		return m, err
+	}
+
+	buf := bytes.NewBuffer(b[53:])
+	// will be 33, size checked up there
+
+	m.Utxo = u // assign the utxo
+
+	m.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
+	if err != nil {
+		return m, err
+	}
+	return m, nil
 }

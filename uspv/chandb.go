@@ -96,7 +96,7 @@ func BtI64(b []byte) int64 {
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.
 func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	fmt.Printf("\tgenerating key for peerindex %d, keyindex %d\n", peerIdx, cIdx)
+	// fmt.Printf("\tgenerating key for peerindex %d, keyindex %d\n", peerIdx, cIdx)
 
 	multiRoot, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
 	if err != nil {
@@ -118,19 +118,19 @@ func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 		fmt.Printf("GetFundPrivkey err %s", err.Error())
 		return nil
 	}
-	fmt.Printf("-----generated %x\n", priv.PubKey().SerializeCompressed())
+	// fmt.Printf("-----generated %x\n", priv.PubKey().SerializeCompressed())
 	return priv
 }
 
-// GetFundPubkeyBytes generates and returns the pubkey for a given index.
+// GetFundPubkey generates and returns the pubkey for a given index.
 // It will return nil if there's an error / problem
-func (ts *TxStore) GetFundPubkeyBytes(peerIdx, cIdx uint32) []byte {
+func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
 	priv := ts.GetFundPrivkey(peerIdx, cIdx)
 	if priv == nil {
 		fmt.Printf("GetFundPubkeyBytes peer %d idx %d failed", peerIdx, cIdx)
 		return nil
 	}
-	return priv.PubKey().SerializeCompressed()
+	return priv.PubKey()
 }
 
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
@@ -234,8 +234,8 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	pubBytes := ts.GetFundPubkeyBytes(peerIdx, multIdx)
-	return pubBytes, nil
+	pub := ts.GetFundPubkey(peerIdx, multIdx)
+	return pub.SerializeCompressed(), nil
 }
 
 // MakeMultiTx fills out a multisig funding tx.
@@ -275,7 +275,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 		multIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
 
 		// generate pubkey from peer, multi indexes
-		myPubBytes = ts.GetFundPubkeyBytes(peerIdx, multIdx)
+		myPubBytes = ts.GetFundPubkey(peerIdx, multIdx).SerializeCompressed()
 
 		// generate multisig output from two pubkeys
 		multiTxOut, err := FundMultiOut(theirPubBytes, myPubBytes, amt)
@@ -525,8 +525,11 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 				if err != nil {
 					return err
 				}
-
+				// fill in peerIdx from db context
 				newMult.PeerIdx = peerIdx
+				// fill in myPub from index
+				newMult.MyPub = ts.GetFundPubkey(peerIdx, newMult.KeyIdx)
+				// add to slice
 				multis = append(multis, &newMult)
 				return nil
 			})
@@ -569,6 +572,8 @@ func (ts *TxStore) GetMultiOut(
 		}
 		// note that peerIndex is not set from deserialization!  set it here!
 		multi.PeerIdx = BtU32(pr.Get(KEYIdx))
+		// fill in myPub from index
+		multi.MyPub = ts.GetFundPubkey(multi.PeerIdx, multi.KeyIdx)
 		return nil
 	})
 	if err != nil {
@@ -634,66 +639,4 @@ func (ts *TxStore) GetMultiClose(peerBytes []byte, opArr [36]byte) ([]byte, erro
 		return nil, err
 	}
 	return adrBytes, nil
-}
-
-/*----- serialization for MultiOuts ------- */
-
-/* MultiOuts serialization:
-(it's just a utxo with their pubkey)
-byte length   desc   at offset
-
-53	utxo		0
-33	thrpub	86
-
-end len 	86
-
-peeridx and multidx are inferred from position in db.
-*/
-
-func (m *MultiOut) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	// first serialize the utxo part
-	uBytes, err := m.Utxo.ToBytes()
-	if err != nil {
-		return nil, err
-	}
-	// write that into the buffer first
-	_, err = buf.Write(uBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	// write 33 byte pubkey (theirs)
-	_, err = buf.Write(m.TheirPub.SerializeCompressed())
-	if err != nil {
-		return nil, err
-	}
-	// done
-	return buf.Bytes(), nil
-}
-
-// MultiOutFromBytes turns bytes into a MultiOut.
-// the first 53 bytes are the utxo, then next 33 is the pubkey
-func MultiOutFromBytes(b []byte) (MultiOut, error) {
-	var m MultiOut
-
-	if len(b) < 86 {
-		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
-	}
-
-	u, err := UtxoFromBytes(b[:53])
-	if err != nil {
-		return m, err
-	}
-
-	buf := bytes.NewBuffer(b[53:])
-	// will be 33, size checked up there
-
-	m.Utxo = u // assign the utxo
-
-	m.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
-	if err != nil {
-		return m, err
-	}
-	return m, nil
 }
