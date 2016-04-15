@@ -400,8 +400,8 @@ func Bal(args []string) error {
 
 	var score, confScore int64
 	for i, u := range allUtxos {
-		fmt.Printf("\tutxo %d height %d %s key:%d amt: %d",
-			i, u.AtHeight, u.Op.String(), u.KeyIdx, u.Value)
+		fmt.Printf("utxo %d %s h: %d key:%d a: %d",
+			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
 		if u.IsWit {
 			fmt.Printf(" WIT")
 		}
@@ -418,8 +418,8 @@ func Bal(args []string) error {
 	}
 	for i, m := range gmos {
 		tk := m.TheirPub.SerializeCompressed()
-		fmt.Printf("%d peerIdx %d multIdx %d height %d %s amt: %d theirkey %x\n",
-			i, m.PeerIdx, m.KeyIdx, m.AtHeight, m.Op.String(), m.Value, tk[:8])
+		fmt.Printf("chan %d %s h: %d (%d,%d) a: %d thrpub %x\n",
+			i, m.Op.String(), m.AtHeight, m.PeerIdx, m.KeyIdx, m.Value, tk[:4])
 	}
 
 	height, _ := SCon.TS.GetDBSyncHeight()
