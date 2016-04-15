@@ -34,6 +34,22 @@ as state, must store at most h+1 hashes and the index of each hash (h*(h+1)) bit
 to compute a previous index, compute at most h hashes.
 */
 
+// Top Elkrem Struct to be included in a channel.
+type ElkremPair struct {
+	S ElkremSender
+	R ElkremReceiver
+}
+
+// NewDualElkrem creates a sender / receiver pair of the same tree height.
+// height is hard-coded to 63.  There's not much point in going lower.
+// (Sender is *slightly* faster but probably not noticably so.)
+func NewElkremPair(r wire.ShaHash) ElkremPair {
+	var elp ElkremPair
+	elp.S = NewElkremSender(63, r)
+	elp.R = NewElkremReceiver(63) // it's always 63 tall
+	return elp
+}
+
 // You can calculate h from i but I can't figure out how without taking
 // O(i) ops.  Feels like there should be a clever O(h) way.  1 byte, whatever.
 type ElkremNode struct {

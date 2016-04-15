@@ -113,7 +113,6 @@ func Shellparse(cmdslice []string) error {
 	if cmd == "exit" || cmd == "quit" {
 		return fmt.Errorf("User exit")
 	}
-
 	// help gives you really terse help.  Just a list of commands.
 	if cmd == "help" {
 		err = Help(args)
@@ -122,7 +121,6 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-
 	// adr generates a new address and displays it
 	if cmd == "adr" {
 		err = Adr(args)
@@ -200,17 +198,33 @@ func Shellparse(cmdslice []string) error {
 		return nil
 	}
 	// request multisig pubkey, leading to creation of a shared multi tx
-	if cmd == "mult" {
-		err = Mult(args)
+	if cmd == "fund" {
+		err = FundChannel(args)
 		if err != nil {
 			fmt.Printf("mult error: %s\n", err)
 		}
 		return nil
 	}
-	if cmd == "msend" {
-		err = MultSend(args)
+	// push money in a channel away from you
+	if cmd == "push" {
+		err = PushChannel(args)
 		if err != nil {
-			fmt.Printf("MultSend error: %s\n", err)
+			fmt.Printf("PushChannel error: %s\n", err)
+		}
+		return nil
+	}
+	// cooperateive close of a channel
+	if cmd == "cclose" {
+		err = CloseChannel(args)
+		if err != nil {
+			fmt.Printf("CloseChannel error: %s\n", err)
+		}
+		return nil
+	}
+	if cmd == "cfail" {
+		err = BreakChannel(args)
+		if err != nil {
+			fmt.Printf("BreakChannel error: %s\n", err)
 		}
 		return nil
 	}
@@ -412,7 +426,7 @@ func Bal(args []string) error {
 		}
 	}
 
-	gmos, err := SCon.TS.GetAllMultiOuts()
+	gmos, err := SCon.TS.GetAllQchans()
 	if err != nil {
 		return err
 	}

@@ -520,7 +520,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 					if multiBucket == nil {
 						return nil // nothing stored / not a bucket
 					}
-					hitMult, err := MultiOutFromBytes(multiBucket.Get(KEYutxo))
+					hitMult, err := QchanFromBytes(multiBucket.Get(KEYutxo))
 					if err != nil {
 						return err
 					}

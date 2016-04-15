@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
@@ -12,9 +13,9 @@ import (
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
-// Mult makes a multisig address with the node connected to...
+// FundChannel makes a multisig address with the node connected to...
 // first just request one of their pubkeys (1 byte message)
-func Mult(args []string) error {
+func FundChannel(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
@@ -23,11 +24,11 @@ func Mult(args []string) error {
 	return err
 }
 
-// get a (content-less) pubkey request.  Respond with a pubkey
+// PubReqHandler gets a (content-less) pubkey request.  Respond with a pubkey
 // note that this only causes a disk read, not a disk write.
 // so if someone sends 10 pubkeyreqs, they'll get the same pubkey back 10 times.
 // they have to provide an actual tx before the next pubkey will come out.
-func MultiReqHandler(from [16]byte) {
+func PubReqHandler(from [16]byte) {
 	// pub req; check that idx matches next idx of ours and create pubkey
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	pub, err := SCon.TS.NextPubForPeer(peerBytes)
@@ -43,17 +44,17 @@ func MultiReqHandler(from [16]byte) {
 	return
 }
 
-// once the pubkey response comes back, we can create the transaction.
-// create, save to DB, sign and send over the wire (and broadcast)
-func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
-	multiCapacity := int64(2000000) // this will be an arg
+// PubRespHandler -once the pubkey response comes back, we can create the
+// transaction.  Create, save to DB, sign and send over the wire (and broadcast)
+func PubRespHandler(from [16]byte, theirPubBytes []byte) {
+	qChanCapacity := int64(2000000) // this will be an arg
 	satPerByte := int64(80)
-	capBytes := uspv.I64tB(multiCapacity)
+	capBytes := uspv.I64tB(qChanCapacity)
 
 	// make sure their pubkey is a pubkey
 	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
 	if err != nil {
-		fmt.Printf("MultiRespHandler err %s", err.Error())
+		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
 
@@ -63,9 +64,9 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	//	tx.Flags = 0x01       // tx will be witty
 
 	// first get inputs. comes sorted from PickUtxos.
-	utxos, overshoot, err := SCon.PickUtxos(multiCapacity, true)
+	utxos, overshoot, err := SCon.PickUtxos(qChanCapacity, true)
 	if err != nil {
-		fmt.Printf("MultiRespHandler err %s", err.Error())
+		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
 	if overshoot < 0 {
@@ -81,7 +82,7 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	// create change output
 	changeOut, err := SCon.TS.NewChangeOut(overshoot - fee)
 	if err != nil {
-		fmt.Printf("MultiRespHandler err %s", err.Error())
+		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
 
@@ -93,9 +94,9 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
 	op, myPubBytes, err := SCon.TS.MakeFundTx(
-		tx, multiCapacity, peerBytes, theirPub)
+		tx, qChanCapacity, peerBytes, theirPub)
 	if err != nil {
-		fmt.Printf("MultiRespHandler err %s", err.Error())
+		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
 	// don't need to add to filters; we'll pick the TX up anyway because it
@@ -116,9 +117,9 @@ func MultiRespHandler(from [16]byte, theirPubBytes []byte) {
 	return
 }
 
-// MultiDescHandler takes in a description of a multisig output.  It then
+// QChanDescHandler takes in a description of a multisig output.  It then
 // saves it to the local db.
-func MultiDescHandler(from [16]byte, descbytes []byte) {
+func QChanDescHandler(from [16]byte, descbytes []byte) {
 	if len(descbytes) != 77 {
 		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
 		return
@@ -127,7 +128,7 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 	// make sure their pubkey is a pubkey
 	theirPub, err := btcec.ParsePubKey(descbytes[36:69], btcec.S256())
 	if err != nil {
-		fmt.Printf("MultiDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
 	}
 	// deserialize outpoint
@@ -141,7 +142,7 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 	// but we can't actually check that.
 	err = SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub)
 	if err != nil {
-		fmt.Printf("MultiDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
 	}
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
@@ -149,7 +150,7 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 	// it doesn't involve our utxos / adrs.
 	err = SCon.TS.RefilterLocal()
 	if err != nil {
-		fmt.Printf("MultiDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
 	}
 
@@ -161,9 +162,9 @@ func MultiDescHandler(from [16]byte, descbytes []byte) {
 	return
 }
 
-// MultiAckHandler takes in an acknowledgement multisig description.
+// QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
-func MultiAckHandler(from [16]byte, ackbytes []byte) {
+func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	if len(ackbytes) != 36 {
 		fmt.Printf("got %d byte multiAck, expect 36\n", len(ackbytes))
 		return
@@ -176,26 +177,44 @@ func MultiAckHandler(from [16]byte, ackbytes []byte) {
 	// sign multi tx
 	tx, err := SCon.TS.SignFundTx(op, peerBytes)
 	if err != nil {
-		fmt.Printf("MultiAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
 	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
 	err = SCon.NewOutgoingTx(tx)
 	if err != nil {
-		fmt.Printf("MultiAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
 	return
 }
 
-// MultSend closes / spends from a shared multisig output.
-func MultSend(args []string) error {
+// PushChannel pushes money to the other side of the channel
+func PushChannel(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
 	// need args, fail
 	if len(args) < 1 {
-		return fmt.Errorf("need args: msend address")
+		return fmt.Errorf("need args: ssend address amount(satoshis) wit?")
+	}
+	amt, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("you're trying to push %d to the other side.\n", amt)
+
+	return nil
+}
+
+// CloseChannel is a cooperative closing of a channel to a specified address.
+func CloseChannel(args []string) error {
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone\n")
+	}
+	// need args, fail
+	if len(args) < 1 {
+		return fmt.Errorf("need args: cclose address")
 	}
 
 	adr, err := btcutil.DecodeAddress(args[0], SCon.TS.Param)
@@ -210,7 +229,7 @@ func MultSend(args []string) error {
 		return err
 	}
 	// get all multi txs
-	multis, err := SCon.TS.GetAllMultiOuts()
+	multis, err := SCon.TS.GetAllQchans()
 	if err != nil {
 		return err
 	}
@@ -231,7 +250,7 @@ func MultSend(args []string) error {
 	copy(opArr[:], opBytes)
 	var adrArr [20]byte
 	copy(adrArr[:], adr.ScriptAddress())
-	err = SCon.TS.SetMultiClose(peerBytes, opArr, adrArr)
+	err = SCon.TS.SetChanClose(peerBytes, opArr, adrArr)
 	if err != nil {
 		return err
 	}
@@ -265,7 +284,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	op := uspv.OutPointFromBytes(opArr)
 	adrBytes := reqbytes[36:] // 20 byte address (put a 0x00 in front)
 
-	mult, err := SCon.TS.GetMultiOut(peerBytes, opArr)
+	mult, err := SCon.TS.GetQchan(peerBytes, opArr)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -283,7 +302,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	theirPubBytes := mult.TheirPub.SerializeCompressed()
 	// reconstruct output script (preimage)
 	// don't care if swapped as not aggregating signatures
-	pre, _, err := uspv.FundMultiPre(myPubBytes, theirPubBytes)
+	pre, _, err := uspv.FundTxScript(myPubBytes, theirPubBytes)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -347,7 +366,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	op := uspv.OutPointFromBytes(opArr)
 	theirSig := respbytes[36:] // sig is everything after the outpoint
 
-	adrBytes, err := SCon.TS.GetMultiClose(peerBytes, opArr)
+	adrBytes, err := SCon.TS.GetChanClose(peerBytes, opArr)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -359,7 +378,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	// it uses both sigs and broadcasts.  Probably should break this middle
 	// part out into its own function or something.
 
-	mult, err := SCon.TS.GetMultiOut(peerBytes, opArr)
+	mult, err := SCon.TS.GetQchan(peerBytes, opArr)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -375,7 +394,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	myPubBytes := priv.PubKey().SerializeCompressed()
 	theirPubBytes := mult.TheirPub.SerializeCompressed()
 	// reconstruct output script (preimage)
-	pre, swap, err := uspv.FundMultiPre(myPubBytes, theirPubBytes)
+	pre, swap, err := uspv.FundTxScript(myPubBytes, theirPubBytes)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -435,6 +454,42 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	return
 }
 
+// BreakChannel closes the channel without the other party's involvement.
+// The user causing the channel Break has to wait for the OP_CSV timeout
+// before funds can be recovered.  Break output addresses are already in the
+// DB so you can't specify anything other than which channel to break.
+func BreakChannel(args []string) error {
+	// no args needed yet actually
+	//	if len(args) < 0 {
+	//		return fmt.Errorf("need args: break")
+	//	}
+
+	// find the peer index of who we're connected to
+	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+
+	// get all multi txs
+	multis, err := SCon.TS.GetAllQchans()
+	if err != nil {
+		return err
+	}
+	var opBytes []byte
+	// find the chan we want to close
+	for _, m := range multis {
+		if m.PeerIdx == currentPeerIdx {
+			opBytes = uspv.OutPointToBytes(m.Op)
+			fmt.Printf("peerIdx %d multIdx %d height %d %s amt: %d\n",
+				m.PeerIdx, m.KeyIdx, m.AtHeight, m.Op.String(), m.Value)
+			break
+		}
+	}
+	opBytes[0] = 0x00
+
+	return nil
+}
+
 // handles stuff that comes in over the wire.  Not user-initiated.
 func OmniHandler(OmniChan chan []byte) {
 	var from [16]byte
@@ -457,25 +512,25 @@ func OmniHandler(OmniChan chan []byte) {
 		// PUBKEY REQUEST
 		if msgid == uwire.MSGID_PUBREQ {
 			fmt.Printf("got pubkey req from %x\n", from)
-			MultiReqHandler(from) // goroutine ready
+			PubReqHandler(from) // goroutine ready
 			continue
 		}
 		// PUBKEY RESPONSE
 		if msgid == uwire.MSGID_PUBRESP {
 			fmt.Printf("got pubkey response from %x\n", from)
-			MultiRespHandler(from, msg[1:]) // goroutine ready
+			PubRespHandler(from, msg[1:]) // goroutine ready
 			continue
 		}
 		// MULTISIG DESCTIPTION
 		if msgid == uwire.MSGID_MULTIDESC {
 			fmt.Printf("Got multisig description from %x\n", from)
-			MultiDescHandler(from, msg[1:])
+			QChanDescHandler(from, msg[1:])
 			continue
 		}
 		// MULTISIG ACK
 		if msgid == uwire.MSGID_MULTIACK {
 			fmt.Printf("Got multisig ack from %x\n", from)
-			MultiAckHandler(from, msg[1:])
+			QChanAckHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE REQ

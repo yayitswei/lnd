@@ -8,6 +8,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
+
 /* Serialization and Deserialization methods for the Elkrem structs.
 Senders turn into 41 byte long slices.  Receivers are variable length,
 with 41 bytes for each stored hash, up to a maximum of 64.  Receivers are

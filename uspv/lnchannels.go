@@ -9,53 +9,36 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/fastsha256"
 )
 
-// Not a channel, just multisig.  But channels evolve from it
-type MultiOut struct {
-	Utxo // most stuff is in here; flag bit is redundant in this implementation
+// Uhh, quick channel.  For now.  Once you get greater spire it upgrades to
+// a full channel that can do everything.
+type Qchan struct {
+	// S for stored (on disk), D for derived
 
-	MyPubx   *btcec.PublicKey // for convenience, not stored on disk
-	TheirPub *btcec.PublicKey // their p2wsh pubkey, stored
+	Utxo                      // S underlying utxo data
+	MyPubx   *btcec.PublicKey // D my channel specific pubkey
+	TheirPub *btcec.PublicKey // S their channel specific pubkey
 
-	// peerIdx is for convenience; not serialized directly;
-	// peer index is derived from position in db.  mult index is utxo keyidx.
-	PeerIdx uint32
-}
+	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
 
-// Simplified channel struct that doesn't include anything for multihop.
-// its real simplified.  Can make it fancier later.
-type SimplChannel struct {
-	FundPoint wire.OutPoint // outpoint of channel (in funding txid)
-	//	ImFunder bool // true if I'm the funder, false if I'm acceptor
-	Cap int64 // channel capacity
+	// Elkrem is used for revoking state commitments
+	Elk elkrem.ElkremPair // S elkrem sender and receiver
 
-	MyKeyIdx uint32 // which key am I using for channel multisig
-	MyPub    *btcec.PublicKey
-
-	TheirLNId [20]byte         // LNId of counterparty
-	TheirPub  *btcec.PublicKey // their pubkey for channel multisig
-
-	SendElkrem elkrem.ElkremSender
-	RecvElkrem elkrem.ElkremReceiver
-
-	CurrentState *StatCom
-	NextState    *StatCom // used when transitioning states
-
-	// height at which channel expires (all cltvs in statcoms use this)
-	Expiry uint32
+	CurrentState *StatCom // S current state of channel
+	NextState    *StatCom // D temporary, next state of channel
 }
 
 // StatComs are State Commitments.
 type StatCom struct {
 	MyAmt int64 // my channel allocation
+	// their Amt is the utxo.Value minus this
 
-	Idx uint64 // this is the n'th state commitment
+	StateIdx uint64 // this is the n'th state commitment
 
-	Revc [20]byte // preimage of R is required to sweep immediately
-	Sig  []byte   // Counterparty's signature (for StatCom tx)
+	RevokeHash [20]byte // preimage of R is required to sweep immediately
+	Sig        []byte   // Counterparty's signature (for StatCom tx)
 }
 
 // ScriptAddress returns the *34* byte address of the outpoint.
@@ -70,17 +53,17 @@ type StatCom struct {
 //}
 
 // generate a signature for the next state
-func (s *SimplChannel) SignNextState() error {
+func (q *Qchan) SignNextState() error {
 	return nil
 }
 
 // Verify their signature for the next state
-func (s *SimplChannel) VerifyNextState(sig []byte) error {
+func (q *Qchan) VerifyNextState(sig []byte) error {
 	return nil
 }
 
-func (s *SimplChannel) BuildStatComTx(
-	mine bool, R [20]byte) (*wire.MsgTx, error) {
+/*
+func (q *Qchan) BuildStatComTx(mine bool, R [20]byte) (*wire.MsgTx, error) {
 	// commitment is "mine" if I'm committing and sign; !mine if they sign.
 	comTx := wire.NewMsgTx()
 
@@ -113,6 +96,7 @@ func (s *SimplChannel) BuildStatComTx(
 
 	return comTx, nil
 }
+*/
 
 // commitScriptToSelf constructs the public key script for the output on the
 // commitment transaction paying to the "owner" of said commitment transaction.
@@ -152,11 +136,11 @@ func commitScript(cltvTime uint32, HKey,
 // Give it the two pubkeys and it'll give you the p2sh'd txout.
 // You don't have to remember the p2sh preimage, as long as you remember the
 // pubkeys involved.
-func FundMultiOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
+func FundTxOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
 	if amt < 0 {
 		return nil, fmt.Errorf("Can't create FundTx script with negative coins")
 	}
-	scriptBytes, _, err := FundMultiPre(pubA, puB)
+	scriptBytes, _, err := FundTxScript(pubA, puB)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +152,7 @@ func FundMultiOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
 // FundMultiPre generates the non-p2sh'd multisig script for 2 of 2 pubkeys.
 // useful for making transactions spending the fundtx.
 // returns a bool which is true if swapping occurs.
-func FundMultiPre(aPub, bPub []byte) ([]byte, bool, error) {
+func FundTxScript(aPub, bPub []byte) ([]byte, bool, error) {
 	if len(aPub) != 33 || len(bPub) != 33 {
 		return nil, false, fmt.Errorf("Pubkey size error. Compressed pubkeys only")
 	}
@@ -216,7 +200,7 @@ func P2WSHify(scriptBytes []byte) []byte {
 
 /*----- serialization for MultiOuts ------- */
 
-/* MultiOuts serialization:
+/* Qchan serialization:
 (it's just a utxo with their pubkey)
 byte length   desc   at offset
 
@@ -228,7 +212,7 @@ end len 	86
 peeridx and multidx are inferred from position in db.
 */
 
-func (m *MultiOut) ToBytes() ([]byte, error) {
+func (m *Qchan) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	// first serialize the utxo part
 	uBytes, err := m.Utxo.ToBytes()
@@ -252,8 +236,8 @@ func (m *MultiOut) ToBytes() ([]byte, error) {
 
 // MultiOutFromBytes turns bytes into a MultiOut.
 // the first 53 bytes are the utxo, then next 33 is the pubkey
-func MultiOutFromBytes(b []byte) (MultiOut, error) {
-	var m MultiOut
+func QchanFromBytes(b []byte) (Qchan, error) {
+	var m Qchan
 
 	if len(b) < 86 {
 		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))

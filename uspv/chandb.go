@@ -52,7 +52,7 @@ var (
 	KEYCladr   = []byte("cdr")  // close address (Don't make fun of my lisp)
 )
 
-// GetFundPrivkey generates and returns the private key for a given index.
+// GetFundPrivkey generates and returns the private key for a given peer, index.
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.
 func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
@@ -84,7 +84,7 @@ func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 	return priv
 }
 
-// GetFundPubkey generates and returns the pubkey for a given index.
+// GetFundPubkey generates and returns the fund tx pubkey for a given index.
 // It will return nil if there's an error / problem
 func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
 	priv := ts.GetFundPrivkey(peerIdx, cIdx)
@@ -95,6 +95,22 @@ func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
 	return priv.PubKey()
 }
 
+// CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
+// going into the sub-buckets and their keys. 2^32 max.
+// returns 0xffffffff if there's an error
+func CountKeysInBucket(bkt *bolt.Bucket) uint32 {
+	var i uint32
+	err := bkt.ForEach(func(_, _ []byte) error {
+		i++
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("CountKeysInBucket error: %s\n", err.Error())
+		return 0xffffffff
+	}
+	return i
+}
+
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
 // the first time you connect to someone.  Returns false if already known,
 // true if it added a new peer.  Errors for real errors.
@@ -103,7 +119,12 @@ func (ts *TxStore) NewPeer(pub *btcec.PublicKey) (bool, error) {
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs, _ := btx.CreateBucketIfNotExists(BKTPeers) // only errs on name
 
-		newPeerIdx := uint32(prs.Stats().KeyN) + 1 // new peer index.
+		// you can't use KeyN because that includes everything in sub-buckets.
+		// so we have to count the number of peers here.
+		// If it's slow we could cache it but you probably won't have
+		// millions of peers.
+
+		newPeerIdx := CountKeysInBucket(prs) + 1
 		// starts at 1. There IS NO PEER 0, so you can consider peer 0 invalid.
 
 		pr, err := prs.CreateBucket(pub.SerializeCompressed())
@@ -142,8 +163,8 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	return idx, err
 }
 
-// Initiate a Multisig Request.  Get an index based on peer pubkey
-func (ts *TxStore) NewMultReq(peerBytes []byte) (uint32, error) {
+// NewFundReq initiate a channel request.  Get an index based on peer pubkey
+func (ts *TxStore) NewFundReq(peerBytes []byte) (uint32, error) {
 	var cIdx uint32
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
@@ -204,7 +225,7 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 	return pub.SerializeCompressed(), nil
 }
 
-// MakeMultiTx fills out a multisig funding tx.
+// MakeFundTx fills out a channel funding tx.
 // You need to give it a partial tx with the inputs and change output
 // (everything but the multisig output), the amout of the multisig output,
 // the peerID, and the peer's multisig pubkey.
@@ -244,7 +265,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 		myPubBytes = ts.GetFundPubkey(peerIdx, cIdx).SerializeCompressed()
 
 		// generate multisig output from two pubkeys
-		multiTxOut, err := FundMultiOut(theirPubBytes, myPubBytes, amt)
+		multiTxOut, err := FundTxOut(theirPubBytes, myPubBytes, amt)
 		if err != nil {
 			return err
 		}
@@ -275,7 +296,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 		mUtxo.Value = amt
 		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
-		var mOut MultiOut
+		var mOut Qchan
 		mOut.Utxo = mUtxo
 		mOut.TheirPub = theirPub
 		// serialize multiOut
@@ -309,7 +330,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 	return op, myPubBytes, nil
 }
 
-// SaveMultiTx saves the data in a multiDesc to DB.  We know the outpoint
+// SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
@@ -345,7 +366,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		mUtxo.Value = amt
 		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
-		var mOut MultiOut
+		var mOut Qchan
 		mOut.Utxo = mUtxo
 		mOut.TheirPub = theirPub
 		// serialize multiOut
@@ -363,7 +384,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 	})
 }
 
-// SignMultiTx happens once everything's ready for the tx to be signed and
+// SignFundTx happens once everything's ready for the tx to be signed and
 // broadcast (once you get it ack'd.  It finds the mutli tx, signs it and
 // returns it.  Presumably you send this tx out to the network once it's returned.
 // this function itself doesn't modify height, so it'll still be at -1 untill
@@ -453,17 +474,9 @@ func (ts *TxStore) SignFundTx(
 	return tx, nil
 }
 
-//wa, err := btcutil.NewAddressWitnessPubKeyHash(
-//			SCon.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), SCon.TS.Param)
-//		prevPKScript, err := txscript.PayToAddrScript(wa)
-//		if err != nil {
-//			fmt.Printf("MultiRespHandler err %s", err.Error())
-//			return
-//		}
-
-// GetAllMultiOuts returns a slice of all Multiouts. empty slice is OK.
-func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
-	var multis []*MultiOut
+// GetAllQchans returns a slice of all Multiouts. empty slice is OK.
+func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
+	var qChans []*Qchan
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -487,7 +500,7 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 				if multBkt == nil {
 					return nil // nothing stored
 				}
-				newMult, err := MultiOutFromBytes(multBkt.Get(KEYutxo))
+				newMult, err := QchanFromBytes(multBkt.Get(KEYutxo))
 				if err != nil {
 					return err
 				}
@@ -496,7 +509,7 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 				// fill in myPub from index
 				//				newMult.MyPub = ts.GetFundPubkey(peerIdx, newMult.KeyIdx)
 				// add to slice
-				multis = append(multis, &newMult)
+				qChans = append(qChans, &newMult)
 				return nil
 			})
 			return nil
@@ -506,15 +519,15 @@ func (ts *TxStore) GetAllMultiOuts() ([]*MultiOut, error) {
 	if err != nil {
 		return nil, err
 	}
-	return multis, nil
+	return qChans, nil
 }
 
-// GetMultiOut returns a single multi out.  You need to specify the peer
+// GetQchan returns a single multi out.  You need to specify the peer
 // pubkey and outpoint bytes.
-func (ts *TxStore) GetMultiOut(
-	peerBytes []byte, opArr [36]byte) (*MultiOut, error) {
+func (ts *TxStore) GetQchan(
+	peerBytes []byte, opArr [36]byte) (*Qchan, error) {
 
-	var multi MultiOut
+	var qc Qchan
 	var err error
 	op := OutPointFromBytes(opArr)
 	err = ts.StateDB.View(func(btx *bolt.Tx) error {
@@ -532,12 +545,12 @@ func (ts *TxStore) GetMultiOut(
 				op.String(), peerBytes)
 		}
 
-		multi, err = MultiOutFromBytes(multiBucket.Get(KEYutxo))
+		qc, err = QchanFromBytes(multiBucket.Get(KEYutxo))
 		if err != nil {
 			return err
 		}
 		// note that peerIndex is not set from deserialization!  set it here!
-		multi.PeerIdx = BtU32(pr.Get(KEYIdx))
+		qc.PeerIdx = BtU32(pr.Get(KEYIdx))
 		// fill in myPub from index
 		//		multi.MyPub = ts.GetFundPubkey(multi.PeerIdx, multi.KeyIdx)
 		return nil
@@ -545,11 +558,11 @@ func (ts *TxStore) GetMultiOut(
 	if err != nil {
 		return nil, err
 	}
-	return &multi, nil
+	return &qc, nil
 }
 
-// SetMultiClose sets the address to close to.
-func (ts *TxStore) SetMultiClose(
+// SetChanClose sets the address to close to.
+func (ts *TxStore) SetChanClose(
 	peerBytes []byte, opArr [36]byte, adrArr [20]byte) error {
 
 	return ts.StateDB.Update(func(btx *bolt.Tx) error {
@@ -574,9 +587,9 @@ func (ts *TxStore) SetMultiClose(
 	})
 }
 
-// GetMultiClose recalls the address the multisig/channel has been requested to
+// GetChanClose recalls the address the multisig/channel has been requested to
 // close to.  If there's nothing there it returns a nil slice and an error.
-func (ts *TxStore) GetMultiClose(peerBytes []byte, opArr [36]byte) ([]byte, error) {
+func (ts *TxStore) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error) {
 	adrBytes := make([]byte, 20)
 
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {

@@ -104,7 +104,7 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	if err != nil {
 		return nil, err
 	}
-	allMulti, err := t.GetAllMultiOuts()
+	allMulti, err := t.GetAllQchans()
 	if err != nil {
 		return nil, err
 	}
