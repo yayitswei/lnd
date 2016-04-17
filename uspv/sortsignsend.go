@@ -2,6 +2,7 @@ package uspv
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"sort"
@@ -169,6 +170,121 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	}
 	sort.Sort(rSlice) // send sorted
 	return rSlice, -nokori, nil
+}
+
+func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
+	var err error
+	// fixed fee
+	fee := int64(5000)
+
+	sendAmt := u.Value - fee
+	tx := wire.NewMsgTx() // make new tx
+
+	// add single dropdrop output
+	builder := txscript.NewScriptBuilder()
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_1)
+	outpre, _ := builder.Script()
+
+	txout := wire.NewTxOut(sendAmt, P2WSHify(outpre))
+	tx.AddTxOut(txout)
+
+	// build input
+	var prevPKs []byte
+	if u.IsWit {
+		//		tx.Flags = 0x01
+		wa, err := btcutil.NewAddressWitnessPubKeyHash(
+			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
+		prevPKs, err = txscript.PayToAddrScript(wa)
+		if err != nil {
+			return err
+		}
+	} else { // otherwise generate directly
+		prevPKs, err = txscript.PayToAddrScript(
+			s.TS.Adrs[u.KeyIdx].PkhAdr)
+		if err != nil {
+			return err
+		}
+	}
+	tx.AddTxIn(wire.NewTxIn(&u.Op, prevPKs, nil))
+
+	var sig []byte
+	var wit [][]byte
+	hCache := txscript.NewTxSigHashes(tx)
+
+	child, err := s.TS.rootPrivKey.Child(u.KeyIdx + hdkeychain.HardenedKeyStart)
+
+	if err != nil {
+		return err
+	}
+	priv, err := child.ECPrivKey()
+	if err != nil {
+		return err
+	}
+
+	// This is where witness based sighash types need to happen
+	// sign into stash
+	if u.IsWit {
+		wit, err = txscript.WitnessScript(
+			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
+			txscript.SigHashAll, priv, true)
+		if err != nil {
+			return err
+		}
+	} else {
+		sig, err = txscript.SignatureScript(
+			tx, 0, tx.TxIn[0].SignatureScript,
+			txscript.SigHashAll, priv, true)
+		if err != nil {
+			return err
+		}
+	}
+
+	// swap sigs into sigScripts in txins
+	if sig != nil {
+		tx.TxIn[0].SignatureScript = sig
+	}
+	if wit != nil {
+		tx.TxIn[0].Witness = wit
+		tx.TxIn[0].SignatureScript = nil
+	}
+	err = s.NewOutgoingTx(tx)
+	if err != nil {
+		return err
+	}
+	tx1id := tx.TxSha()
+	sendAmt2 := sendAmt - fee
+	tx2 := wire.NewMsgTx() // make new tx
+
+	// now build a NEW tx spending that one!
+	// add single output
+	outAdrScript, err := txscript.PayToAddrScript(adr)
+	if err != nil {
+		return err
+	}
+
+	txout2 := wire.NewTxOut(sendAmt2, outAdrScript)
+	tx2.AddTxOut(txout2)
+
+	dropIn := wire.NewTxIn(wire.NewOutPoint(&tx1id, 0), nil, nil)
+	dropIn.Witness = make([][]byte, 11)
+
+	for i, _ := range dropIn.Witness {
+		dropIn.Witness[i] = make([]byte, 256)
+		_, err := rand.Read(dropIn.Witness[i])
+		if err != nil {
+			return err
+		}
+	}
+	dropIn.Witness[10] = outpre
+	tx2.AddTxIn(dropIn)
+	fmt.Printf("droptx: %s", TxToString(tx2))
+
+	return s.NewOutgoingTx(tx2)
 }
 
 func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {

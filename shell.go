@@ -502,15 +502,18 @@ func Adr(args []string) error {
 // it does them all individually to there are a lot of txs generated.
 // syntax: sweep adr
 func Sweep(args []string) error {
+	var err error
+	var adr btcutil.Address
 	if len(args) < 2 {
-		return fmt.Errorf("sweep syntax: sweep adr")
+		return fmt.Errorf("sweep syntax: sweep adr howmany (drop)")
 	}
 
-	adr, err := btcutil.DecodeAddress(args[0], SCon.TS.Param)
+	adr, err = btcutil.DecodeAddress(args[0], SCon.TS.Param)
 	if err != nil {
 		fmt.Printf("error parsing %s as address\t", args[0])
 		return err
 	}
+
 	numTxs, err := strconv.ParseInt(args[1], 10, 64)
 	if err != nil {
 		return err
@@ -530,9 +533,25 @@ func Sweep(args []string) error {
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
 
+	if len(args) == 2 {
+		for i, u := range allUtxos {
+			if u.AtHeight != 0 {
+				err = SCon.SendOne(allUtxos[i], adr)
+				if err != nil {
+					return err
+				}
+				numTxs--
+				if numTxs == 0 {
+					return nil
+				}
+			}
+		}
+		fmt.Printf("spent all confirmed utxos; not enough by %d\n", numTxs)
+	}
+	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 {
-			err = SCon.SendOne(allUtxos[i], adr)
+			err = SCon.SendDrop(allUtxos[i], adr)
 			if err != nil {
 				return err
 			}
@@ -542,8 +561,6 @@ func Sweep(args []string) error {
 			}
 		}
 	}
-
-	fmt.Printf("spent all confirmed utxos; not enough by %d\n", numTxs)
 
 	return nil
 }
