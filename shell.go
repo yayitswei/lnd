@@ -66,7 +66,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 17200 // hardcoded; later base on keyfile date?
+		tip = 17670 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -197,7 +197,7 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	// request multisig pubkey, leading to creation of a shared multi tx
+	// fund and create a new channel
 	if cmd == "fund" {
 		err = FundChannel(args)
 		if err != nil {

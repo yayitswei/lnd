@@ -21,6 +21,8 @@ type Qchan struct {
 	MyPubx   *btcec.PublicKey // D my channel specific pubkey
 	TheirPub *btcec.PublicKey // S their channel specific pubkey
 
+	TheirBreakAdr [20]byte // S their address for when you break
+
 	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
 
 	// Elkrem is used for revoking state commitments
@@ -37,7 +39,7 @@ type StatCom struct {
 
 	StateIdx uint64 // this is the n'th state commitment
 
-	RevokeHash [20]byte // preimage of R is required to sweep immediately
+	RevokeHash [16]byte // 16byte hash, preimage of which is needed to sweep.
 	Sig        []byte   // Counterparty's signature (for StatCom tx)
 }
 

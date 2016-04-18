@@ -187,6 +187,9 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	builder.AddOp(txscript.OP_2DROP)
 	builder.AddOp(txscript.OP_2DROP)
 	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
+	builder.AddOp(txscript.OP_2DROP)
 	builder.AddOp(txscript.OP_1)
 	outpre, _ := builder.Script()
 
@@ -271,7 +274,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	tx2.AddTxOut(txout2)
 
 	dropIn := wire.NewTxIn(wire.NewOutPoint(&tx1id, 0), nil, nil)
-	dropIn.Witness = make([][]byte, 11)
+	dropIn.Witness = make([][]byte, 17)
 
 	for i, _ := range dropIn.Witness {
 		dropIn.Witness[i] = make([]byte, 256)
@@ -280,9 +283,9 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 			return err
 		}
 	}
-	dropIn.Witness[10] = outpre
+	dropIn.Witness[16] = outpre
 	tx2.AddTxIn(dropIn)
-	fmt.Printf("droptx: %s", TxToString(tx2))
+	//	fmt.Printf("droptx: %s", TxToString(tx2))
 
 	return s.NewOutgoingTx(tx2)
 }
