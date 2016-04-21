@@ -237,8 +237,9 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 // which figures out the inputs and outputs.  So basically move
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
-func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
-	theirPub *btcec.PublicKey) (*wire.OutPoint, []byte, error) {
+func (ts *TxStore) MakeFundTx(
+	tx *wire.MsgTx, amt int64, peerBytes []byte, theirPub *btcec.PublicKey,
+	theirRefund [20]byte) (*wire.OutPoint, []byte, error) {
 
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
@@ -296,11 +297,12 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 		mUtxo.Value = amt
 		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
-		var mOut Qchan
-		mOut.Utxo = mUtxo
-		mOut.TheirPub = theirPub
+		var qc Qchan
+		qc.Utxo = mUtxo
+		qc.TheirPub = theirPub
+		qc.TheirRefundAdr = theirRefund
 		// serialize multiOut
-		mOutBytes, err := mOut.ToBytes()
+		mOutBytes, err := qc.ToBytes()
 		if err != nil {
 			return err
 		}
@@ -334,7 +336,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerBytes []byte,
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerBytes []byte, theirPub *btcec.PublicKey) error {
+	peerBytes []byte, theirPub *btcec.PublicKey, theirRefund [20]byte) error {
 
 	var cIdx uint32
 
@@ -366,11 +368,12 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		mUtxo.Value = amt
 		mUtxo.IsWit = true // multi/chan always wit
 		mUtxo.Op = *op
-		var mOut Qchan
-		mOut.Utxo = mUtxo
-		mOut.TheirPub = theirPub
+		var qc Qchan
+		qc.Utxo = mUtxo
+		qc.TheirPub = theirPub
+		qc.TheirRefundAdr = theirRefund
 		// serialize multiOut
-		mOutBytes, err := mOut.ToBytes()
+		mOutBytes, err := qc.ToBytes()
 		if err != nil {
 			return err
 		}

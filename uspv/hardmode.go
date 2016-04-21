@@ -128,6 +128,7 @@ func (ts *TxStore) RefilterLocal() error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("generated filter %x\n", ts.localFilter.MsgFilterLoad().Filter)
 	return nil
 }
 
@@ -165,8 +166,8 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 	}
 
 	fPositive := 0 // local filter false positives
-	reFilter := 10 // after that many false positives, regenerate filter.
-	// 10?  Making it up.  False positives have disk i/o cost, and regenning
+	reFilter := 2  // after that many false positives, regenerate filter.
+	// 2?  Making it up.  False positives have disk i/o cost, and regenning
 	// the filter also has costs.  With a large local filter, false positives
 	// should be rare.
 

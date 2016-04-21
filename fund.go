@@ -21,7 +21,7 @@ func FundChannel(args []string) error {
 }
 
 // PubReqHandler gets a (content-less) pubkey request.  Respond with a pubkey
-// note that this only causes a disk read, not a disk write.
+// and a refund pubkey hash. (currently makes pubkey hash, need to only make 1)
 // so if someone sends 10 pubkeyreqs, they'll get the same pubkey back 10 times.
 // they have to provide an actual tx before the next pubkey will come out.
 func PubReqHandler(from [16]byte) {
@@ -33,19 +33,35 @@ func PubReqHandler(from [16]byte) {
 		return
 	}
 	fmt.Printf("Generated pubkey %x\n", pub)
+
+	adr, _ := SCon.TS.NewAdr() // ignore error for now
+	if len(adr.ScriptAddress()) != 20 {
+		fmt.Printf("refund address error\n")
+		return
+	}
+
 	msg := []byte{uwire.MSGID_PUBRESP}
 	msg = append(msg, pub...)
-
+	msg = append(msg, adr.ScriptAddress()...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
 
 // PubRespHandler -once the pubkey response comes back, we can create the
 // transaction.  Create, save to DB, sign and send over the wire (and broadcast)
-func PubRespHandler(from [16]byte, theirPubBytes []byte) {
+func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	qChanCapacity := int64(2000000) // this will be an arg
 	satPerByte := int64(80)
 	capBytes := uspv.I64tB(qChanCapacity)
+	if len(pubRespBytes) != 53 {
+		fmt.Printf("PubRespHandler err: pubRespBytes %d bytes, expect 53\n",
+			len(pubRespBytes))
+		return
+	}
+
+	theirPubBytes := pubRespBytes[:33]
+	var theirRefundAdr [20]byte
+	copy(theirRefundAdr[:], pubRespBytes[33:])
 
 	// make sure their pubkey is a pubkey
 	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
@@ -90,7 +106,7 @@ func PubRespHandler(from [16]byte, theirPubBytes []byte) {
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
 	op, myPubBytes, err := SCon.TS.MakeFundTx(
-		tx, qChanCapacity, peerBytes, theirPub)
+		tx, qChanCapacity, peerBytes, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
@@ -101,10 +117,16 @@ func PubRespHandler(from [16]byte, theirPubBytes []byte) {
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
+	adr, _ := SCon.TS.NewAdr() // ignore error for now
+	if len(adr.ScriptAddress()) != 20 {
+		fmt.Printf("refund address error\n")
+		return
+	}
 	// description is outpoint (36), myPubkey(33), multisig capacity (8)
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
+	msg = append(msg, adr.ScriptAddress()...)
 	// do you actually need to say the capacity?  They'll figure it out...
 	// nah, better to send capacity; needed for channel refund
 	msg = append(msg, capBytes...)
@@ -113,10 +135,10 @@ func PubRespHandler(from [16]byte, theirPubBytes []byte) {
 	return
 }
 
-// QChanDescHandler takes in a description of a multisig output.  It then
+// QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) != 77 {
+	if len(descbytes) != 97 {
 		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
 		return
 	}
@@ -131,12 +153,13 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	var opBytes [36]byte
 	copy(opBytes[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opBytes)
-	amt := uspv.BtI64(descbytes[69:])
+	theirRefundAdr := descbytes[69:89]
+	amt := uspv.BtI64(descbytes[89:])
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	err = SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub)
+	err = SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
@@ -150,7 +173,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 
-	// ACK the multi address, which causes the funder to sign / broadcast
+	// ACK the channel address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), that's all.
 	msg := []byte{uwire.MSGID_MULTIACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)

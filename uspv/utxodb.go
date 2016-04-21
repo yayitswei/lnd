@@ -409,10 +409,7 @@ func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 }
 
 func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
-	txs := make([]*wire.MsgTx, 1)
-	txs[0] = tx
-	fmt.Printf("ingesting %d tx\n", len(txs))
-	return ts.IngestMany(txs, height)
+	return ts.IngestMany([]*wire.MsgTx{tx}, height)
 }
 
 // IngestMany puts txs into the DB atomically.  This can result in a
@@ -640,7 +637,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 				}
 			}
 		}
-		// check for hits
+		// save all txs with hits
 		for i, tx := range txs {
 			if hitTxs[i] == true {
 				var buf bytes.Buffer

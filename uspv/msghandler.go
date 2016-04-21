@@ -160,18 +160,27 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 	//		}
 	//	}
 	utilTx := btcutil.NewTx(m)
-	fmt.Printf("herrrrr \n")
 	if !s.HardMode || s.TS.localFilter.MatchTxAndUpdate(utilTx) {
 		hits, err := s.TS.Ingest(m, height)
 		if err != nil {
 			log.Printf("Incoming Tx error: %s\n", err.Error())
 			return
 		}
-		if hits == 0 && !s.HardMode {
-			log.Printf("tx %s had no hits, filter false positive.",
-				m.TxSha().String())
-			s.fPositives <- 1 // add one false positive to chan
-			return
+
+		if hits == 0 {
+			if s.HardMode {
+				// refilter if local; shouldn't have in-mem false positives
+				err = s.TS.RefilterLocal()
+				if err != nil {
+					log.Printf("Incoming Tx error: %s\n", err.Error())
+					return
+				}
+			} else { // remote filters / easyMode
+				log.Printf("tx %s had no hits, filter false positive.",
+					m.TxSha().String())
+				s.fPositives <- 1 // add one false positive to chan
+				return
+			}
 		}
 		log.Printf("tx %s ingested and matches %d utxo/adrs.",
 			m.TxSha().String(), hits)

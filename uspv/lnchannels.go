@@ -21,7 +21,7 @@ type Qchan struct {
 	MyPubx   *btcec.PublicKey // D my channel specific pubkey
 	TheirPub *btcec.PublicKey // S their channel specific pubkey
 
-	TheirBreakAdr [20]byte // S their address for when you break
+	TheirRefundAdr [20]byte // S their address for when you break
 
 	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
 
