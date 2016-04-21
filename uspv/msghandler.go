@@ -160,6 +160,7 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 	//		}
 	//	}
 	utilTx := btcutil.NewTx(m)
+	fmt.Printf("herrrrr \n")
 	if !s.HardMode || s.TS.localFilter.MatchTxAndUpdate(utilTx) {
 		hits, err := s.TS.Ingest(m, height)
 		if err != nil {

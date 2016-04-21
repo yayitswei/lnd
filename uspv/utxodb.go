@@ -408,31 +408,53 @@ func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 	return nil
 }
 
-// Ingest puts a tx into the DB atomically.  This can result in a
+func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
+	txs := make([]*wire.MsgTx, 1)
+	txs[0] = tx
+	fmt.Printf("ingesting %d tx\n", len(txs))
+	return ts.IngestMany(txs, height)
+}
+
+// IngestMany puts txs into the DB atomically.  This can result in a
 // gain, a loss, or no result.  Gain or loss in satoshis is returned.
 // This function seems too big and complicated.  Maybe can split it up
 // or simplify it.
-func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
+// IngestMany can probably work OK even if the txs are out of order.
+// But don't do that, that's weird and untested.
+// also it'll error if you give it more than 1M txs, so don't.
+func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 	var hits uint32
 	var err error
-	var nUtxoBytes [][]byte
+	var nUtxoBytes [][]byte // serialized new utxos to store
 
-	// tx has been OK'd by SPV; check tx sanity
-	utilTx := btcutil.NewTx(tx) // convert for validation
-	// checks basic stuff like there are inputs and ouputs
-	err = blockchain.CheckTransactionSanity(utilTx)
-	if err != nil {
-		return hits, err
+	cachedShas := make([]*wire.ShaHash, len(txs)) // cache every txid
+
+	hitTxs := make([]bool, len(txs)) // keep track of which txs to store
+
+	// not worth making a struct but these 2 go together
+	spentOPs := make([][]byte, 0, len(txs)) // at least 1 txin per tx
+	// spendTxIdx tells which tx (in the txs slice) the utxo loss came from
+	spentTxIdx := make([]uint32, 0, len(txs))
+
+	if len(txs) < 1 || len(txs) > 1000000 {
+		return 0, fmt.Errorf("tried to ingest %d txs, expect 1 to 1M", len(txs))
 	}
-	// note that you can't check signatures; this is SPV.
-	// 0 conf SPV means pretty much nothing.  Anyone can say anything.
 
-	spentOPs := make([][]byte, len(tx.TxIn))
-	// before entering into db, serialize all inputs of the ingested tx
-	for i, txin := range tx.TxIn {
-		spentOPs[i] = OutPointToBytes(txin.PreviousOutPoint)
-		if spentOPs[i] == nil {
-			return hits, fmt.Errorf("got nil outpoint")
+	// initial in-ram work on all txs.
+	for i, tx := range txs {
+		// tx has been OK'd by SPV; check tx sanity
+		utilTx := btcutil.NewTx(tx) // convert for validation
+		// checks basic stuff like there are inputs and ouputs
+		err = blockchain.CheckTransactionSanity(utilTx)
+		if err != nil {
+			return hits, err
+		}
+		// cache all txids
+		cachedShas[i] = utilTx.Sha()
+		// before entering into db, serialize all inputs of ingested txs
+		for _, txin := range tx.TxIn {
+			spentOPs = append(spentOPs, OutPointToBytes(txin.PreviousOutPoint))
+			spentTxIdx = append(spentTxIdx, uint32(i)) // save tx it came from
 		}
 	}
 
@@ -461,37 +483,42 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 		}
 	}
 
-	cachedSha := tx.TxSha()
-
 	// iterate through all outputs of this tx, see if we gain utxo (in ram)
-	for i, out := range tx.TxOut {
-		for j, ascr := range aPKscripts {
-			// detect p2wpkh
-			witBool := false
-			if bytes.Equal(out.PkScript, wPKscripts[j]) {
-				witBool = true
-			}
-			if bytes.Equal(out.PkScript, ascr) || witBool { // new utxo found
-				var newu Utxo // create new utxo and copy into it
-				newu.AtHeight = height
-				newu.KeyIdx = ts.Adrs[j].KeyIdx
-				newu.Value = out.Value
-				newu.IsWit = witBool // copy witness version from pkscript
-				var newop wire.OutPoint
-				newop.Hash = cachedSha
-				newop.Index = uint32(i)
-				newu.Op = newop
-				b, err := newu.ToBytes()
-				if err != nil {
-					return hits, err
+	// stash serialized copies of all new utxos, which we add to db later.
+	// not sure how bolt works in terms of sorting.  Faster to sort here
+	// or let bolt sort it?
+	for i, tx := range txs {
+		for j, out := range tx.TxOut {
+			for k, ascr := range wPKscripts {
+				// detect p2wpkh
+				witBool := false
+				if bytes.Equal(out.PkScript, wPKscripts[k]) {
+					witBool = true
 				}
-				nUtxoBytes = append(nUtxoBytes, b)
-				hits++
-				break // txos can match only 1 script
+				if bytes.Equal(out.PkScript, ascr) || witBool { // new utxo found
+					var newu Utxo // create new utxo and copy into it
+					newu.AtHeight = height
+					newu.KeyIdx = ts.Adrs[k].KeyIdx
+					newu.Value = out.Value
+					newu.IsWit = witBool // copy witness version from pkscript
+					var newop wire.OutPoint
+					newop.Hash = *cachedShas[i]
+					newop.Index = uint32(j)
+					newu.Op = newop
+					b, err := newu.ToBytes()
+					if err != nil {
+						return hits, err
+					}
+					nUtxoBytes = append(nUtxoBytes, b)
+					hits++
+					hitTxs[i] = true
+					break // txos can match only 1 script
+				}
 			}
 		}
 	}
 
+	// now do the db write (this is the expensive / slow part)
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
 		// get all 4 buckets
 		duf := btx.Bucket(BKTUtxos)
@@ -516,37 +543,42 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 						//	fmt.Printf("val %x\n", nthin)
 						return nil // non-bucket / outpoint
 					}
-					multiBucket := pr.Bucket(opBytes)
-					if multiBucket == nil {
+					qchanBucket := pr.Bucket(opBytes)
+					if qchanBucket == nil {
 						return nil // nothing stored / not a bucket
 					}
-					hitMult, err := QchanFromBytes(multiBucket.Get(KEYutxo))
+					// found a channel, deserialize
+					hitQChan, err := QchanFromBytes(qchanBucket.Get(KEYutxo))
 					if err != nil {
 						return err
 					}
 					// check if we gain a known txid but unknown tx
-					if bytes.Equal(cachedSha.Bytes(), hitMult.Op.Hash.Bytes()) {
-						// hit; ingesting tx which matches chan/multi
-						// all we do is assign height and increment hits
-						// (which will save the tx)
-						hits++
-						hitMult.Utxo.AtHeight = height
-						mOutBytes, err := hitMult.ToBytes()
-						if err != nil {
-							return err
-						}
-						// save multiout in the bucket
-						err = multiBucket.Put(KEYutxo, mOutBytes)
-						if err != nil {
-							return err
+					for i, txid := range cachedShas {
+						if bytes.Equal(txid.Bytes(), hitQChan.Op.Hash.Bytes()) {
+							// hit; ingesting tx which matches chan/multi
+							// all we do is assign height and increment hits
+							// (which will save the tx)
+							hits++
+							hitTxs[i] = true
+							hitQChan.Utxo.AtHeight = height
+							mOutBytes, err := hitQChan.ToBytes()
+							if err != nil {
+								return err
+							}
+							// save multiout in the bucket
+							err = qchanBucket.Put(KEYutxo, mOutBytes)
+							if err != nil {
+								return err
+							}
 						}
 					}
 					// check if it's spending the multiout
-					for _, spentOP := range spentOPs {
+					for i, spentOP := range spentOPs {
 						if bytes.Equal(spentOP, opBytes) {
 							// this multixo is now spent.
 							// CHANGE THIS!  can't actually delete.
 							hits++
+							hitTxs[spentTxIdx[i]] = true
 							err = pr.DeleteBucket(opBytes)
 							if err != nil {
 								return err
@@ -562,12 +594,23 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 			// end of peer checking
 		}
 
+		// first gain, then lose
+		// add all new utxos to db, this is quick as the work is above
+		for _, ub := range nUtxoBytes {
+			err = duf.Put(ub[:36], ub[36:])
+			if err != nil {
+				return err
+			}
+		}
+
 		// iterate through duffel bag and look for matches
 		// this makes us lose money, which is regrettable, but we need to know.
-		for _, nOP := range spentOPs {
+		// could lose stuff we just gained, that's OK.
+		for i, nOP := range spentOPs {
 			v := duf.Get(nOP)
 			if v != nil {
 				hits++
+				hitTxs[spentTxIdx[i]] = true
 				// do all this just to figure out value we lost
 				x := make([]byte, len(nOP)+len(v))
 				copy(x, nOP)
@@ -578,11 +621,11 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 				}
 
 				// after marking for deletion, save stxo to old bucket
-				var st Stxo               // generate spent txo
-				st.Utxo = lostTxo         // assign outpoint
-				st.SpendHeight = height   // spent at height
-				st.SpendTxid = cachedSha  // spent by txid
-				stxb, err := st.ToBytes() // serialize
+				var st Stxo                               // generate spent txo
+				st.Utxo = lostTxo                         // assign outpoint
+				st.SpendHeight = height                   // spent at height
+				st.SpendTxid = *cachedShas[spentTxIdx[i]] // spent by txid
+				stxb, err := st.ToBytes()                 // serialize
 				if err != nil {
 					return err
 				}
@@ -597,28 +640,20 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 				}
 			}
 		}
-
-		// done losing utxos, next gain utxos
-		// next add all new utxos to db, this is quick as the work is above
-		for _, ub := range nUtxoBytes {
-			err = duf.Put(ub[:36], ub[36:])
-			if err != nil {
-				return err
-			}
-		}
-
-		fmt.Printf("ingest tx %s with %d hits\n", tx.TxSha().String(), hits)
-		// if hits is nonzero it's a relevant tx and we should store it
-		if hits != 0 {
-			var buf bytes.Buffer
-			tx.SerializeWitness(&buf) // always store witness version
-			err = txns.Put(cachedSha.Bytes(), buf.Bytes())
-			if err != nil {
-				return err
+		// check for hits
+		for i, tx := range txs {
+			if hitTxs[i] == true {
+				var buf bytes.Buffer
+				tx.SerializeWitness(&buf) // always store witness version
+				err = txns.Put(cachedShas[i].Bytes(), buf.Bytes())
+				if err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
 
+	fmt.Printf("ingest %d txs, %d hits\n", len(txs), hits)
 	return hits, err
 }

@@ -172,20 +172,27 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 
 	// iterate through all txs in the block, looking for matches.
 	// use a local bloom filter to ignore txs that don't affect us
+	txs := make([]*wire.MsgTx, 0, len(m.Transactions))
 	for _, tx := range m.Transactions {
 		utilTx := btcutil.NewTx(tx)
+		// find txs that look like hits
 		if s.TS.localFilter.MatchTxAndUpdate(utilTx) {
-			hits, err := s.TS.Ingest(tx, hah.height)
-			if err != nil {
-				log.Printf("Incoming Tx error: %s\n", err.Error())
-				return
-			}
-			if hits > 0 {
-				// log.Printf("block %d tx %d %s ingested and matches %d utxo/adrs.",
-				//	hah.height, i, tx.TxSha().String(), hits)
-			} else {
-				fPositive++ // matched filter but no hits
-			}
+			txs = append(txs, tx)
+		}
+	}
+	// anything good?
+	if len(txs) > 0 {
+		// ingest all the txs
+		hits, err := s.TS.IngestMany(txs, hah.height)
+		if err != nil {
+			log.Printf("Incoming block error: %s\n", err.Error())
+			return
+		}
+		if hits > 0 {
+			// log.Printf("block %d tx %d %s ingested and matches %d utxo/adrs.",
+			//	hah.height, i, tx.TxSha().String(), hits)
+		} else {
+			fPositive += len(txs) // matched filter but no hits
 		}
 	}
 
