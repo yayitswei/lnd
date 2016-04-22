@@ -47,14 +47,14 @@ func CloseChannel(args []string) error {
 	}
 
 	// get all multi txs
-	multis, err := SCon.TS.GetAllQchans()
+	qcs, err := SCon.TS.GetAllQchans()
 	if err != nil {
 		return err
 	}
 	var found bool
 	var opBytes []byte
 	// find the multi we want to close
-	for _, m := range multis {
+	for _, m := range qcs {
 		if m.PeerIdx == currentPeerIdx && m.KeyIdx == uint32(cIdx) {
 			opBytes = uspv.OutPointToBytes(m.Op)
 			fmt.Printf("peerIdx %d multIdx %d height %d %s amt: %d\n",

@@ -27,22 +27,16 @@ func FundChannel(args []string) error {
 func PubReqHandler(from [16]byte) {
 	// pub req; check that idx matches next idx of ours and create pubkey
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	pub, err := SCon.TS.NextPubForPeer(peerBytes)
+	pub, refundadr, err := SCon.TS.NextPubForPeer(peerBytes)
 	if err != nil {
 		fmt.Printf("MultiReqHandler err %s", err.Error())
 		return
 	}
 	fmt.Printf("Generated pubkey %x\n", pub)
 
-	adr, _ := SCon.TS.NewAdr() // ignore error for now
-	if len(adr.ScriptAddress()) != 20 {
-		fmt.Printf("refund address error\n")
-		return
-	}
-
 	msg := []byte{uwire.MSGID_PUBRESP}
 	msg = append(msg, pub...)
-	msg = append(msg, adr.ScriptAddress()...)
+	msg = append(msg, refundadr...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -105,7 +99,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
-	op, myPubBytes, err := SCon.TS.MakeFundTx(
+	op, myPubBytes, myRefundBytes, err := SCon.TS.MakeFundTx(
 		tx, qChanCapacity, peerBytes, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
@@ -126,7 +120,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
-	msg = append(msg, adr.ScriptAddress()...)
+	msg = append(msg, myRefundBytes...)
 	// do you actually need to say the capacity?  They'll figure it out...
 	// nah, better to send capacity; needed for channel refund
 	msg = append(msg, capBytes...)
@@ -151,9 +145,10 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	}
 	// deserialize outpoint
 	var opBytes [36]byte
+	var theirRefundAdr [20]byte
 	copy(opBytes[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opBytes)
-	theirRefundAdr := descbytes[69:89]
+	copy(theirRefundAdr[:], descbytes[69:89])
 	amt := uspv.BtI64(descbytes[89:])
 
 	// save to db

@@ -22,6 +22,9 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener...
 func NewListener(localPriv *btcec.PrivateKey, listenAddr string) (*Listener, error) {
+	if localPriv == nil {
+		return nil, fmt.Errorf("NewListener: nil private key")
+	}
 	addr, err := net.ResolveTCPAddr("tcp", listenAddr)
 	if err != nil {
 		return nil, err
@@ -187,7 +190,7 @@ func (l *Listener) authenticateConnection(
 	copy(lnConn.RemoteLNId[:], theirAdr[:16])
 	lnConn.RemotePub = theirPub
 	lnConn.Authed = true
-	
+
 	return nil
 }
 

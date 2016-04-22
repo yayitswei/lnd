@@ -6,11 +6,9 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/blockchain"
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/hdkeychain"
 
 	"github.com/boltdb/bolt"
 )
@@ -80,49 +78,6 @@ func (ts *TxStore) OpenDB(filename string) error {
 	return ts.PopulateAdrs(numKeys)
 }
 
-// NewPub generates and returns a new public key.  Also tells you the index
-// DOESN'T save it to disk yet; maybe use a different branch
-func (ts *TxStore) NewPubx() (*btcec.PublicKey, uint32, error) {
-	// check number of multi pubkeys from db
-	var numkeys uint32
-	// also increment them.  Increment happens even if something later
-	// fails, which is OK (plenty of keys)
-	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
-		sta := btx.Bucket(BKTState)
-		nkB := sta.Get(KEYNumMulti)
-		if nkB == nil {
-			numkeys = 0
-		} else {
-			err := binary.Read(bytes.NewBuffer(nkB), binary.BigEndian, &numkeys)
-			if err != nil {
-				return err
-			}
-		}
-		numkeys++
-		var buf bytes.Buffer
-		err := binary.Write(&buf, binary.BigEndian, numkeys)
-		if err != nil {
-			return err
-		}
-		return sta.Put(KEYNumMulti, buf.Bytes())
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-
-	privMultTop, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		return nil, 0, err
-	}
-	priv, err := privMultTop.Child(numkeys + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	pub, err := priv.ECPubKey()
-	return pub, numkeys, err
-}
-
 // make a new change output.  I guess this is supposed to be on a different
 // branch than regular addresses...
 func (ts *TxStore) NewChangeOut(amt int64) (*wire.TxOut, error) {
@@ -146,23 +101,13 @@ func (ts *TxStore) NewChangeOut(amt int64) (*wire.TxOut, error) {
 // NewAdr creates a new, never before seen address, and increments the
 // DB counter as well as putting it in the ram Adrs store, and returns it
 func (ts *TxStore) NewAdr() (btcutil.Address, error) {
+	var err error
 	if ts.Param == nil {
 		return nil, fmt.Errorf("NewAdr error: nil param")
 	}
-
-	priv := new(hdkeychain.ExtendedKey)
-	var err error
-	var nAdr btcutil.Address
-
 	n := uint32(len(ts.Adrs))
-	priv, err = ts.rootPrivKey.Child(n + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		return nil, err
-	}
-	nAdr, err = priv.Address(ts.Param)
-	if err != nil {
-		return nil, err
-	}
+
+	nAdr := ts.GetWalletAddress(n)
 
 	// total number of keys (now +1) into 4 bytes
 	var buf bytes.Buffer
@@ -390,18 +335,8 @@ func (ts *TxStore) GetPendingInv() (*wire.MsgInv, error) {
 // PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
 func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 	for k := uint32(0); k < lastKey; k++ {
-
-		priv, err := ts.rootPrivKey.Child(k + hdkeychain.HardenedKeyStart)
-		if err != nil {
-			return err
-		}
-
-		newAdr, err := priv.Address(ts.Param)
-		if err != nil {
-			return err
-		}
 		var ma MyAdr
-		ma.PkhAdr = newAdr
+		ma.PkhAdr = ts.GetWalletAddress(k)
 		ma.KeyIdx = k
 		ts.Adrs = append(ts.Adrs, ma)
 	}

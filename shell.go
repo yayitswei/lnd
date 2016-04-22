@@ -221,7 +221,7 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	if cmd == "cfail" {
+	if cmd == "break" {
 		err = BreakChannel(args)
 		if err != nil {
 			fmt.Printf("BreakChannel error: %s\n", err)
@@ -240,11 +240,7 @@ func Lis(args []string) error {
 }
 
 func TCPListener() {
-	idPriv, err := SCon.TS.IdKey()
-	if err != nil {
-		log.Printf(err.Error())
-		return
-	}
+	idPriv := SCon.TS.IdKey()
 
 	listener, err := lndc.NewListener(idPriv, ":2448")
 	if err != nil {
@@ -285,7 +281,7 @@ func Con(args []string) error {
 	var err error
 
 	if len(args) == 0 {
-		return fmt.Errorf("need: con pubkeyhash@hostname")
+		return fmt.Errorf("need: con pubkeyhash@hostname:port")
 	}
 
 	newNode, err := lndc.LnAddrFromString(args[0])
@@ -293,10 +289,7 @@ func Con(args []string) error {
 		return err
 	}
 
-	idPriv, err := SCon.TS.IdKey()
-	if err != nil {
-		return err
-	}
+	idPriv := SCon.TS.IdKey()
 
 	RemoteCon = new(lndc.LNDConn)
 
@@ -426,14 +419,15 @@ func Bal(args []string) error {
 		}
 	}
 
-	gmos, err := SCon.TS.GetAllQchans()
+	qcs, err := SCon.TS.GetAllQchans()
 	if err != nil {
 		return err
 	}
-	for i, m := range gmos {
-		tk := m.TheirPub.SerializeCompressed()
-		fmt.Printf("chan %d %s h: %d (%d,%d) a: %d thrpub %x\n",
-			i, m.Op.String(), m.AtHeight, m.PeerIdx, m.KeyIdx, m.Value, tk[:4])
+	for _, q := range qcs {
+		tk := q.TheirPub.SerializeCompressed()
+		fmt.Printf("%s h: %d (%d,%d) a: %d rp %x rr: %x\n",
+			q.Op.String(), q.AtHeight, q.PeerIdx, q.KeyIdx,
+			q.Value, tk[:4], q.TheirRefundAdr[:4])
 	}
 
 	height, _ := SCon.TS.GetDBSyncHeight()
@@ -535,7 +529,7 @@ func Sweep(args []string) error {
 
 	if len(args) == 2 {
 		for i, u := range allUtxos {
-			if u.AtHeight != 0 {
+			if u.AtHeight != 0 && u.Value > 0 {
 				err = SCon.SendOne(allUtxos[i], adr)
 				if err != nil {
 					return err

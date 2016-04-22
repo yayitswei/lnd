@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcutil/txsort"
 )
 
@@ -51,49 +50,6 @@ var (
 	KEYUnsig   = []byte("usig") // unsigned fund tx
 	KEYCladr   = []byte("cdr")  // close address (Don't make fun of my lisp)
 )
-
-// GetFundPrivkey generates and returns the private key for a given peer, index.
-// It will return nil if there's an error / problem, but there shouldn't be
-// unless the root key itself isn't there or something.
-func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	// fmt.Printf("\tgenerating key for peerindex %d, keyindex %d\n", peerIdx, cIdx)
-
-	multiRoot, err := ts.rootPrivKey.Child(2 + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		fmt.Printf("GetFundPrivkey err %s", err.Error())
-		return nil
-	}
-	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		fmt.Printf("GetFundPrivkey err %s", err.Error())
-		return nil
-	}
-	multiChild, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		fmt.Printf("GetFundPrivkey err %s", err.Error())
-		return nil
-	}
-	priv, err := multiChild.ECPrivKey()
-	if err != nil {
-		fmt.Printf("GetFundPrivkey err %s", err.Error())
-		return nil
-	}
-	pubbyte := priv.PubKey().SerializeCompressed()
-	fmt.Printf("- - -generated %d, %d %x\n",
-		peerIdx, cIdx, pubbyte[:8])
-	return priv
-}
-
-// GetFundPubkey generates and returns the fund tx pubkey for a given index.
-// It will return nil if there's an error / problem
-func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
-	priv := ts.GetFundPrivkey(peerIdx, cIdx)
-	if priv == nil {
-		fmt.Printf("GetFundPubkeyBytes peer %d idx %d failed", peerIdx, cIdx)
-		return nil
-	}
-	return priv.PubKey()
-}
 
 // CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
 // going into the sub-buckets and their keys. 2^32 max.
@@ -194,7 +150,7 @@ func (ts *TxStore) NewFundReq(peerBytes []byte) (uint32, error) {
 
 // NextPubForPeer returns the next pubkey to use with the peer.
 // It first checks that the peer exists, next pubkey.  Read only.
-func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
+func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, []byte, error) {
 	var peerIdx, cIdx uint32
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
@@ -218,11 +174,15 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	pub := ts.GetFundPubkey(peerIdx, cIdx)
-	return pub.SerializeCompressed(), nil
+	adr := ts.GetRefundAddressBytes(peerIdx, cIdx)
+	if pub == nil || adr == nil {
+		return nil, nil, fmt.Errorf("NextPubForPeer: nil key")
+	}
+	return pub.SerializeCompressed(), adr, nil
 }
 
 // MakeFundTx fills out a channel funding tx.
@@ -239,13 +199,13 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, error) {
 //TODO ^^^^^^^^^^
 func (ts *TxStore) MakeFundTx(
 	tx *wire.MsgTx, amt int64, peerBytes []byte, theirPub *btcec.PublicKey,
-	theirRefund [20]byte) (*wire.OutPoint, []byte, error) {
+	theirRefund [20]byte) (*wire.OutPoint, []byte, []byte, error) {
 
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
-	var myPubBytes []byte
-
+	var myPubBytes, myRefundBytes []byte
 	theirPubBytes := theirPub.SerializeCompressed()
+
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
@@ -263,8 +223,12 @@ func (ts *TxStore) MakeFundTx(
 		cIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
 
 		// generate pubkey from peer, multi indexes
-		myPubBytes = ts.GetFundPubkey(peerIdx, cIdx).SerializeCompressed()
-
+		myPub := ts.GetFundPubkey(peerIdx, cIdx)
+		myRefundBytes := ts.GetRefundAddressBytes(peerIdx, cIdx)
+		if myPub == nil || myRefundBytes == nil {
+			return fmt.Errorf("nil key")
+		}
+		myPubBytes = myPub.SerializeCompressed()
 		// generate multisig output from two pubkeys
 		multiTxOut, err := FundTxOut(theirPubBytes, myPubBytes, amt)
 		if err != nil {
@@ -326,10 +290,10 @@ func (ts *TxStore) MakeFundTx(
 		return multiBucket.Put(KEYUnsig, buf.Bytes())
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return op, myPubBytes, nil
+	return op, myPubBytes, myRefundBytes, nil
 }
 
 // SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
@@ -442,14 +406,8 @@ func (ts *TxStore) SignFundTx(
 			// amt is 8 bytes in
 			amt := BtI64(halfUtxo[8:16])
 
-			child, err := ts.rootPrivKey.Child(kIdx + hdkeychain.HardenedKeyStart)
-			if err != nil {
-				return err
-			}
-			priv, err := child.ECPrivKey()
-			if err != nil {
-				return err
-			}
+			priv := ts.GetWalletPrivkey(kIdx)
+
 			// gotta add subscripts to sign
 			witAdr, err := btcutil.NewAddressWitnessPubKeyHash(
 				ts.Adrs[kIdx].PkhAdr.ScriptAddress(), ts.Param)
@@ -499,20 +457,23 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 					//					fmt.Printf("val %x\n", nthin)
 					return nil // non-bucket / outpoint
 				}
-				multBkt := pr.Bucket(op)
-				if multBkt == nil {
+				qcBucket := pr.Bucket(op)
+				if qcBucket == nil {
 					return nil // nothing stored
 				}
-				newMult, err := QchanFromBytes(multBkt.Get(KEYutxo))
+				newQc, err := QchanFromBytes(qcBucket.Get(KEYutxo))
 				if err != nil {
 					return err
 				}
 				// fill in peerIdx from db context
-				newMult.PeerIdx = peerIdx
+				newQc.PeerIdx = peerIdx
 				// fill in myPub from index
-				//				newMult.MyPub = ts.GetFundPubkey(peerIdx, newMult.KeyIdx)
+				newQc.MyPub = ts.GetFundPubkey(peerIdx, newQc.KeyIdx)
+				// fill in my refund from index
+				copy(newQc.MyRefundAdr[:],
+					ts.GetRefundAddressBytes(peerIdx, newQc.KeyIdx))
 				// add to slice
-				qChans = append(qChans, &newMult)
+				qChans = append(qChans, &newQc)
 				return nil
 			})
 			return nil
@@ -542,18 +503,23 @@ func (ts *TxStore) GetQchan(
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", peerBytes)
 		}
-		multiBucket := pr.Bucket(opArr[:])
-		if multiBucket == nil {
+		qcBucket := pr.Bucket(opArr[:])
+		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
 				op.String(), peerBytes)
 		}
 
-		qc, err = QchanFromBytes(multiBucket.Get(KEYutxo))
+		qc, err = QchanFromBytes(qcBucket.Get(KEYutxo))
 		if err != nil {
 			return err
 		}
 		// note that peerIndex is not set from deserialization!  set it here!
 		qc.PeerIdx = BtU32(pr.Get(KEYIdx))
+
+		qc.MyPub = ts.GetFundPubkey(qc.PeerIdx, qc.KeyIdx)
+		// fill in my refund from index
+		copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(qc.PeerIdx, qc.KeyIdx))
+
 		// fill in myPub from index
 		//		multi.MyPub = ts.GetFundPubkey(multi.PeerIdx, multi.KeyIdx)
 		return nil
@@ -562,6 +528,62 @@ func (ts *TxStore) GetQchan(
 		return nil, err
 	}
 	return &qc, nil
+}
+
+// GetQchanByIdx is a gets the channel when you don't know the peer bytes and
+// outpoint.  Probably shouldn't have to use this if the UI is done right though.
+func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
+	var qc *Qchan
+	var err error
+	err = ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		// look through peers for peer index
+		prs.ForEach(func(idPub, nothin []byte) error {
+			if nothin != nil {
+				return nil // non-bucket
+			}
+			if qc != nil {
+				return nil
+			}
+			pr := prs.Bucket(idPub) // go into this peer's bucket
+			if BtU32(pr.Get(KEYIdx)) == peerIdx {
+				return pr.ForEach(func(op, nthin []byte) error {
+					if nthin != nil {
+						return nil // non-bucket / outpoint
+					}
+					if qc != nil {
+						return nil
+					}
+					qcBkt := pr.Bucket(op)
+					if qcBkt == nil {
+						return nil // nothing stored
+					}
+					newQc, err := QchanFromBytes(qcBkt.Get(KEYutxo))
+					if err != nil {
+						return err
+					}
+					if newQc.KeyIdx == cIdx {
+						// fill in peerIdx from db context
+						newQc.PeerIdx = peerIdx
+						qc = &newQc
+					}
+					return nil
+				})
+			}
+			return nil
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if qc == nil {
+		return nil, fmt.Errorf("channel (%d,%d) not found in db", peerIdx, cIdx)
+	}
+	return qc, nil
 }
 
 // SetChanClose sets the address to close to.

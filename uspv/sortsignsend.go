@@ -11,7 +11,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/bloom"
-	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcutil/txsort"
 )
 
@@ -148,7 +147,10 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 		if ow && !utxo.IsWit {
 			continue // skip non-witness
 		}
-
+		// why are 0-value outputs a thing..?
+		if utxo.Value < 1 {
+			continue
+		}
 		// yeah, lets add this utxo!
 		rSlice = append(rSlice, utxo)
 		nokori -= utxo.Value
@@ -219,14 +221,9 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	var wit [][]byte
 	hCache := txscript.NewTxSigHashes(tx)
 
-	child, err := s.TS.rootPrivKey.Child(u.KeyIdx + hdkeychain.HardenedKeyStart)
-
-	if err != nil {
-		return err
-	}
-	priv, err := child.ECPrivKey()
-	if err != nil {
-		return err
+	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
+	if priv == nil {
+		return fmt.Errorf("SendDrop: nil privkey")
 	}
 
 	// This is where witness based sighash types need to happen
@@ -328,16 +325,10 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 	var wit [][]byte
 	hCache := txscript.NewTxSigHashes(tx)
 
-	child, err := s.TS.rootPrivKey.Child(u.KeyIdx + hdkeychain.HardenedKeyStart)
-
-	if err != nil {
-		return err
+	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
+	if priv == nil {
+		return fmt.Errorf("SendOne: nil privkey")
 	}
-	priv, err := child.ECPrivKey()
-	if err != nil {
-		return err
-	}
-
 	// This is where witness based sighash types need to happen
 	// sign into stash
 	if u.IsWit {
@@ -452,14 +443,9 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 
 	for i, txin := range tx.TxIn {
 		// pick key
-		child, err := s.TS.rootPrivKey.Child(
-			utxos[i].KeyIdx + hdkeychain.HardenedKeyStart)
-		if err != nil {
-			return err
-		}
-		priv, err := child.ECPrivKey()
-		if err != nil {
-			return err
+		priv := s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
+		if priv == nil {
+			return fmt.Errorf("SendCoins: nil privkey")
 		}
 
 		// This is where witness based sighash types need to happen
@@ -545,50 +531,4 @@ func EstFee(otx *wire.MsgTx, spB int64) int64 {
 	tx.SerializeSizeWitness()
 	fmt.Printf("%d spB, est vsize %d, fee %d\n", spB, size, size*spB)
 	return size * spB
-}
-
-// SignThis isn't used anymore...
-func (t *TxStore) SignThis(tx *wire.MsgTx) error {
-	fmt.Printf("-= SignThis =-\n")
-
-	// sort tx before signing.
-	txsort.InPlaceSort(tx)
-
-	sigs := make([][]byte, len(tx.TxIn))
-	// first iterate over each input
-	for j, in := range tx.TxIn {
-		for k := uint32(0); k < uint32(len(t.Adrs)); k++ {
-			child, err := t.rootPrivKey.Child(k + hdkeychain.HardenedKeyStart)
-			if err != nil {
-				return err
-			}
-			myadr, err := child.Address(t.Param)
-			if err != nil {
-				return err
-			}
-			adrScript, err := txscript.PayToAddrScript(myadr)
-			if err != nil {
-				return err
-			}
-			if bytes.Equal(adrScript, in.SignatureScript) {
-				fmt.Printf("Hit; key %d matches input %d. Signing.\n", k, j)
-				priv, err := child.ECPrivKey()
-				if err != nil {
-					return err
-				}
-				sigs[j], err = txscript.SignatureScript(
-					tx, j, in.SignatureScript, txscript.SigHashAll, priv, true)
-				if err != nil {
-					return err
-				}
-				break
-			}
-		}
-	}
-	for i, s := range sigs {
-		if s != nil {
-			tx.TxIn[i].SignatureScript = s
-		}
-	}
-	return nil
 }

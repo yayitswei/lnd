@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
 )
 
@@ -18,18 +19,19 @@ type Qchan struct {
 	// S for stored (on disk), D for derived
 
 	Utxo                      // S underlying utxo data
-	MyPubx   *btcec.PublicKey // D my channel specific pubkey
+	MyPub    *btcec.PublicKey // D my channel specific pubkey
 	TheirPub *btcec.PublicKey // S their channel specific pubkey
 
-	TheirRefundAdr [20]byte // S their address for when you break
-
 	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
+
+	TheirRefundAdr [20]byte // S their address for when you break
+	MyRefundAdr    [20]byte // D my refund address when they break
 
 	// Elkrem is used for revoking state commitments
 	Elk elkrem.ElkremPair // S elkrem sender and receiver
 
 	CurrentState *StatCom // S current state of channel
-	NextState    *StatCom // D temporary, next state of channel
+	NextState    *StatCom // D? temporary, next state of channel
 }
 
 // StatComs are State Commitments.
@@ -39,8 +41,9 @@ type StatCom struct {
 
 	StateIdx uint64 // this is the n'th state commitment
 
-	RevokeHash [16]byte // 16byte hash, preimage of which is needed to sweep.
-	Sig        []byte   // Counterparty's signature (for StatCom tx)
+	TheirRevHash [16]byte // 16byte hash, preimage of which is needed to sweep.
+	MyRevHash    [16]byte // the revoke hash I generate and send to them
+	Sig          []byte   // Counterparty's signature (for StatCom tx)
 }
 
 // ScriptAddress returns the *34* byte address of the outpoint.
@@ -54,14 +57,61 @@ type StatCom struct {
 //	return script, nil
 //}
 
-// generate a signature for the next state
-func (q *Qchan) SignNextState() error {
+// SignNextState generates your signature for their next state.
+// doesn't modify next state.
+func (q *Qchan) SignNextState() ([]byte, error) {
+
+	return nil, nil
+}
+
+// VerifyNextState verifies their signature for your next state.
+// it also saves the sig in the next state.
+func (q *Qchan) VerifyNextState(sig []byte) error {
 	return nil
 }
 
-// Verify their signature for the next state
-func (q *Qchan) VerifyNextState(sig []byte) error {
-	return nil
+// NextStateTx constructs and returns the next state tx.
+// mine == true makes the tx I receive sigs for and store, false
+// makes the state I sign and send but dont store or broadcast.
+func (q *Qchan) NextStateTx(mine bool) (*wire.MsgTx, error) {
+
+	theirAmt := q.Value - q.NextState.MyAmt - 5000 // fixed 5k fee for now
+	myAmt := q.NextState.MyAmt - 5000
+
+	var outPKH, outFancy *wire.TxOut
+
+	if mine { // my tx, they're pkh; I'm time they're hash
+		// ignore errors from builder.Script()
+		fancyScript, _ := CommitScript(
+			q.TheirPub, q.MyPub, q.NextState.MyRevHash, 5)
+		pkhScript := DirectWPKHScript(q.TheirRefundAdr)
+
+		outFancy = wire.NewTxOut(myAmt, fancyScript)
+		outPKH = wire.NewTxOut(theirAmt, pkhScript)
+
+	} else { // their tx, I'm pkh; I'm hash they're time
+		// ignore errors from builder.Script()
+		fancyScript, _ := CommitScript(
+			q.MyPub, q.TheirPub, q.NextState.TheirRevHash, 5)
+		pkhScript := DirectWPKHScript(q.MyRefundAdr)
+
+		outFancy = wire.NewTxOut(theirAmt, fancyScript)
+		outPKH = wire.NewTxOut(myAmt, pkhScript)
+	}
+
+	tx := wire.NewMsgTx()
+	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
+	tx.AddTxOut(outPKH)
+	tx.AddTxOut(outFancy)
+
+	txsort.InPlaceSort(tx)
+	return tx, nil
+}
+
+func DirectWPKHScript(pkh [20]byte) []byte {
+	builder := txscript.NewScriptBuilder()
+	b, _ := builder.AddOp(txscript.OP_0).AddData(pkh[:]).Script()
+	return b
 }
 
 /*
@@ -100,13 +150,13 @@ func (q *Qchan) BuildStatComTx(mine bool, R [20]byte) (*wire.MsgTx, error) {
 }
 */
 
-// commitScriptToSelf constructs the public key script for the output on the
+// commitScript constructs the public key script for the output on the
 // commitment transaction paying to the "owner" of said commitment transaction.
 // If the other party learns of the pre-image to the revocation hash, then they
 // can claim all the settled funds in the channel, plus the unsettled funds.
-// Modified to use CLTV because CSV isn't in segnet yet.
-func commitScript(cltvTime uint32, HKey,
-	TKey *btcec.PublicKey, revokeHash [20]byte) ([]byte, error) {
+// uses op_cltv
+func CommitScript(HKey, TKey *btcec.PublicKey,
+	revokeHash [16]byte, cltvDelay uint32) ([]byte, error) {
 
 	// This script is spendable under two conditions: either the 'cltvtime'
 	// has passed and T(ime)Key signs, or revokeHash's preimage is presented
@@ -124,8 +174,8 @@ func commitScript(cltvTime uint32, HKey,
 
 	// Otherwise, we can re-claim our funds after CLTV time
 	// 'csvTimeout' timeout blocks, and a valid signature.
-	builder.AddInt64(int64(cltvTime))
-	builder.AddOp(txscript.OP_CHECKLOCKTIMEVERIFY)
+	builder.AddInt64(int64(cltvDelay))
+	builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
 	builder.AddOp(txscript.OP_DROP)
 	builder.AddData(TKey.SerializeCompressed())
 	builder.AddOp(txscript.OP_ENDIF)
@@ -214,10 +264,10 @@ end len 	86
 peeridx and multidx are inferred from position in db.
 */
 
-func (m *Qchan) ToBytes() ([]byte, error) {
+func (q *Qchan) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	// first serialize the utxo part
-	uBytes, err := m.Utxo.ToBytes()
+	uBytes, err := q.Utxo.ToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +278,11 @@ func (m *Qchan) ToBytes() ([]byte, error) {
 	}
 
 	// write 33 byte pubkey (theirs)
-	_, err = buf.Write(m.TheirPub.SerializeCompressed())
+	_, err = buf.Write(q.TheirPub.SerializeCompressed())
+	if err != nil {
+		return nil, err
+	}
+	_, err = buf.Write(q.TheirRefundAdr[:])
 	if err != nil {
 		return nil, err
 	}
@@ -239,25 +293,26 @@ func (m *Qchan) ToBytes() ([]byte, error) {
 // MultiOutFromBytes turns bytes into a MultiOut.
 // the first 53 bytes are the utxo, then next 33 is the pubkey
 func QchanFromBytes(b []byte) (Qchan, error) {
-	var m Qchan
+	var q Qchan
 
-	if len(b) < 86 {
-		return m, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
+	if len(b) < 106 {
+		return q, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:53])
 	if err != nil {
-		return m, err
+		return q, err
 	}
 
-	buf := bytes.NewBuffer(b[53:])
+	buf := bytes.NewBuffer(b[53:86])
 	// will be 33, size checked up there
 
-	m.Utxo = u // assign the utxo
+	q.Utxo = u // assign the utxo
 
-	m.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
+	q.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
 	if err != nil {
-		return m, err
+		return q, err
 	}
-	return m, nil
+	copy(q.TheirRefundAdr[:], b[86:106])
+	return q, nil
 }

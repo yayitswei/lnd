@@ -55,7 +55,9 @@ func NewConn(conn net.Conn) *LNDConn {
 func (c *LNDConn) Dial(
 	myId *btcec.PrivateKey, address string, remoteId []byte) error {
 	var err error
-
+	if myId == nil {
+		return fmt.Errorf("LNDConn Dial: nil myId")
+	}
 	if !c.ViaPbx {
 		if c.Conn != nil {
 			return fmt.Errorf("connection already established")

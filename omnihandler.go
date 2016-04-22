@@ -3,74 +3,41 @@ package main
 import (
 	"fmt"
 	"net"
+	"strconv"
 
-	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
-
-func PushChannel(args []string) error {
-	if RemoteCon == nil {
-		return fmt.Errorf("Not connected to anyone, can't push\n")
-	}
-
-	//	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
-
-	return nil
-}
-
-// PushChannel pushes money to the other side of the channel.  It
-// creates a sigpush message and sends that to the peer
-func PushSig(peerIdx, cIdx uint32, amt int64) error {
-	if RemoteCon == nil {
-		return fmt.Errorf("Not connected to anyone, can't push\n")
-	}
-
-	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
-
-	return nil
-}
-
-//func PullSig(from [16]byte, sigpushBytes []byte) {
-
-//	return
-//}
-
-//func CloseReqHandler(from [16]byte, reqbytes []byte) {
-// func
 
 // BreakChannel closes the channel without the other party's involvement.
 // The user causing the channel Break has to wait for the OP_CSV timeout
 // before funds can be recovered.  Break output addresses are already in the
 // DB so you can't specify anything other than which channel to break.
 func BreakChannel(args []string) error {
-	// no args needed yet actually
-	//	if len(args) < 0 {
-	//		return fmt.Errorf("need args: break")
-	//	}
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone\n")
+	}
 
-	// find the peer index of who we're connected to
-	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	// need args, fail
+	if len(args) < 2 {
+		return fmt.Errorf("need args: break peerIdx chanIdx")
+	}
+
+	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	cIdx, err := strconv.ParseInt(args[1], 10, 32)
 	if err != nil {
 		return err
 	}
 
-	// get all multi txs
-	multis, err := SCon.TS.GetAllQchans()
-	if err != nil {
-		return err
-	}
-	var opBytes []byte
-	// find the chan we want to close
-	for _, m := range multis {
-		if m.PeerIdx == currentPeerIdx {
-			opBytes = uspv.OutPointToBytes(m.Op)
-			fmt.Printf("peerIdx %d multIdx %d height %d %s amt: %d\n",
-				m.PeerIdx, m.KeyIdx, m.AtHeight, m.Op.String(), m.Value)
-			break
-		}
-	}
-	opBytes[0] = 0x00
+	qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
 
+	fmt.Printf("%s (%d,%d) h: %d a: %d\n",
+		qc.Op.String(), qc.PeerIdx, qc.KeyIdx, qc.AtHeight, qc.Value)
+
+
+qc.SignNextState()
 	return nil
 }
 
