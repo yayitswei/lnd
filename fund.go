@@ -111,12 +111,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 
-	adr, _ := SCon.TS.NewAdr() // ignore error for now
-	if len(adr.ScriptAddress()) != 20 {
-		fmt.Printf("refund address error\n")
-		return
-	}
-	// description is outpoint (36), myPubkey(33), multisig capacity (8)
+	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8)
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
@@ -133,7 +128,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
 	if len(descbytes) != 97 {
-		fmt.Printf("got %d byte multiDesc, expect 77\n", len(descbytes))
+		fmt.Printf("got %d byte multiDesc, expect 97\n", len(descbytes))
 		return
 	}
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()

@@ -41,8 +41,8 @@ type StatCom struct {
 
 	StateIdx uint64 // this is the n'th state commitment
 
-	TheirRevHash [16]byte // 16byte hash, preimage of which is needed to sweep.
-	MyRevHash    [16]byte // the revoke hash I generate and send to them
+	TheirRevHash [20]byte // 16byte hash, preimage of which is needed to sweep.
+	MyRevHash    [20]byte // the revoke hash I generate and send to them
 	Sig          []byte   // Counterparty's signature (for StatCom tx)
 }
 
@@ -59,9 +59,32 @@ type StatCom struct {
 
 // SignNextState generates your signature for their next state.
 // doesn't modify next state.
-func (q *Qchan) SignNextState() ([]byte, error) {
+func (t TxStore) SignNextState(q *Qchan) ([]byte, error) {
 
-	return nil, nil
+	// build transaction for next state
+	tx, err := q.BuildStateTx(false, true) // theirs, next
+	if err != nil {
+		return nil, err
+	}
+
+	// make hash cache for this tx
+	hCache := txscript.NewTxSigHashes(tx)
+
+	// generate script preimage (ignore key order)
+	pre, _, err := FundTxScript(
+		q.MyPub.SerializeCompressed(), q.TheirPub.SerializeCompressed())
+	if err != nil {
+		return nil, err
+	}
+
+	// get private signing key
+	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+
+	// generate sig.
+	sig, err := txscript.RawTxInWitnessSignature(
+		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
+
+	return sig, nil
 }
 
 // VerifyNextState verifies their signature for your next state.
@@ -70,39 +93,71 @@ func (q *Qchan) VerifyNextState(sig []byte) error {
 	return nil
 }
 
+func (q *Qchan) SignBreak() error {
+	return nil
+}
+
 // NextStateTx constructs and returns the next state tx.
 // mine == true makes the tx I receive sigs for and store, false
 // makes the state I sign and send but dont store or broadcast.
-func (q *Qchan) NextStateTx(mine bool) (*wire.MsgTx, error) {
+func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
+	var fancyAmt, pkhAmt int64            // output amounts
+	var comHash [20]byte                  // commitment hash
+	var hashPub, timePub *btcec.PublicKey // pubkeys
+	var pkhAdr [20]byte                   // the simple output's pub key hash
 
-	theirAmt := q.Value - q.NextState.MyAmt - 5000 // fixed 5k fee for now
-	myAmt := q.NextState.MyAmt - 5000
+	fee := int64(5000) // fixed fee for now
 
-	var outPKH, outFancy *wire.TxOut
-
-	if mine { // my tx, they're pkh; I'm time they're hash
-		// ignore errors from builder.Script()
-		fancyScript, _ := CommitScript(
-			q.TheirPub, q.MyPub, q.NextState.MyRevHash, 5)
-		pkhScript := DirectWPKHScript(q.TheirRefundAdr)
-
-		outFancy = wire.NewTxOut(myAmt, fancyScript)
-		outPKH = wire.NewTxOut(theirAmt, pkhScript)
-
-	} else { // their tx, I'm pkh; I'm hash they're time
-		// ignore errors from builder.Script()
-		fancyScript, _ := CommitScript(
-			q.MyPub, q.TheirPub, q.NextState.TheirRevHash, 5)
-		pkhScript := DirectWPKHScript(q.MyRefundAdr)
-
-		outFancy = wire.NewTxOut(theirAmt, fancyScript)
-		outPKH = wire.NewTxOut(myAmt, pkhScript)
+	if q.MyPub == nil || q.TheirPub == nil {
+		return nil, fmt.Errorf("chan pubkey nil")
 	}
 
+	// this part chooses all the different amounts and hashes and stuff.
+	// it's kindof tricky and dense! But it's as straightforward as it can be.
+
+	if mine { // my tx. They're pkh; I'm time, they're hash
+		hashPub = q.TheirPub
+		timePub = q.MyPub
+		pkhAdr = q.TheirRefundAdr
+		if next { // use next state amts / hashes
+			fancyAmt = q.NextState.MyAmt - fee
+			pkhAmt = q.Value - q.NextState.MyAmt - fee
+			comHash = q.NextState.MyRevHash
+		} else { // use current state amts / hashes
+			fancyAmt = q.CurrentState.MyAmt - fee
+			pkhAmt = q.Value - q.CurrentState.MyAmt - fee
+			comHash = q.CurrentState.MyRevHash
+		}
+	} else { // their tx. I'm pkh; I'm hash, they're time
+		hashPub = q.MyPub
+		timePub = q.TheirPub
+		pkhAdr = q.MyRefundAdr
+		if next {
+			fancyAmt = q.Value - q.NextState.MyAmt - fee
+			pkhAmt = q.NextState.MyAmt - fee
+			comHash = q.NextState.TheirRevHash
+		} else {
+			fancyAmt = q.Value - q.CurrentState.MyAmt - fee
+			pkhAmt = q.CurrentState.MyAmt - fee
+			comHash = q.CurrentState.TheirRevHash
+		}
+	}
+
+	// now that everything is chosen, build fancy script and pkh script
+	fancyScript, _ := CommitScript(hashPub, timePub, comHash, 5)
+	pkhScript := DirectWPKHScript(pkhAdr)
+
+	// create txouts by assigning amounts
+	outFancy := wire.NewTxOut(fancyAmt, fancyScript)
+	outPKH := wire.NewTxOut(pkhAmt, pkhScript)
+
+	// make a new tx
 	tx := wire.NewMsgTx()
-	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
-	tx.AddTxOut(outPKH)
+	// add txouts
 	tx.AddTxOut(outFancy)
+	tx.AddTxOut(outPKH)
+	// add unsigned txin
+	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
 
 	txsort.InPlaceSort(tx)
 	return tx, nil
@@ -150,13 +205,15 @@ func (q *Qchan) BuildStatComTx(mine bool, R [20]byte) (*wire.MsgTx, error) {
 }
 */
 
+// for testing: h160(0x88): d79f49371fb5d9e792f042664cd689d50e3dcf03
+
 // commitScript constructs the public key script for the output on the
 // commitment transaction paying to the "owner" of said commitment transaction.
 // If the other party learns of the pre-image to the revocation hash, then they
 // can claim all the settled funds in the channel, plus the unsettled funds.
 // uses op_cltv
 func CommitScript(HKey, TKey *btcec.PublicKey,
-	revokeHash [16]byte, cltvDelay uint32) ([]byte, error) {
+	revokeHash [20]byte, cltvDelay uint32) ([]byte, error) {
 
 	// This script is spendable under two conditions: either the 'cltvtime'
 	// has passed and T(ime)Key signs, or revokeHash's preimage is presented
@@ -250,18 +307,19 @@ func P2WSHify(scriptBytes []byte) []byte {
 	return b
 }
 
-/*----- serialization for MultiOuts ------- */
+/*----- serialization for QChannels ------- */
 
 /* Qchan serialization:
 (it's just a utxo with their pubkey)
 byte length   desc   at offset
 
 53	utxo		0
-33	thrpub	86
+33	thrpub	53
+20	thrref	86
 
-end len 	86
+end len 	106
 
-peeridx and multidx are inferred from position in db.
+peeridx is inferred from position in db.
 */
 
 func (q *Qchan) ToBytes() ([]byte, error) {

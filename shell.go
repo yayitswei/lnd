@@ -457,6 +457,7 @@ func Bal(args []string) error {
 		len(allUtxos), len(stxos))
 	fmt.Printf("Total coin: %d confirmed: %d\n", score, confScore)
 	fmt.Printf("DB sync height: %d\n", height)
+
 	return nil
 }
 
@@ -529,7 +530,7 @@ func Sweep(args []string) error {
 
 	if len(args) == 2 {
 		for i, u := range allUtxos {
-			if u.AtHeight != 0 && u.Value > 0 {
+			if u.AtHeight != 0 && u.Value > 10000 {
 				err = SCon.SendOne(allUtxos[i], adr)
 				if err != nil {
 					return err

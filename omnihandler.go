@@ -3,43 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
-	"strconv"
 
 	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
-
-// BreakChannel closes the channel without the other party's involvement.
-// The user causing the channel Break has to wait for the OP_CSV timeout
-// before funds can be recovered.  Break output addresses are already in the
-// DB so you can't specify anything other than which channel to break.
-func BreakChannel(args []string) error {
-	if RemoteCon == nil {
-		return fmt.Errorf("Not connected to anyone\n")
-	}
-
-	// need args, fail
-	if len(args) < 2 {
-		return fmt.Errorf("need args: break peerIdx chanIdx")
-	}
-
-	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil {
-		return err
-	}
-	cIdx, err := strconv.ParseInt(args[1], 10, 32)
-	if err != nil {
-		return err
-	}
-
-	qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
-
-	fmt.Printf("%s (%d,%d) h: %d a: %d\n",
-		qc.Op.String(), qc.PeerIdx, qc.KeyIdx, qc.AtHeight, qc.Value)
-
-
-qc.SignNextState()
-	return nil
-}
 
 // handles stuff that comes in over the wire.  Not user-initiated.
 func OmniHandler(OmniChan chan []byte) {

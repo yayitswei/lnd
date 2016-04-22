@@ -203,7 +203,8 @@ func (ts *TxStore) MakeFundTx(
 
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
-	var myPubBytes, myRefundBytes []byte
+	var myPubBytes []byte
+
 	theirPubBytes := theirPub.SerializeCompressed()
 
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
@@ -221,14 +222,13 @@ func (ts *TxStore) MakeFundTx(
 		}
 		peerIdx = BtU32(peerIdxBytes)                // store peer index for key creation
 		cIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
-
 		// generate pubkey from peer, multi indexes
 		myPub := ts.GetFundPubkey(peerIdx, cIdx)
-		myRefundBytes := ts.GetRefundAddressBytes(peerIdx, cIdx)
-		if myPub == nil || myRefundBytes == nil {
+		if myPub == nil {
 			return fmt.Errorf("nil key")
 		}
 		myPubBytes = myPub.SerializeCompressed()
+
 		// generate multisig output from two pubkeys
 		multiTxOut, err := FundTxOut(theirPubBytes, myPubBytes, amt)
 		if err != nil {
@@ -291,6 +291,11 @@ func (ts *TxStore) MakeFundTx(
 	})
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	// derive my refund adr bytes
+	myRefundBytes := ts.GetRefundAddressBytes(peerIdx, cIdx)
+	if myRefundBytes == nil {
+		return op, nil, nil, fmt.Errorf("nil key")
 	}
 
 	return op, myPubBytes, myRefundBytes, nil
@@ -561,14 +566,18 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 					if qcBkt == nil {
 						return nil // nothing stored
 					}
-					newQc, err := QchanFromBytes(qcBkt.Get(KEYutxo))
+					// make new qChannel from the db data
+					nqc, err := QchanFromBytes(qcBkt.Get(KEYutxo))
 					if err != nil {
 						return err
 					}
-					if newQc.KeyIdx == cIdx {
+					if nqc.KeyIdx == cIdx { // hit; done
 						// fill in peerIdx from db context
-						newQc.PeerIdx = peerIdx
-						qc = &newQc
+						nqc.PeerIdx = peerIdx
+						nqc.MyPub = ts.GetFundPubkey(peerIdx, cIdx)
+						copy(nqc.MyRefundAdr[:],
+							ts.GetRefundAddressBytes(peerIdx, cIdx))
+						qc = &nqc
 					}
 					return nil
 				})
