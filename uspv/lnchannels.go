@@ -2,6 +2,7 @@ package uspv
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/lightningnetwork/lnd/elkrem"
@@ -310,17 +311,109 @@ func P2WSHify(scriptBytes []byte) []byte {
 	return b
 }
 
+// StatComs are State Commitments.
+//type StatCom struct {
+//	StateIdx uint64 // this is the n'th state commitment
+
+//	MyAmt int64 // my channel allocation
+//	// their Amt is the utxo.Value minus this
+
+//	TheirRevHash [20]byte // 16byte hash, preimage of which is needed to sweep.
+//	MyRevHash    [20]byte // the revoke hash I generate and send to them
+//	Sig          []byte   // Counterparty's signature (for StatCom tx)
+//}
+
+/*----- serialization for StatCom ------- */
+/*
+bytes   desc   at offset
+1	len			0
+8	StateIdx		1
+8	MyAmt		9
+20	TheirRev		17
+70?	Sig			37
+... to 107 bytes, ish.
+
+my rev hash can be derived from the elkrem sender
+and the stateidx.  hash160(elkremsend(sIdx)[:16])
+
+*/
+
+// ToBytes turns a StatCom into 106ish bytes
+func (s *StatCom) ToBytes() ([]byte, error) {
+	var buf bytes.Buffer
+	var err error
+
+	// Don't have this for now... gets saved separately
+	// write 1 byte length of this statcom
+	// (needed because sigs are #()# variable length
+	//	slen := uint8(len(s.Sig) + 36)
+	//	err := buf.WriteByte(slen)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+
+	// write 8 byte state index
+	err = binary.Write(&buf, binary.BigEndian, s.StateIdx)
+	if err != nil {
+		return nil, err
+	}
+	// write 8 byte amount of my allocation in the channel
+	err = binary.Write(&buf, binary.BigEndian, s.MyAmt)
+	if err != nil {
+		return nil, err
+	}
+	// write 20 byte their revocation hash
+	_, err = buf.Write(s.TheirRevHash[:])
+	if err != nil {
+		return nil, err
+	}
+	// write their sig
+	_, err = buf.Write(s.Sig)
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// StatComFromBytes turns 106ish bytes into a StatCom
+func StatComFromBytes(b []byte) (StatCom, error) {
+	var s StatCom
+	if len(b) < 100 || len(b) > 110 {
+		return s, fmt.Errorf("StatComFromBytes got %d bytes, expect around 106\n",
+			len(b))
+	}
+	buf := bytes.NewBuffer(b)
+	// read 8 byte state index
+	err := binary.Read(buf, binary.BigEndian, &s.StateIdx)
+	if err != nil {
+		return s, err
+	}
+	// read 8 byte amount of my allocation in the channel
+	err = binary.Read(buf, binary.BigEndian, &s.MyAmt)
+	if err != nil {
+		return s, err
+	}
+	// read the 20 bytes of their revocation hash
+	copy(s.TheirRevHash[:], buf.Next(20))
+	// the rest is their sig
+	s.Sig = buf.Bytes()
+
+	return s, nil
+}
+
 /*----- serialization for QChannels ------- */
 
 /* Qchan serialization:
 (it's just a utxo with their pubkey)
-byte length   desc   at offset
+bytes   desc   at offset
 
 53	utxo		0
 33	thrpub	53
 20	thrref	86
 
-end len 	106
+done at 	106, then
+statecom(current)
+statecom(next)
 
 peeridx is inferred from position in db.
 */
@@ -365,12 +458,12 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 		return q, err
 	}
 
-	buf := bytes.NewBuffer(b[53:86])
+	//	buf := bytes.NewBuffer(b[53:86])
 	// will be 33, size checked up there
 
 	q.Utxo = u // assign the utxo
 
-	q.TheirPub, err = btcec.ParsePubKey(buf.Bytes(), btcec.S256())
+	q.TheirPub, err = btcec.ParsePubKey(b[53:86], btcec.S256())
 	if err != nil {
 		return q, err
 	}

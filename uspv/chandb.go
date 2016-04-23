@@ -11,6 +11,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/txsort"
+	"github.com/lightningnetwork/lnd/elkrem"
 )
 
 /*
@@ -65,6 +66,46 @@ func CountKeysInBucket(bkt *bolt.Bucket) uint32 {
 		return 0xffffffff
 	}
 	return i
+}
+
+// RestoreQchanFromBucket loads the full qchan into memory from the
+// bucket where it's stored.  Loads the channel info, the elkrems,
+// and the current / next state.
+// You have to tell it the peer index because that comes from 1 level
+// up in the db.
+// restore happens all at once, but saving to the db can happen
+// incrementally (updating states)
+func (ts *TxStore) RestoreQchanFromBucket(
+	peerIdx uint32, bkt *bolt.Bucket) (*Qchan, error) {
+	if bkt == nil { // can't do anything without a bucket
+		return nil, fmt.Errorf("empty qchan bucket from peer %d", peerIdx)
+	}
+
+	// load the serialized channel base description
+	qc, err := QchanFromBytes(bkt.Get(KEYutxo))
+	if err != nil {
+		return nil, err
+	}
+
+	// note that peerIndex is not set from deserialization!  set it here!
+	qc.PeerIdx = peerIdx
+	// derive my channel pubkey
+	qc.MyPub = ts.GetFundPubkey(qc.PeerIdx, qc.KeyIdx)
+
+	// derive my refund from index
+	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(qc.PeerIdx, qc.KeyIdx))
+
+	// load current state and next state
+
+	// load elkrem from elkrem bucket.  Sender is derived from statcom
+	elkrcv := bkt.Get(KEYElkRecv)
+	if elkrcv == nil {
+		return nil, nil
+	}
+	qc.Elk.S = elkrem.NewElkremPair()
+
+	fmt.Printf("")
+	return nil, nil
 }
 
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
@@ -144,7 +185,6 @@ func (ts *TxStore) NewFundReq(peerBytes []byte) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	return cIdx, nil
 }
 
@@ -535,11 +575,17 @@ func (ts *TxStore) GetQchan(
 	return &qc, nil
 }
 
-// GetQchanByIdx is a gets the channel when you don't know the peer bytes and
-// outpoint.  Probably shouldn't have to use this if the UI is done right though.
-func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
-	var qc *Qchan
+// GetQGlobalFromIdx gets the globally unique identifiers (pubkey, outpoint)
+// from the local index numbers (peer, channel).
+// If the UI does it's job well you shouldn't really need this.
+// the unique identifiers are returned as []bytes because
+// they're probably going right back in to GetQchan()
+func (ts *TxStore) GetQGlobalIdFromIdx(
+	peerIdx, cIdx uint32) ([]byte, []byte, error) {
 	var err error
+	var pubBytes, opBytes []byte
+
+	// go into the db
 	err = ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -550,7 +596,8 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 			if nothin != nil {
 				return nil // non-bucket
 			}
-			if qc != nil {
+			// this is "break" basically
+			if opBytes != nil {
 				return nil
 			}
 			pr := prs.Bucket(idPub) // go into this peer's bucket
@@ -559,7 +606,8 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 					if nthin != nil {
 						return nil // non-bucket / outpoint
 					}
-					if qc != nil {
+					// "break"
+					if opBytes != nil {
 						return nil
 					}
 					qcBkt := pr.Bucket(op)
@@ -567,17 +615,15 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 						return nil // nothing stored
 					}
 					// make new qChannel from the db data
+					// inefficient but the key index is somewhere
+					// in the middle there, like 40 bytes in or something...
 					nqc, err := QchanFromBytes(qcBkt.Get(KEYutxo))
 					if err != nil {
 						return err
 					}
 					if nqc.KeyIdx == cIdx { // hit; done
-						// fill in peerIdx from db context
-						nqc.PeerIdx = peerIdx
-						nqc.MyPub = ts.GetFundPubkey(peerIdx, cIdx)
-						copy(nqc.MyRefundAdr[:],
-							ts.GetRefundAddressBytes(peerIdx, cIdx))
-						qc = &nqc
+						pubBytes = idPub
+						opBytes = op
 					}
 					return nil
 				})
@@ -587,10 +633,27 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 		return nil
 	})
 	if err != nil {
+		return nil, nil, err
+	}
+	if pubBytes == nil || opBytes == nil {
+		return nil, nil, fmt.Errorf(
+			"channel (%d,%d) not found in db", peerIdx, cIdx)
+	}
+	return pubBytes, opBytes, nil
+}
+
+// GetQchanByIdx is a gets the channel when you don't know the peer bytes and
+// outpoint.  Probably shouldn't have to use this if the UI is done right though.
+func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
+	pubBytes, opBytes, err := ts.GetQGlobalIdFromIdx(peerIdx, cIdx)
+	if err != nil {
 		return nil, err
 	}
-	if qc == nil {
-		return nil, fmt.Errorf("channel (%d,%d) not found in db", peerIdx, cIdx)
+	var op [36]byte
+	copy(op[:], opBytes)
+	qc, err := ts.GetQchan(pubBytes, op)
+	if err != nil {
+		return nil, err
 	}
 	return qc, nil
 }
