@@ -7,10 +7,6 @@ import (
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
-var (
-	hash88 = [20]byte{0xd7, 0x9f, 0x49, 0x37, 0x1f, 0xb5, 0xd9, 0xe7, 0x92, 0xf0, 0x42, 0x66, 0x4c, 0xd6, 0x89, 0xd5, 0x0e, 0x3d, 0xcf, 0x03}
-)
-
 // BreakChannel closes the channel without the other party's involvement.
 // The user causing the channel Break has to wait for the OP_CSV timeout
 // before funds can be recovered.  Break output addresses are already in the
@@ -37,8 +33,8 @@ func BreakChannel(args []string) error {
 
 	qc.NextState = new(uspv.StatCom)
 	qc.NextState.MyAmt = 1000000
-	qc.NextState.TheirRevHash = hash88
-	qc.NextState.MyRevHash = hash88
+	qc.NextState.TheirRevHash = uspv.Hash88
+	qc.NextState.MyRevHash = uspv.Hash88
 
 	sig, err := SCon.TS.SignNextState(qc)
 	if err != nil {
@@ -50,11 +46,46 @@ func BreakChannel(args []string) error {
 }
 
 func PushChannel(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("need args: push peerIdx chanIdx amt")
+	}
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone, can't push\n")
 	}
-
+	// this stuff is all the same as in cclose, should put into a function...
+	peerIdx64, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	cIdx64, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil {
+		return err
+	}
+	amt, err := strconv.ParseInt(args[2], 10, 32)
+	if err != nil {
+		return err
+	}
+	amt++
+	peerIdx := uint32(peerIdx64)
+	cIdx := uint32(cIdx64)
+	// find the peer index of who we're connected to
+	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+	if uint32(peerIdx) != currentPeerIdx {
+		return fmt.Errorf("Want to close with peer %d but connected to %d",
+			peerIdx, currentPeerIdx)
+	}
 	//	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
+
+	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	qc.CurrentState = new(uspv.StatCom)
+	qc.CurrentState.MyAmt = 1000000
+	qc.CurrentState.MyRevHash = uspv.Hash88
+	qc.CurrentState.StateIdx = 22
+	qc.CurrentState.TheirRevHash = uspv.Hash88
+	qc.CurrentState.Sig = []byte("sig")
 
 	return nil
 }

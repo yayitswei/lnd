@@ -46,6 +46,10 @@ type StatCom struct {
 	Sig          []byte   // Counterparty's signature (for StatCom tx)
 }
 
+var (
+	Hash88 = [20]byte{0xd7, 0x9f, 0x49, 0x37, 0x1f, 0xb5, 0xd9, 0xe7, 0x92, 0xf0, 0x42, 0x66, 0x4c, 0xd6, 0x89, 0xd5, 0x0e, 0x3d, 0xcf, 0x03}
+)
+
 // ScriptAddress returns the *34* byte address of the outpoint.
 // note that it's got the 0020 in front.  [2:] if you want to get rid of that.
 //func (m *MultiOut) ScriptAddress() ([]byte, error) {
@@ -114,7 +118,6 @@ func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
 
 	// this part chooses all the different amounts and hashes and stuff.
 	// it's kindof tricky and dense! But it's as straightforward as it can be.
-
 	if mine { // my tx. They're pkh; I'm time, they're hash
 		hashPub = q.TheirPub
 		timePub = q.MyPub

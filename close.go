@@ -21,14 +21,16 @@ func CloseChannel(args []string) error {
 		return fmt.Errorf("need args: cclose peerIdx chanIdx address")
 	}
 
-	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
+	peerIdx64, err := strconv.ParseInt(args[0], 10, 32)
 	if err != nil {
 		return err
 	}
-	cIdx, err := strconv.ParseInt(args[1], 10, 32)
+	cIdx64, err := strconv.ParseInt(args[1], 10, 32)
 	if err != nil {
 		return err
 	}
+	peerIdx := uint32(peerIdx64)
+	cIdx := uint32(cIdx64)
 
 	adr, err := btcutil.DecodeAddress(args[2], SCon.TS.Param)
 	if err != nil {
@@ -41,36 +43,20 @@ func CloseChannel(args []string) error {
 	if err != nil {
 		return err
 	}
-	if uint32(peerIdx) != currentPeerIdx {
+	if peerIdx != currentPeerIdx {
 		return fmt.Errorf("Want to close with peer %d but connected to %d	",
 			peerIdx, currentPeerIdx)
 	}
 
-	// get all multi txs
-	qcs, err := SCon.TS.GetAllQchans()
+	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
 	if err != nil {
 		return err
-	}
-	var found bool
-	var opBytes []byte
-	// find the multi we want to close
-	for _, m := range qcs {
-		if m.PeerIdx == currentPeerIdx && m.KeyIdx == uint32(cIdx) {
-			opBytes = uspv.OutPointToBytes(m.Op)
-			fmt.Printf("peerIdx %d multIdx %d height %d %s amt: %d\n",
-				m.PeerIdx, m.KeyIdx, m.AtHeight, m.Op.String(), m.Value)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("channel (%d,%d) not found in db", peerIdx, cIdx)
 	}
 
 	// save to db the address we want to close to.
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	var opArr [36]byte
-	copy(opArr[:], opBytes)
+	copy(opArr[:], uspv.OutPointToBytes(qc.Op))
 	var adrArr [20]byte
 	copy(adrArr[:], adr.ScriptAddress())
 	err = SCon.TS.SetChanClose(peerBytes, opArr, adrArr)
@@ -81,7 +67,7 @@ func CloseChannel(args []string) error {
 	// close request specifies the outpoint, and the dest address.
 	// (no amounts yet, fixed fee of 8K sat. specify these later of course.)
 	msg := []byte{uwire.MSGID_CLOSEREQ}
-	msg = append(msg, opBytes...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, adr.ScriptAddress()...)
 
 	fmt.Printf("msg: %x\n", msg)

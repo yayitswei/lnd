@@ -407,7 +407,7 @@ func Bal(args []string) error {
 
 	var score, confScore int64
 	for i, u := range allUtxos {
-		fmt.Printf("utxo %d %s h: %d key:%d a: %d",
+		fmt.Printf("utxo %d %s h:%d k:%d a %d",
 			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
 		if u.IsWit {
 			fmt.Printf(" WIT")
@@ -424,10 +424,16 @@ func Bal(args []string) error {
 		return err
 	}
 	for _, q := range qcs {
-		tk := q.TheirPub.SerializeCompressed()
-		fmt.Printf("%s h: %d (%d,%d) a: %d rp %x rr: %x\n",
-			q.Op.String(), q.AtHeight, q.PeerIdx, q.KeyIdx,
-			q.Value, tk[:4], q.TheirRefundAdr[:4])
+		// display txid instead of outpoint because easier to copy/paste
+		fmt.Printf("%s h:%d (%d,%d)\n",
+			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx)
+		if q.CurrentState == nil {
+			fmt.Printf("\t no valid state data\n")
+		} else {
+			fmt.Printf("\tstateidx:%d cap:%d mine:%d them:%d\n",
+				q.CurrentState.StateIdx, q.Value, q.CurrentState.MyAmt,
+				q.Value-q.CurrentState.MyAmt)
+		}
 	}
 
 	height, _ := SCon.TS.GetDBSyncHeight()
