@@ -618,8 +618,8 @@ func (l *LightningWallet) handleFundingReserveRequest(req *initFundingReserveMsg
 	// channel.
 	// TODO(roabeef): should be HMAC based...REMOVE BEFORE ALPHA
 	var zero wire.ShaHash
-	elkremSender := elkrem.NewElkremSender(63, zero)
-	reservation.partialState.LocalElkrem = &elkremSender
+	elkremSender := elkrem.NewElkremSender(0, zero)
+	reservation.partialState.LocalElkrem = elkremSender
 	firstPrimage, err := elkremSender.AtIndex(0)
 	if err != nil {
 		req.err <- err
@@ -803,7 +803,7 @@ func (l *LightningWallet) handleContributionMsg(req *addContributionMsg) {
 	// Initialize an empty sha-chain for them, tracking the current pending
 	// revocation hash (we don't yet know the pre-image so we can't add it
 	// to the chain).
-	e := elkrem.NewElkremReceiver(63)
+	var e elkrem.ElkremReceiver
 	// TODO(roasbeef): this is incorrect!! fix before lnstate integration
 	var zero wire.ShaHash
 	if err := e.AddNext(&zero); err != nil {

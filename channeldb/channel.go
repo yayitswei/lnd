@@ -696,7 +696,7 @@ func fetchChanEklremState(nodeChanBucket *bolt.Bucket, channel *OpenChannel) err
 	if err != nil {
 		return err
 	}
-	channel.RemoteElkrem = &remoteE
+	channel.RemoteElkrem = remoteE
 
 	return nil
 }

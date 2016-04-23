@@ -10,7 +10,7 @@ import (
 func TestElkremBig(t *testing.T) {
 	sndr := NewElkremSender(0, wire.DoubleSha256SH([]byte("elktest")))
 	var rcv ElkremReceiver
-	SenderSerdesTest(t, &sndr)
+	SenderSerdesTest(t, sndr)
 	for n := uint64(0); n < 10000; n++ {
 		sha, err := sndr.Next()
 		if err != nil {
@@ -28,7 +28,7 @@ func TestElkremBig(t *testing.T) {
 			}
 		}
 	}
-	SenderSerdesTest(t, &sndr)
+	SenderSerdesTest(t, sndr)
 	ReceiverSerdesTest(t, &rcv)
 	for n := uint64(0); n < 10000; n += 500 {
 		sha, err := rcv.AtIndex(n)

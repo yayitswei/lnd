@@ -29,10 +29,11 @@ type Qchan struct {
 	MyRefundAdr    [20]byte // D my refund address when they break
 
 	// Elkrem is used for revoking state commitments
-	Elk elkrem.ElkremPair // S elkrem sender and receiver
+	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
+	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
 	CurrentState *StatCom // S current state of channel
-	NextState    *StatCom // D? temporary, next state of channel
+	NextState    *StatCom // S temporary / next state of channel
 }
 
 // StatComs are State Commitments.
@@ -376,29 +377,29 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 }
 
 // StatComFromBytes turns 106ish bytes into a StatCom
-func StatComFromBytes(b []byte) (StatCom, error) {
+func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
 	if len(b) < 100 || len(b) > 110 {
-		return s, fmt.Errorf("StatComFromBytes got %d bytes, expect around 106\n",
+		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 106\n",
 			len(b))
 	}
 	buf := bytes.NewBuffer(b)
 	// read 8 byte state index
 	err := binary.Read(buf, binary.BigEndian, &s.StateIdx)
 	if err != nil {
-		return s, err
+		return nil, err
 	}
 	// read 8 byte amount of my allocation in the channel
 	err = binary.Read(buf, binary.BigEndian, &s.MyAmt)
 	if err != nil {
-		return s, err
+		return nil, err
 	}
 	// read the 20 bytes of their revocation hash
 	copy(s.TheirRevHash[:], buf.Next(20))
 	// the rest is their sig
 	s.Sig = buf.Bytes()
 
-	return s, nil
+	return &s, nil
 }
 
 /*----- serialization for QChannels ------- */

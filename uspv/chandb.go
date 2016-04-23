@@ -44,12 +44,14 @@ const (
 )
 
 var (
-	BKTPeers   = []byte("Peer") // all peer data is in this bucket.
-	KEYElkRecv = []byte("ElkR") // elkrem receiver
-	KEYIdx     = []byte("idx")  // index for key derivation
-	KEYutxo    = []byte("utx")  // serialized mutxo / cutxo
-	KEYUnsig   = []byte("usig") // unsigned fund tx
-	KEYCladr   = []byte("cdr")  // close address (Don't make fun of my lisp)
+	BKTPeers   = []byte("pir") // all peer data is in this bucket.
+	KEYElkRecv = []byte("lkr") // elkrem receiver
+	KEYIdx     = []byte("idx") // index for key derivation
+	KEYutxo    = []byte("utx") // serialized mutxo / cutxo
+	KEYUnsig   = []byte("usg") // unsigned fund tx
+	KEYCladr   = []byte("cdr") // close address (Don't make fun of my lisp)
+	KEYCurSt   = []byte("ima") // current channel state
+	KEYNextSt  = []byte("tsg") // next channel state
 )
 
 // CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
@@ -90,22 +92,41 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	// derive my channel pubkey
-	qc.MyPub = ts.GetFundPubkey(qc.PeerIdx, qc.KeyIdx)
+	qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
 
 	// derive my refund from index
-	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(qc.PeerIdx, qc.KeyIdx))
+	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
 
-	// load current state and next state
+	// load current state and next state.  If they exist.
+	curStBytes := bkt.Get(KEYCurSt)
+	if curStBytes != nil {
+		qc.CurrentState, err = StatComFromBytes(bkt.Get(KEYCurSt))
+		if err != nil {
+			return nil, err
+		}
 
-	// load elkrem from elkrem bucket.  Sender is derived from statcom
-	elkrcv := bkt.Get(KEYElkRecv)
-	if elkrcv == nil {
-		return nil, nil
 	}
-	qc.Elk.S = elkrem.NewElkremPair()
+	nextStBytes := bkt.Get(KEYNextSt)
+	if nextStBytes != nil {
+		qc.NextState, err = StatComFromBytes(bkt.Get(KEYNextSt))
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	fmt.Printf("")
-	return nil, nil
+	// load elkrem from elkrem bucket.
+	qc.ElkRcv, err = elkrem.ElkremReceiverFromBytes(bkt.Get(KEYElkRecv))
+	if err != nil {
+		return nil, err
+	}
+	if qc.ElkRcv != nil {
+		fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
+	}
+	if qc.CurrentState != nil {
+		r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
+		qc.ElkSnd = elkrem.NewElkremSender(qc.CurrentState.StateIdx, r)
+	}
+	return &qc, nil
 }
 
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
@@ -492,9 +513,7 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 			if nothin != nil {
 				return nil // non-bucket
 			}
-
 			pr := prs.Bucket(idPub) // go into this peer's bucket
-			peerIdx := BtU32(pr.Get(KEYIdx))
 
 			return pr.ForEach(func(op, nthin []byte) error {
 				//				fmt.Printf("key %x ", op)
@@ -506,19 +525,15 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 				if qcBucket == nil {
 					return nil // nothing stored
 				}
-				newQc, err := QchanFromBytes(qcBucket.Get(KEYutxo))
+
+				pIdx := BtU32(pr.Get(KEYIdx))
+				newQc, err := ts.RestoreQchanFromBucket(pIdx, qcBucket)
 				if err != nil {
 					return err
 				}
-				// fill in peerIdx from db context
-				newQc.PeerIdx = peerIdx
-				// fill in myPub from index
-				newQc.MyPub = ts.GetFundPubkey(peerIdx, newQc.KeyIdx)
-				// fill in my refund from index
-				copy(newQc.MyRefundAdr[:],
-					ts.GetRefundAddressBytes(peerIdx, newQc.KeyIdx))
+
 				// add to slice
-				qChans = append(qChans, &newQc)
+				qChans = append(qChans, newQc)
 				return nil
 			})
 			return nil
@@ -536,7 +551,7 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 func (ts *TxStore) GetQchan(
 	peerBytes []byte, opArr [36]byte) (*Qchan, error) {
 
-	var qc Qchan
+	qc := new(Qchan)
 	var err error
 	op := OutPointFromBytes(opArr)
 	err = ts.StateDB.View(func(btx *bolt.Tx) error {
@@ -554,25 +569,18 @@ func (ts *TxStore) GetQchan(
 				op.String(), peerBytes)
 		}
 
-		qc, err = QchanFromBytes(qcBucket.Get(KEYutxo))
+		pIdx := BtU32(pr.Get(KEYIdx))
+
+		qc, err = ts.RestoreQchanFromBucket(pIdx, qcBucket)
 		if err != nil {
 			return err
 		}
-		// note that peerIndex is not set from deserialization!  set it here!
-		qc.PeerIdx = BtU32(pr.Get(KEYIdx))
-
-		qc.MyPub = ts.GetFundPubkey(qc.PeerIdx, qc.KeyIdx)
-		// fill in my refund from index
-		copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(qc.PeerIdx, qc.KeyIdx))
-
-		// fill in myPub from index
-		//		multi.MyPub = ts.GetFundPubkey(multi.PeerIdx, multi.KeyIdx)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &qc, nil
+	return qc, nil
 }
 
 // GetQGlobalFromIdx gets the globally unique identifiers (pubkey, outpoint)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/hdkeychain"
 )
@@ -20,6 +21,7 @@ const (
 	UseWallet        = 0
 	UseChannelFund   = 2
 	UseChannelRefund = 3
+	UseChannelElkrem = 4
 	UseIdKey         = 11
 )
 
@@ -116,6 +118,12 @@ func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
 //	peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
 //	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
 //}
+
+// GetElkremRoot gives the Elkrem sender root hash for a channel.
+func (ts *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
+	priv := ts.GetPrivkey(UseChannelElkrem, peerIdx, cIdx)
+	return wire.DoubleSha256SH(priv.Serialize())
+}
 
 func (ts *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 	return ts.GetPrivkey(UseChannelRefund, peerIdx, cIdx)

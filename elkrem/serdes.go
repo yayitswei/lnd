@@ -64,62 +64,63 @@ func (e *ElkremReceiver) ToBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func ElkremReceiverFromBytes(b []byte) (ElkremReceiver, error) {
+func ElkremReceiverFromBytes(b []byte) (*ElkremReceiver, error) {
 	var e ElkremReceiver
-	var numOfNodes uint8
-	buf := bytes.NewBuffer(b)
+	if len(b) == 0 { // empty receiver, which is OK
+		return &e, nil
+	}
 
+	buf := bytes.NewBuffer(b)
 	// read 1 byte number of nodes stored in receiver
-	err := binary.Read(buf, binary.BigEndian, &numOfNodes)
+	numOfNodes, err := buf.ReadByte()
 	if err != nil {
-		return e, err
+		return nil, err
 	}
 	if numOfNodes < 1 || numOfNodes > 64 {
-		return e, fmt.Errorf("Read invalid number of nodes: %d", numOfNodes)
+		return nil, fmt.Errorf("Read invalid number of nodes: %d", numOfNodes)
 	}
 
 	if buf.Len() != (int(numOfNodes) * 41) {
-		return e, fmt.Errorf("Remaining buf wrong size, expect %d got %d",
+		return nil, fmt.Errorf("Remaining buf wrong size, expect %d got %d",
 			(numOfNodes * 41), buf.Len())
 	}
 
 	e.s = make([]ElkremNode, numOfNodes)
 
-	for i := uint8(0); i < numOfNodes; i++ {
-		var node ElkremNode
-		node.sha = new(wire.ShaHash)
+	for j, _ := range e.s {
+		e.s[j].sha = new(wire.ShaHash)
 		// read 1 byte height
-		err := binary.Read(buf, binary.BigEndian, &node.h)
+		err := binary.Read(buf, binary.BigEndian, &e.s[j].h)
 		if err != nil {
-			return e, err
+			return nil, err
 		}
 		// read 8 byte index
-		err = binary.Read(buf, binary.BigEndian, &node.i)
+		err = binary.Read(buf, binary.BigEndian, &e.s[j].i)
 		if err != nil {
-			return e, err
+			return nil, err
 		}
 		// read 32 byte sha hash
-		err = node.sha.SetBytes(buf.Next(32))
+		err = e.s[j].sha.SetBytes(buf.Next(32))
 		if err != nil {
-			return e, err
+			return nil, err
 		}
 		// sanity check.  Note that this doesn't check that index and height
 		// match.  Could add that but it's slow.
-		if node.h > 63 { // check for super high nodes
-			return e, fmt.Errorf("Read invalid node height %d", node.h)
+		if e.s[j].h > maxHeight { // check for super high nodes
+			return nil, fmt.Errorf("Read invalid node height %d", e.s[j].h)
 		}
-		if node.i > maxIndex { // check for index higher than height allows
-			return e, fmt.Errorf("Node claims index %d; %d max at height %d",
-				node.i, maxIndex, node.h)
+		if e.s[j].i > maxIndex { // check for index higher than height allows
+			return nil, fmt.Errorf("Node claims index %d; %d max at height %d",
+				e.s[j].i, maxIndex, e.s[j].h)
 		}
-		e.s[i] = node
-		if i > 0 { // check that node heights are descending
-			if e.s[i-1].h < e.s[i].h {
-				return e, fmt.Errorf("Node heights out of order")
+
+		if j > 0 { // check that node heights are descending
+			if e.s[j-1].h < e.s[j].h {
+				return nil, fmt.Errorf("Node heights out of order")
 			}
 		}
 	}
-	return e, nil
+	return &e, nil
 }
 
 // There's no real point to the *sender* serialization because

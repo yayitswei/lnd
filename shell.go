@@ -433,6 +433,8 @@ func Bal(args []string) error {
 			fmt.Printf("\tstateidx:%d cap:%d mine:%d them:%d\n",
 				q.CurrentState.StateIdx, q.Value, q.CurrentState.MyAmt,
 				q.Value-q.CurrentState.MyAmt)
+			fmt.Printf("\telkrem: sender @%d receiver @%d\n",
+				q.ElkSnd.CurrentIndex(), q.ElkRcv.UpTo())
 		}
 	}
 

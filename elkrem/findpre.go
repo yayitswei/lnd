@@ -32,7 +32,7 @@ correct pre-image.
 */
 
 func (e *ElkremReceiver) FindPre(
-	target [20]byte, timeHint uint32) (*[20]byte, error) {
+	target [20]byte, timeHint uint32) (*[16]byte, error) {
 
 	maxUint32 := uint32((1 << 32) - 1)
 	minTime := uint32(500000000)
@@ -62,8 +62,8 @@ func (e *ElkremReceiver) FindPre(
 		if err != nil {
 			return nil, err
 		}
-		var truncatedSha [20]byte
-		copy(truncatedSha[:], sha.Bytes()) // copy into 20 byte array
+		var truncatedSha [16]byte
+		copy(truncatedSha[:], sha.Bytes()) // copy into 16 byte array
 
 		checkHash := btcutil.Hash160(truncatedSha[:]) // hash and compare
 		if bytes.Equal(target[:], checkHash) {        // matches hash, return
