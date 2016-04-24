@@ -36,13 +36,13 @@ RAM state: set delta to -amountToSend (delta is negative for pusher)
 send RTS (idx+1, amountToSend)
 
 ### Puller: Receive RTS
-check idx
-check amount > 0
-set delta to amount, save to DB
+check RTS(idx) == idx+1
+check RTS(amount) > 0
+delta = RTS(amount)
+##### Save to DB(only positive delta is new)
 create theirRevH(idx+1)
 create tx(theirs)
 sign tx
-##### Save to DB(only positive delta is new)
 send ACKSIG(sig, revH)
 
 ### Pusher: Receive ACKSIG
@@ -50,7 +50,7 @@ copy(prevRH, revH)
 idx++
 amt += delta
 delta = 0
-revc = SIGACK(revH)
+revH = SIGACK(revH)
 sig = SIGACK(sig)
 create tx(mine)
 verify sig (if fails, restore from DB, try RTS again..?)
@@ -62,8 +62,8 @@ create elk(idx-1)
 send SIGREV(sig, theirRevH, elk)
 
 ### Puller: Receive SIGREV
-verify hash160(SIGREV(elk[:16])) == prevRH
-verify elk insertion // do this first because we overwrite revH
+verify hash160(SIGREV(elk[:16])) == revH
+verify elk insertion (do this first because we overwrite revH)
 idx++
 amt += delta
 delta = 0
