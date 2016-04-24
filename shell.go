@@ -555,6 +555,7 @@ func Sweep(args []string) error {
 			}
 		}
 		fmt.Printf("spent all confirmed utxos; not enough by %d\n", numTxs)
+		return nil
 	}
 	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
