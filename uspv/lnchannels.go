@@ -32,20 +32,24 @@ type Qchan struct {
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
 	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
-	CurrentState *StatCom // S current state of channel
-	NextState    *StatCom // S temporary / next state of channel
+	State *StatCom // S state of channel
 }
 
 // StatComs are State Commitments.
 type StatCom struct {
-	MyAmt int64 // my channel allocation
-	// their Amt is the utxo.Value minus this
-
 	StateIdx uint64 // this is the n'th state commitment
 
-	TheirRevHash [20]byte // 16byte hash, preimage of which is needed to sweep.
-	MyRevHash    [20]byte // the revoke hash I generate and send to them
-	Sig          []byte   // Counterparty's signature (for StatCom tx)
+	MyAmt int64 // my channel allocation
+	// their Amt is the utxo.Value minus this
+	NextAmt int64 // for pushing funds
+
+	RevHash [20]byte // Revocation hash, preimage of which is needed to sweep.
+	PrevRev [20]byte // When you haven't gotten their revocation preimage yet.
+
+	Sig []byte // Counterparty's signature (for StatCom tx)
+	// note sig can be nil during channel creation. if stateIdx isn't 0,
+	// sig should have a sig.
+	// only one sig is ever stored, to prevent broadcasting the wrong tx.
 }
 
 var (

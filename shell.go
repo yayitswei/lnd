@@ -425,14 +425,19 @@ func Bal(args []string) error {
 	}
 	for _, q := range qcs {
 		// display txid instead of outpoint because easier to copy/paste
-		fmt.Printf("%s h:%d (%d,%d)\n",
-			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx)
+		fmt.Printf("%s h:%d (%d,%d) cap: %d\n",
+			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
 		if q.CurrentState == nil {
 			fmt.Printf("\t no valid state data\n")
 		} else {
-			fmt.Printf("\tstateidx:%d cap:%d mine:%d them:%d\n",
-				q.CurrentState.StateIdx, q.Value, q.CurrentState.MyAmt,
-				q.Value-q.CurrentState.MyAmt)
+			fmt.Printf("\tCRNT myrev:%x threv:%x stateidx:%d mine:%d them:%d\n",
+				q.CurrentState.MyRevHash[:4], q.CurrentState.TheirRevHash[:4],
+				q.CurrentState.StateIdx,
+				q.CurrentState.MyAmt, q.Value-q.CurrentState.MyAmt)
+			fmt.Printf("\tNEXT myrev:%x threv:%x stateidx:%d mine:%d them:%d\n",
+				q.NextState.MyRevHash[:4], q.NextState.TheirRevHash[:4],
+				q.NextState.StateIdx,
+				q.NextState.MyAmt, q.Value-q.NextState.MyAmt)
 			fmt.Printf("\telkrem: sender @%d receiver @%d\n",
 				q.ElkSnd.CurrentIndex(), q.ElkRcv.UpTo())
 		}

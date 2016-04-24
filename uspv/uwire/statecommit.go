@@ -6,18 +6,20 @@ import (
 )
 
 type SigPush struct {
-	SendAmt   int64    // amount being pushed with this state update (delta)
-	RevocHash [20]byte // Hash of the revocation to use
+	SendAmt   uint32   // amount being pushed with this state update (delta)
+	RevocHash [20]byte // Hash of the next state revocation to use
 	Sig       []byte   // Signature for the new Commitment
 }
 
-type SigPull struct {
-	RevocHash [20]byte // Hash of the revocation to use
+type SigRevPull struct {
+	RevocHash [20]byte // Hash of the next state revocation to use
+	Revoc     [32]byte // 32 byte hash fed into elkrem receiver
 	Sig       []byte   // Signature for the new Commitment
 }
 
-// revocation is a 32 byte elkremnode fed into elkrem receiver
-type Revoc [32]byte
+type RevPush struct {
+	Revoc [32]byte // revocation is a 32 byte hash fed into elkrem receiver
+}
 
 // ToBytes turns a SigPush into some bytes.  Sig at end because varia-length
 func (s *SigPush) ToBytes() ([]byte, error) {

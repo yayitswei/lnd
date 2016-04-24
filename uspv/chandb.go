@@ -77,6 +77,14 @@ func CountKeysInBucket(bkt *bolt.Bucket) uint32 {
 // up in the db.
 // restore happens all at once, but saving to the db can happen
 // incrementally (updating states)
+// This should populate everything int he Qchan struct: the elkrems and the states.
+// Elkrem sender always works; is derived from local key data.
+// Elkrem receiver can be "empty" with nothing in it (no data in db)
+// Current and next state can also be not in the DB, which results in
+// State *0* for either.  State 0 is no a valid state and states start at
+// state index 1.  Data errors within the db will return errors, but having
+// *no* data for states or elkrem receiver is not considered an error, and will
+// populate with a state 0 / empty elkrem receiver and return that.
 func (ts *TxStore) RestoreQchanFromBucket(
 	peerIdx uint32, bkt *bolt.Bucket) (*Qchan, error) {
 	if bkt == nil { // can't do anything without a bucket
@@ -96,8 +104,11 @@ func (ts *TxStore) RestoreQchanFromBucket(
 
 	// derive my refund from index
 	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
+	qc.CurrentState = new(StatCom)
+	qc.NextState = new(StatCom)
 
 	// load current state and next state.  If they exist.
+	// if not the empty ones are OK.
 	curStBytes := bkt.Get(KEYCurSt)
 	if curStBytes != nil {
 		qc.CurrentState, err = StatComFromBytes(bkt.Get(KEYCurSt))
@@ -127,6 +138,11 @@ func (ts *TxStore) RestoreQchanFromBucket(
 		qc.ElkSnd = elkrem.NewElkremSender(qc.CurrentState.StateIdx, r)
 	}
 	return &qc, nil
+}
+
+// Save / overwrite state of qChan in db
+func (ts *TxStore) SaveQchanState(q *Qchan) error {
+	return nil
 }
 
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
