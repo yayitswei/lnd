@@ -32,7 +32,9 @@ type Qchan struct {
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
 	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
-	State *StatCom // S state of channel
+	State        *StatCom // S state of channel
+	CurrentState *StatCom
+	NextState    *StatCom
 }
 
 // StatComs are State Commitments.
@@ -42,6 +44,9 @@ type StatCom struct {
 	MyAmt int64 // my channel allocation
 	// their Amt is the utxo.Value minus this
 	NextAmt int64 // for pushing funds
+
+	MyRevHash    [20]byte
+	TheirRevHash [20]byte
 
 	RevHash [20]byte // Revocation hash, preimage of which is needed to sweep.
 	PrevRev [20]byte // When you haven't gotten their revocation preimage yet.

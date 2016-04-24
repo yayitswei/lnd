@@ -46,25 +46,25 @@ func (s *SigPush) ToBytes() ([]byte, error) {
 }
 
 // ToBytes turns a SigPull into some bytes.
-func (s *SigPull) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	// write 1 byte header
-	err := buf.WriteByte(MSGID_SIGPULL)
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write(s.RevocHash[:]) // write 20 byte hash H
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write(s.Sig) // write 70ish byte sig
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
+//func (s *SigPull) ToBytes() ([]byte, error) {
+//	var buf bytes.Buffer
+//	// write 1 byte header
+//	err := buf.WriteByte(MSGID_SIGPULL)
+//	if err != nil {
+//		return nil, err
+//	}
+//	_, err = buf.Write(s.RevocHash[:]) // write 20 byte hash H
+//	if err != nil {
+//		return nil, err
+//	}
+//	_, err = buf.Write(s.Sig) // write 70ish byte sig
+//	if err != nil {
+//		return nil, err
+//	}
+//	return buf.Bytes(), nil
+//}
 
 // ToBytes turns a Revoc into some bytes.  Can't fail.
-func (r *Revoc) ToBytes() []byte {
-	return append([]byte{MSGID_REVOC}, r[:]...)
-}
+//func (r *Revoc) ToBytes() []byte {
+//	return append([]byte{MSGID_REVOC}, r[:]...)
+//}

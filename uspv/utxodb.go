@@ -399,17 +399,17 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 	for i, _ := range wPKscripts {
 		// iterate through all our addresses
 		// convert regular address to witness address.  (split adrs later)
-		wa, err := btcutil.NewAddressWitnessPubKeyHash(
+		oa, err := btcutil.NewAddressPubKeyHash(
 			ts.Adrs[i].PkhAdr.ScriptAddress(), ts.Param)
 		if err != nil {
 			return hits, err
 		}
 
-		wPKscripts[i], err = txscript.PayToAddrScript(wa)
+		wPKscripts[i], err = txscript.PayToAddrScript(ts.Adrs[i].PkhAdr)
 		if err != nil {
 			return hits, err
 		}
-		aPKscripts[i], err = txscript.PayToAddrScript(ts.Adrs[i].PkhAdr)
+		aPKscripts[i], err = txscript.PayToAddrScript(oa)
 		if err != nil {
 			return hits, err
 		}
@@ -421,7 +421,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 	// or let bolt sort it?
 	for i, tx := range txs {
 		for j, out := range tx.TxOut {
-			for k, ascr := range wPKscripts {
+			for k, ascr := range aPKscripts {
 				// detect p2wpkh
 				witBool := false
 				if bytes.Equal(out.PkScript, wPKscripts[k]) {

@@ -457,12 +457,12 @@ func Bal(args []string) error {
 	}
 
 	for i, a := range SCon.TS.Adrs {
-		wa, err := btcutil.NewAddressWitnessPubKeyHash(
+		oa, err := btcutil.NewAddressPubKeyHash(
 			a.PkhAdr.ScriptAddress(), Params)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("address %d %s OR %s\n", i, a.PkhAdr.String(), wa.String())
+		fmt.Printf("address %d %s OR %s\n", i, oa.String(), a.PkhAdr.String())
 	}
 
 	fmt.Printf("Total known txs: %d\n", len(atx))

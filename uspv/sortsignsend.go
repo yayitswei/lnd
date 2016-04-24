@@ -303,11 +303,11 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 	tx.AddTxOut(txout)
 
 	var prevPKs []byte
-	if u.IsWit {
+	if !u.IsWit {
 		//		tx.Flags = 0x01
-		wa, err := btcutil.NewAddressWitnessPubKeyHash(
+		oa, err := btcutil.NewAddressPubKeyHash(
 			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
-		prevPKs, err = txscript.PayToAddrScript(wa)
+		prevPKs, err = txscript.PayToAddrScript(oa)
 		if err != nil {
 			return err
 		}
@@ -402,11 +402,11 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 	// add inputs into tx
 	for _, utxo := range utxos {
 		var prevPKScript []byte
-		if utxo.IsWit {
+		if !utxo.IsWit {
 			//			tx.Flags = 0x01
-			wa, err := btcutil.NewAddressWitnessPubKeyHash(
+			oa, err := btcutil.NewAddressPubKeyHash(
 				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
-			prevPKScript, err = txscript.PayToAddrScript(wa)
+			prevPKScript, err = txscript.PayToAddrScript(oa)
 			if err != nil {
 				return err
 			}
