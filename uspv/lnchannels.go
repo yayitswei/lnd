@@ -47,16 +47,17 @@ type StatCom struct {
 	// their Amt is the utxo.Value minus this
 	Delta int32 // fun amount in-transit; is negative for the pusher
 
-	MyRevHash    [20]byte
-	TheirRevHash [20]byte
+	// Revocation hash, preimage of which is needed to sweep.
+	MyRevHash    [20]byte // saved to disk
+	TheirRevHash [20]byte // not saved, generated on the fly
 
-	RevHash [20]byte // Revocation hash, preimage of which is needed to sweep.
-	PrevRev [20]byte // When you haven't gotten their revocation preimage yet.
+	MyPrevRev [20]byte // When you haven't gotten their revocation preimage yet.
 
 	Sig []byte // Counterparty's signature (for StatCom tx)
 	// note sig can be nil during channel creation. if stateIdx isn't 0,
 	// sig should have a sig.
 	// only one sig is ever stored, to prevent broadcasting the wrong tx.
+	// could add a mutex here... maybe will later.
 }
 
 var (
@@ -76,7 +77,7 @@ var (
 
 // SignNextState generates your signature for their next state.
 // doesn't modify next state.
-func (t TxStore) SignNextState(q *Qchan) ([]byte, error) {
+func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 
 	// build transaction for next state
 	tx, err := q.BuildStateTx() // theirs, next
@@ -100,13 +101,48 @@ func (t TxStore) SignNextState(q *Qchan) ([]byte, error) {
 	// generate sig.
 	sig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
+	// truncate sig (last byte is sighash type, always sighashAll)
+	sig = sig[:len(sig)-1]
 
 	return sig, nil
 }
 
 // VerifyNextState verifies their signature for your next state.
 // it also saves the sig in the next state.
-func (q *Qchan) VerifyNextState(sig []byte) error {
+// do bool, error or just error?  Bad sig is an error I guess.
+func (q *Qchan) VerifyState(sig []byte) error {
+	tx, err := q.BuildStateTx()
+	if err != nil {
+		return err
+	}
+
+	// generate fund output script preimage (ignore key order)
+	pre, _, err := FundTxScript(q.MyPub.SerializeCompressed(), q.TheirPub.SerializeCompressed())
+	if err != nil {
+		return err
+	}
+
+	opcodes, err := txscript.ParseScript(pre)
+	if err != nil {
+		return err
+	}
+
+	hCache := txscript.NewTxSigHashes(tx)
+
+	hash := txscript.CalcWitnessSignatureHash(
+		opcodes, hCache, txscript.SigHashAll, tx, int(q.Op.Index), q.Value)
+
+	// sig is pre-truncated; last byte for sighashtype is always sighashAll
+	pSig, err := btcec.ParseDERSignature(sig, btcec.S256())
+	if err != nil {
+		return err
+	}
+
+	worked := pSig.Verify(hash, q.TheirPub)
+	if !worked {
+		return fmt.Errorf("Their sig was no good!!!!!111")
+	}
+
 	return nil
 }
 
