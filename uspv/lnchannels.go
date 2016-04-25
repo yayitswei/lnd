@@ -10,7 +10,12 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
+)
+
+const (
+	timeHintMask = 0x1fffffff // 29 bits asserted
 )
 
 // Uhh, quick channel.  For now.  Once you get greater spire it upgrades to
@@ -119,90 +124,46 @@ func (q *Qchan) SignBreak() error {
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
 
 func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
-
-	/*
-		s := q.State // use it a lot, make shorthand variable
-		if s == nil {
-			return nil, fmt.Errorf("channel (%d,%d) has no state", q.PeerIdx, q.KeyIdx)
-		}
-		var fancyAmt, pkhAmt int64            // output amounts
-		var comHash [20]byte                  // commitment hash
-		var hashPub, timePub *btcec.PublicKey // pubkeys
-		var pkhAdr [20]byte                   // the simple output's pub key hash
-		fee := int64(5000)                    // fixed fee for now
-		mine := true
-		if q.MyPub == nil || q.TheirPub == nil {
-			return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
-		}
-
-		// if delta is non-zero, you're making a tx for THEM.
-		if mine && s.Delta != 0 {
-			return nil, fmt.Errorf(
-				"BuildStateTx: trying to make own tx but delta is %d", s.Delta)
-		}
-
-		if mine {
-			hashPub = q.TheirPub
-			timePub = q.MyPub
-			pkhAdr = q.TheirRefundAdr
-			if s.Delta != 0 { // delta must be negat
-				fancyAmt = s.MyAmt + int64(s.Delta)
-			}
-
-		}
-
-	*/
-	return nil, nil
-}
-
-// NextStateTx constructs and returns the next state tx.
-// mine == true makes the tx I receive sigs for and store, false
-// makes the state I sign and send but dont store or broadcast.
-/*
-func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
-	var fancyAmt, pkhAmt int64            // output amounts
-	var comHash [20]byte                  // commitment hash
-	var hashPub, timePub *btcec.PublicKey // pubkeys
-	var pkhAdr [20]byte                   // the simple output's pub key hash
-
-	fee := int64(5000) // fixed fee for now
-
+	// sanity checks
+	s := q.State // use it a lot, make shorthand variable
+	if s == nil {
+		return nil, fmt.Errorf("channel (%d,%d) has no state", q.PeerIdx, q.KeyIdx)
+	}
+	// if delta is non-zero, something is wrong.
+	if s.Delta != 0 {
+		return nil, fmt.Errorf(
+			"BuildStateTx: delta is %d (expect 0)", s.Delta)
+	}
 	if q.MyPub == nil || q.TheirPub == nil {
-		return nil, fmt.Errorf("chan pubkey nil")
+		return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
 	}
 
-	// this part chooses all the different amounts and hashes and stuff.
-	// it's kindof tricky and dense! But it's as straightforward as it can be.
-	if mine { // my tx. They're pkh; I'm time, they're hash
+	var fancyAmt, pkhAmt int64            // output amounts
+	var rHash [20]byte                    // revokable hash -- starts empty!!
+	var hashPub, timePub *btcec.PublicKey // pubkeys
+	var pkhAdr [20]byte                   // the simple output's pub key hash
+	fee := int64(5000)                    // fixed fee for now
+	delay := uint32(5)                    // fixed CSV delay for now
+	// delay is super short for testing.
+
+	if s.TheirRevHash == rHash { // theirRev is empty; build MY tx
 		hashPub = q.TheirPub
 		timePub = q.MyPub
 		pkhAdr = q.TheirRefundAdr
-		if next { // use next state amts / hashes
-			fancyAmt = q.NextState.MyAmt - fee
-			pkhAmt = q.Value - q.NextState.MyAmt - fee
-			comHash = q.NextState.MyRevHash
-		} else { // use current state amts / hashes
-			fancyAmt = q.CurrentState.MyAmt - fee
-			pkhAmt = q.Value - q.CurrentState.MyAmt - fee
-			comHash = q.CurrentState.MyRevHash
-		}
-	} else { // their tx. I'm pkh; I'm hash, they're time
+		fancyAmt = s.MyAmt - fee
+		pkhAmt = (q.Value - s.MyAmt) - fee
+		rHash = s.MyRevHash
+	} else { // theirRev is full; build THEIR tx
 		hashPub = q.MyPub
 		timePub = q.TheirPub
 		pkhAdr = q.MyRefundAdr
-		if next {
-			fancyAmt = q.Value - q.NextState.MyAmt - fee
-			pkhAmt = q.NextState.MyAmt - fee
-			comHash = q.NextState.TheirRevHash
-		} else {
-			fancyAmt = q.Value - q.CurrentState.MyAmt - fee
-			pkhAmt = q.CurrentState.MyAmt - fee
-			comHash = q.CurrentState.TheirRevHash
-		}
+		fancyAmt = (q.Value - s.MyAmt) - fee
+		pkhAmt = s.MyAmt - fee
+		rHash = s.TheirRevHash
 	}
 
 	// now that everything is chosen, build fancy script and pkh script
-	fancyScript, _ := CommitScript(hashPub, timePub, comHash, 5)
+	fancyScript, _ := CommitScript(hashPub, timePub, rHash, delay)
 	pkhScript := DirectWPKHScript(pkhAdr)
 
 	// create txouts by assigning amounts
@@ -211,6 +172,7 @@ func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
 
 	// make a new tx
 	tx := wire.NewMsgTx()
+	tx.LockTime = 500000000 + uint32(s.StateIdx&0x1fffffff)
 	// add txouts
 	tx.AddTxOut(outFancy)
 	tx.AddTxOut(outPKH)
@@ -219,49 +181,14 @@ func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
 
 	txsort.InPlaceSort(tx)
 	return tx, nil
+	return nil, nil
 }
-*/
+
 func DirectWPKHScript(pkh [20]byte) []byte {
 	builder := txscript.NewScriptBuilder()
 	b, _ := builder.AddOp(txscript.OP_0).AddData(pkh[:]).Script()
 	return b
 }
-
-/*
-func (q *Qchan) BuildStatComTx(mine bool, R [20]byte) (*wire.MsgTx, error) {
-	// commitment is "mine" if I'm committing and sign; !mine if they sign.
-	comTx := wire.NewMsgTx()
-
-	// no sigscript, given separately to WitnessScript() as subscript
-	fundIn := wire.NewTxIn(&s.FundPoint, nil, nil)
-	comTx.AddTxIn(fundIn)
-
-	TheirAmt := s.Cap - s.NextState.MyAmt
-
-	var outPKH, outFancy *wire.TxOut
-	if mine { // I'm committing to me getting my funds unencumbered
-		pkh := btcutil.Hash160(s.MyPub.SerializeCompressed())
-		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
-		outPKH = wire.NewTxOut(s.NextState.MyAmt, wpkhScript)
-		// encumbered: they need time, I need a hash
-		// only errors are 'non cannonical script' so ignore errors
-		fancyScript, _ := commitScript(s.Expiry, s.MyPub, s.TheirPub, R)
-		outFancy = wire.NewTxOut(TheirAmt, fancyScript)
-	} else { // they're committing to getting their funds unencumbered
-		pkh := btcutil.Hash160(s.TheirPub.SerializeCompressed())
-		wpkhScript := append([]byte{0x00, 0x14}, pkh...)
-		outPKH = wire.NewTxOut(TheirAmt, P2WSHify(wpkhScript))
-
-		fancyScript, _ := commitScript(s.Expiry, s.TheirPub, s.MyPub, R)
-		outFancy = wire.NewTxOut(s.NextState.MyAmt, fancyScript)
-	}
-
-	comTx.AddTxOut(outPKH)
-	comTx.AddTxOut(outFancy)
-
-	return comTx, nil
-}
-*/
 
 // for testing: h160(0x88): d79f49371fb5d9e792f042664cd689d50e3dcf03
 

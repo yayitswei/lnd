@@ -6,12 +6,12 @@ There's one state at a time, with 2 variables which indicate aspects of a next o
 
 States look like this
 
-prev 	cur 		next
--------|-------|-------
-		idx
-		amt		delta
-prevRH	revH
-		sig	
+prev | cur | next
+--- | --- | ---
+ | idx | 
+ | amt | delta 
+prevRH | revH | 
+ | sig | 
 
 When nothing is inflight, delta is 0 and prevRev is an empty 20 byte array.
 
