@@ -652,13 +652,14 @@ func putChanEklremState(nodeChanBucket *bolt.Bucket, channel *OpenChannel) error
 		return err
 	}
 
-	senderBytes, err := channel.LocalElkrem.ToBytes()
-	if err != nil {
-		return err
-	}
-	if err := wire.WriteVarBytes(&b, 0, senderBytes); err != nil {
-		return err
-	}
+	// elkrem sender serilaization is removed.  Just keep the root hash
+	//	senderBytes, err := channel.LocalElkrem.ToBytes()
+	//	if err != nil {
+	//		return err
+	//	}
+	//	if err := wire.WriteVarBytes(&b, 0, senderBytes); err != nil {
+	//		return err
+	//	}
 
 	reciverBytes, err := channel.RemoteElkrem.ToBytes()
 	if err != nil {
@@ -678,15 +679,16 @@ func fetchChanEklremState(nodeChanBucket *bolt.Bucket, channel *OpenChannel) err
 		return err
 	}
 
-	senderBytes, err := wire.ReadVarBytes(elkremStateBytes, 0, 1000, "")
-	if err != nil {
-		return err
-	}
-	localE, err := elkrem.ElkremSenderFromBytes(senderBytes)
-	if err != nil {
-		return err
-	}
-	channel.LocalElkrem = &localE
+	// no more elkrem sender serialization
+	//	senderBytes, err := wire.ReadVarBytes(elkremStateBytes, 0, 1000, "")
+	//	if err != nil {
+	//		return err
+	//	}
+	//	localE, err := elkrem.ElkremSenderFromBytes(senderBytes)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	channel.LocalElkrem = &localE
 
 	reciverBytes, err := wire.ReadVarBytes(elkremStateBytes, 0, 1000, "")
 	if err != nil {

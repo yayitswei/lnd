@@ -45,13 +45,12 @@ const (
 
 var (
 	BKTPeers   = []byte("pir") // all peer data is in this bucket.
-	KEYElkRecv = []byte("lkr") // elkrem receiver
 	KEYIdx     = []byte("idx") // index for key derivation
-	KEYutxo    = []byte("utx") // serialized mutxo / cutxo
+	KEYutxo    = []byte("utx") // serialized utxo for the channel
 	KEYUnsig   = []byte("usg") // unsigned fund tx
 	KEYCladr   = []byte("cdr") // close address (Don't make fun of my lisp)
-	KEYCurSt   = []byte("ima") // current channel state
-	KEYNextSt  = []byte("tsg") // next channel state
+	KEYState   = []byte("ima") // channel state
+	KEYElkRecv = []byte("elk") // elkrem receiver
 )
 
 // CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
@@ -104,28 +103,21 @@ func (ts *TxStore) RestoreQchanFromBucket(
 
 	// derive my refund from index
 	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
-	qc.CurrentState = new(StatCom)
-	qc.NextState = new(StatCom)
+	qc.State = new(StatCom)
 
-	// load current state and next state.  If they exist.
-	// if not the empty ones are OK.
-	curStBytes := bkt.Get(KEYCurSt)
-	if curStBytes != nil {
-		qc.CurrentState, err = StatComFromBytes(bkt.Get(KEYCurSt))
-		if err != nil {
-			return nil, err
-		}
-
-	}
-	nextStBytes := bkt.Get(KEYNextSt)
-	if nextStBytes != nil {
-		qc.NextState, err = StatComFromBytes(bkt.Get(KEYNextSt))
+	// load state and next state.  If it exists.
+	// if it doesn't, leave as empty state, will fill in
+	stBytes := bkt.Get(KEYState)
+	if stBytes != nil {
+		qc.State, err = StatComFromBytes(stBytes)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// load elkrem from elkrem bucket.
+	// shouldn't error even if nil.  So shouldn't error, ever.  Right?
+	// ignore error?
 	qc.ElkRcv, err = elkrem.ElkremReceiverFromBytes(bkt.Get(KEYElkRecv))
 	if err != nil {
 		return nil, err
@@ -133,10 +125,12 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	if qc.ElkRcv != nil {
 		fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
 	}
-	if qc.CurrentState != nil {
-		r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
-		qc.ElkSnd = elkrem.NewElkremSender(qc.CurrentState.StateIdx, r)
-	}
+
+	// derive elkrem sender root from HD keychain
+	r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
+	// set sender
+	qc.ElkSnd = elkrem.NewElkremSender(r)
+
 	return &qc, nil
 }
 

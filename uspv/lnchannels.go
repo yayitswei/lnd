@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
 )
 
@@ -32,9 +31,7 @@ type Qchan struct {
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
 	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
-	State        *StatCom // S state of channel
-	CurrentState *StatCom
-	NextState    *StatCom
+	State *StatCom // S state of channel
 }
 
 // StatComs are State Commitments.
@@ -43,7 +40,7 @@ type StatCom struct {
 
 	MyAmt int64 // my channel allocation
 	// their Amt is the utxo.Value minus this
-	NextAmt int64 // for pushing funds
+	Delta int32 // fun amount in-transit; is negative for the pusher
 
 	MyRevHash    [20]byte
 	TheirRevHash [20]byte
@@ -77,7 +74,7 @@ var (
 func (t TxStore) SignNextState(q *Qchan) ([]byte, error) {
 
 	// build transaction for next state
-	tx, err := q.BuildStateTx(false, true) // theirs, next
+	tx, err := q.BuildStateTx() // theirs, next
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +109,62 @@ func (q *Qchan) SignBreak() error {
 	return nil
 }
 
+// err maybe there should be no "next / current".
+// yaah... if there's a "next", that's in ram, and "current" is on the disk.
+// so this func just creates whatever's in ram.
+
+// BuildStateTx constructs and returns a state tx.
+// note that whether it's the current / next / mine / their state transaction
+// is all implied by the data in the state struct.
+// If delta is non-zero, it creates THEIR NEXT state.
+// If delta is zero:
+// If theirRevHash is non-empty, it creates THEIR NEXT state.
+// If theirRevHash is empty, it creates MY CURRENT state.
+// PrevRev hash is never used by this TX.
+// index IS used to set nlocktime for state hints.
+// fee and op_csv timeout are currently hardcoded, make those parameters later.
+
+func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
+
+	/*
+		s := q.State // use it a lot, make shorthand variable
+		if s == nil {
+			return nil, fmt.Errorf("channel (%d,%d) has no state", q.PeerIdx, q.KeyIdx)
+		}
+		var fancyAmt, pkhAmt int64            // output amounts
+		var comHash [20]byte                  // commitment hash
+		var hashPub, timePub *btcec.PublicKey // pubkeys
+		var pkhAdr [20]byte                   // the simple output's pub key hash
+		fee := int64(5000)                    // fixed fee for now
+		mine := true
+		if q.MyPub == nil || q.TheirPub == nil {
+			return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
+		}
+
+		// if delta is non-zero, you're making a tx for THEM.
+		if mine && s.Delta != 0 {
+			return nil, fmt.Errorf(
+				"BuildStateTx: trying to make own tx but delta is %d", s.Delta)
+		}
+
+		if mine {
+			hashPub = q.TheirPub
+			timePub = q.MyPub
+			pkhAdr = q.TheirRefundAdr
+			if s.Delta != 0 { // delta must be negat
+				fancyAmt = s.MyAmt + int64(s.Delta)
+			}
+
+		}
+	*/
+
+	return nil, nil
+}
+
 // NextStateTx constructs and returns the next state tx.
 // mine == true makes the tx I receive sigs for and store, false
 // makes the state I sign and send but dont store or broadcast.
+/*
 func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
 	var fancyAmt, pkhAmt int64            // output amounts
 	var comHash [20]byte                  // commitment hash
@@ -176,7 +226,7 @@ func (q *Qchan) BuildStateTx(mine bool, next bool) (*wire.MsgTx, error) {
 	txsort.InPlaceSort(tx)
 	return tx, nil
 }
-
+*/
 func DirectWPKHScript(pkh [20]byte) []byte {
 	builder := txscript.NewScriptBuilder()
 	b, _ := builder.AddOp(txscript.OP_0).AddData(pkh[:]).Script()

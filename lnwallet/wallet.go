@@ -618,7 +618,7 @@ func (l *LightningWallet) handleFundingReserveRequest(req *initFundingReserveMsg
 	// channel.
 	// TODO(roabeef): should be HMAC based...REMOVE BEFORE ALPHA
 	var zero wire.ShaHash
-	elkremSender := elkrem.NewElkremSender(0, zero)
+	elkremSender := elkrem.NewElkremSender(zero)
 	reservation.partialState.LocalElkrem = elkremSender
 	firstPrimage, err := elkremSender.AtIndex(0)
 	if err != nil {

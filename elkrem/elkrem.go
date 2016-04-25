@@ -44,8 +44,7 @@ type ElkremNode struct {
 	sha *wire.ShaHash // hash
 }
 type ElkremSender struct {
-	current uint64        // last sent hash index
-	root    *wire.ShaHash // root hash of the tree
+	root *wire.ShaHash // root hash of the tree
 }
 type ElkremReceiver struct {
 	s []ElkremNode // store of received hashes
@@ -80,24 +79,23 @@ func descend(w, i uint64, h uint8, sha wire.ShaHash) (wire.ShaHash, error) {
 	return sha, nil
 }
 
-// Creates an Elkrem Sender from a root hash and tree height
-func NewElkremSender(i uint64, r wire.ShaHash) *ElkremSender {
+// Creates an Elkrem Sender from a root hash.
+func NewElkremSender(r wire.ShaHash) *ElkremSender {
 	var e ElkremSender
 	e.root = &r
-	e.current = i
 	return &e
 }
 
 // Next() increments the index to the next hash and outputs it
-func (e *ElkremSender) Next() (*wire.ShaHash, error) {
-	sha, err := e.AtIndex(e.current)
-	if err != nil {
-		return nil, err
-	}
-	// increment index for next time
-	e.current++
-	return sha, nil
-}
+//func (e *ElkremSender) Next() (*wire.ShaHash, error) {
+//	sha, err := e.AtIndex(e.current)
+//	if err != nil {
+//		return nil, err
+//	}
+//	// increment index for next time
+//	e.current++
+//	return sha, nil
+//}
 
 // AtIndex skips to the requested index
 func (e *ElkremSender) AtIndex(w uint64) (*wire.ShaHash, error) {
@@ -106,9 +104,9 @@ func (e *ElkremSender) AtIndex(w uint64) (*wire.ShaHash, error) {
 }
 
 // CurrentIndex tells you the current (last sent) highest output index.
-func (e *ElkremSender) CurrentIndex() uint64 {
-	return e.current
-}
+//func (e *ElkremSender) CurrentIndex() uint64 {
+//	return e.current
+//}
 
 // AddNext inserts the next hash in the tree.  Returns an error if
 // the incoming hash doesn't fit.

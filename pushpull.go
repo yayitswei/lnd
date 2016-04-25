@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"strconv"
-
-	"github.com/lightningnetwork/lnd/uspv"
 )
 
 // BreakChannel closes the channel without the other party's involvement.
@@ -31,16 +29,16 @@ func BreakChannel(args []string) error {
 	fmt.Printf("%s (%d,%d) h: %d a: %d\n",
 		qc.Op.String(), qc.PeerIdx, qc.KeyIdx, qc.AtHeight, qc.Value)
 
-	qc.NextState = new(uspv.StatCom)
-	qc.NextState.MyAmt = 1000000
-	qc.NextState.TheirRevHash = uspv.Hash88
-	qc.NextState.MyRevHash = uspv.Hash88
+	//	qc.NextState = new(uspv.StatCom)
+	//	qc.NextState.MyAmt = 1000000
+	//	qc.NextState.TheirRevHash = uspv.Hash88
+	//	qc.NextState.MyRevHash = uspv.Hash88
 
-	sig, err := SCon.TS.SignNextState(qc)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("made sig: %x\n", sig)
+	//	sig, err := SCon.TS.SignNextState(qc)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	fmt.Printf("made sig: %x\n", sig)
 
 	return nil
 }
@@ -77,15 +75,15 @@ func PushChannel(args []string) error {
 		return fmt.Errorf("Want to close with peer %d but connected to %d",
 			peerIdx, currentPeerIdx)
 	}
-	//	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
+	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
 
-	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
-	qc.CurrentState = new(uspv.StatCom)
-	qc.CurrentState.MyAmt = 1000000
-	qc.CurrentState.MyRevHash = uspv.Hash88
-	qc.CurrentState.StateIdx = 22
-	qc.CurrentState.TheirRevHash = uspv.Hash88
-	qc.CurrentState.Sig = []byte("sig")
+	//	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	//	qc.CurrentState = new(uspv.StatCom)
+	//	qc.CurrentState.MyAmt = 1000000
+	//	qc.CurrentState.MyRevHash = uspv.Hash88
+	//	qc.CurrentState.StateIdx = 22
+	//	qc.CurrentState.TheirRevHash = uspv.Hash88
+	//	qc.CurrentState.Sig = []byte("sig")
 
 	return nil
 }

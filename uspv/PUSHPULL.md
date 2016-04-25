@@ -28,26 +28,29 @@ Puller - REV: Revoke old state
 
 There's only 1 struct in ram so there's a bunch of overwrites.  But there's data on the disk in the DB, so if something fails, like signature verification, you restore from the DB.  It's safe in that you only ever have one state on the DB so you know what to broadcast.  You overwrite their sig, which is the dangerous part (don't want to keep track of sigs where you've revoked that state)
 
+There's only one state in ram, and only one state on disk.  However, in terms of "previous / current / next", the state on disk may be earlier than the state in ram.  Ram is "ahead"; you're not sure from looking at the disk if you've sent the message or not, but you can just send again if you're not sure.  From looking at the state on disk, it is clear what the is next step and mesages to send.
+
 ## Message and DB sequence:
 
 ### Pusher: UI trigger (destination, amountToSend)
 RAM state: set delta to -amountToSend (delta is negative for pusher)
 ##### save to DB (only negative delta is new)
-send RTS (idx+1, amountToSend)
+idx++
+send RTS (idx, amountToSend)
 
 ### Puller: Receive RTS
 check RTS(idx) == idx+1
 check RTS(amount) > 0
 delta = RTS(amount)
 ##### Save to DB(only positive delta is new)
-create theirRevH(idx+1)
+idx++
+create theirRevH(idx)
 create tx(theirs)
 sign tx
 send ACKSIG(sig, revH)
 
 ### Pusher: Receive ACKSIG
 copy(prevRH, revH)
-idx++
 amt += delta
 delta = 0
 revH = SIGACK(revH)
@@ -64,11 +67,11 @@ send SIGREV(sig, theirRevH, elk)
 ### Puller: Receive SIGREV
 verify hash160(SIGREV(elk[:16])) == revH
 verify elk insertion (do this first because we overwrite revH)
-idx++
 amt += delta
 delta = 0
 revH = SIGREV(revH)
 sig = SIGREV(sig)
+clear theirRevH
 create tx(mine)
 verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)
 ##### Save to DB(all fields new, prevRH empty, delta = 0)
