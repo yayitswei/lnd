@@ -109,19 +109,13 @@ func (q *Qchan) SignBreak() error {
 	return nil
 }
 
-// err maybe there should be no "next / current".
-// yaah... if there's a "next", that's in ram, and "current" is on the disk.
-// so this func just creates whatever's in ram.
-
-// BuildStateTx constructs and returns a state tx.
-// note that whether it's the current / next / mine / their state transaction
-// is all implied by the data in the state struct.
-// If delta is non-zero, it creates THEIR NEXT state.
-// If delta is zero:
-// If theirRevHash is non-empty, it creates THEIR NEXT state.
-// If theirRevHash is empty, it creates MY CURRENT state.
-// PrevRev hash is never used by this TX.
-// index IS used to set nlocktime for state hints.
+// BuildStateTx constructs and returns a state tx.  As simple as I can make it.
+// This func just makes the tx with data from State in ram.  What's on the
+// disk may be different.  Delta should always be 0 when making this tx.
+// It decides whether to make THEIR tx or YOUR tx based on TheirRevHash --
+// if it's non-zero, then it makes their transaction (for signing)
+// If it's 0, it makes your transaction (for verification)
+// Index is used to set nlocktime for state hints.
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
 
 func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
@@ -156,8 +150,8 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 			}
 
 		}
-	*/
 
+	*/
 	return nil, nil
 }
 

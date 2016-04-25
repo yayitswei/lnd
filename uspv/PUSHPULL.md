@@ -30,65 +30,79 @@ There's only 1 struct in ram so there's a bunch of overwrites.  But there's data
 
 There's only one state in ram, and only one state on disk.  However, in terms of "previous / current / next", the state on disk may be earlier than the state in ram.  Ram is "ahead"; you're not sure from looking at the disk if you've sent the message or not, but you can just send again if you're not sure.  From looking at the state on disk, it is clear what the is next step and mesages to send.
 
+State has a mutex in case something comes in over the wire before you're done modifying in-ram state.  Probably safer that way.
+
 ## Message and DB sequence:
 
-### Pusher: UI trigger (destination, amountToSend)
-RAM state: set delta to -amountToSend (delta is negative for pusher)
-##### save to DB (only negative delta is new)
-idx++
-send RTS (idx, amountToSend)
+### Pusher: UI trigger (destination, amountToSend)  
+RAM state: set delta to -amountToSend (delta is negative for pusher)  
+##### save to DB (only negative delta is new)  
+idx++  
+send RTS (idx, amountToSend)  
+amt += delta  
+delta = 0  
+copy(prevRH, revH)  
+release lock  
 
-### Puller: Receive RTS
-check RTS(idx) == idx+1
-check RTS(amount) > 0
-delta = RTS(amount)
-##### Save to DB(only positive delta is new)
-idx++
-create theirRevH(idx)
-create tx(theirs)
-sign tx
-send ACKSIG(sig, revH)
+### Puller: Receive RTS  
+check RTS(idx) == idx+1  
+check RTS(amount) > 0  
+delta = RTS(amount)  
+##### Save to DB(only positive delta is new)  
+idx++  
+amt += delta  
+delta = 0  
+create theirRevH(idx)  
+- create tx (theirs)  
+sign tx  
+send ACKSIG(sig, theirRevH)  
+clear theirRevH  
+release lock  
 
-### Pusher: Receive ACKSIG
-copy(prevRH, revH)
-amt += delta
-delta = 0
-revH = SIGACK(revH)
-sig = SIGACK(sig)
-create tx(mine)
-verify sig (if fails, restore from DB, try RTS again..?)
-##### Save to DB(all fields new; prevRH populated, delta = 0)
-create theirRevH(idx)
-create tx(theirs)
-sign tx
-create elk(idx-1)
-send SIGREV(sig, theirRevH, elk)
+### Pusher: Receive ACKSIG  
+revH = SIGACK(revH)  
+sig = SIGACK(sig)  
+- create tx (mine)  
+verify sig (if fails, restore from DB, try RTS again..?)  
+##### Save to DB(all fields new; prevRH populated, delta = 0)  
+create theirRevH(idx)  
+- create tx (theirs)  
+sign tx  
+create elk(idx-1)  
+send SIGREV(sig, theirRevH, elk)  
 
-### Puller: Receive SIGREV
-verify hash160(SIGREV(elk[:16])) == revH
-verify elk insertion (do this first because we overwrite revH)
-amt += delta
-delta = 0
-revH = SIGREV(revH)
-sig = SIGREV(sig)
-clear theirRevH
-create tx(mine)
-verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)
-##### Save to DB(all fields new, prevRH empty, delta = 0)
-create elk(idx-1)
-send REV(elk)
+### Puller: Receive SIGREV  
+verify hash160(SIGREV(elk[:16])) == revH  
+verify elk insertion (do this first because we overwrite revH)  
+revH = SIGREV(revH)  
+sig = SIGREV(sig)  
+- create tx(mine)  
+verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)  
+##### Save to DB(all fields new, prevRH empty, delta = 0)  
+create elk(idx-1)  
+send REV(elk)  
 
-### Pusher: Receive REV
-verify hash160(REV(elk[:16])) == prevRH
-verify elk insertion
-set prevRH to empty
-##### Save to DB(prevRH empty)
+### Pusher: Receive REV  
+verify hash160(REV(elk[:16])) == prevRH  
+verify elk insertion  
+set prevRH to empty  
+##### Save to DB(prevRH empty)  
 
 ## Explanation
 
 The genral sequence is to take in data, use it to modify the state in RAM, and  verify it.  If it's OK, then save it to the DB, then after saving construct and send the response.  This way if something goes wrong and you pull the plug, you might not be sure if you sent a message or not, but you can safely construct and send it again, based on the data in the DB.  Based on the DB state you'll know where in the process you stopped and can hopefully resume.
 
+TLDR:  
 
+Pusher sends amount he's sending.
+
+puller makes pusher tx, signs and sends sig.
+
+pusher makes pusher tx, verifies sig. makes puller tx, signs; sends sig and elkrem
+
+puller makes puller tx, verifies sig. sends elkrem. verifies pusher elkrem.
+
+pusher verifies puller elkrem.
 
 
 
