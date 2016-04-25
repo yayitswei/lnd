@@ -427,13 +427,14 @@ func Bal(args []string) error {
 		// display txid instead of outpoint because easier to copy/paste
 		fmt.Printf("%s h:%d (%d,%d) cap: %d\n",
 			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
+		fmt.Printf("\t REFUND mine:%x them:%x\n",
+			q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
 		if q.State == nil {
 			fmt.Printf("\t no valid state data\n")
 		} else {
-			fmt.Printf("\tSTATE myrev:%x threv:%x stateidx:%d mine:%d them:%d\n",
-				q.State.MyRevHash[:4], q.State.TheirRevHash[:4],
-				q.State.StateIdx,
-				q.State.MyAmt, q.Value-q.State.MyAmt)
+			fmt.Printf("\tSTATE myRev:%x prevRev:%x stateidx:%d mine:%d them:%d\n",
+				q.State.MyRevHash[:4], q.State.MyPrevRev[:4],
+				q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
 			fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())
 		}
 	}

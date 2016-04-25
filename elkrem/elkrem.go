@@ -98,6 +98,7 @@ func NewElkremSender(r wire.ShaHash) *ElkremSender {
 //}
 
 // AtIndex skips to the requested index
+// should never error; remove error..?
 func (e *ElkremSender) AtIndex(w uint64) (*wire.ShaHash, error) {
 	out, err := descend(w, maxIndex, maxHeight, *e.root)
 	return &out, err

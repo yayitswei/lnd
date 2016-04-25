@@ -321,7 +321,7 @@ func (ts *TxStore) MakeFundTx(
 			}
 		}
 		// make new bucket for this mutliout
-		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
+		qcBucket, err := pr.CreateBucket(OutPointToBytes(*op))
 		if err != nil {
 			return err
 		}
@@ -337,13 +337,13 @@ func (ts *TxStore) MakeFundTx(
 		qc.TheirPub = theirPub
 		qc.TheirRefundAdr = theirRefund
 		// serialize multiOut
-		mOutBytes, err := qc.ToBytes()
+		qcBytes, err := qc.ToBytes()
 		if err != nil {
 			return err
 		}
 
-		// save multioutpoint in the bucket
-		err = multiBucket.Put(KEYutxo, mOutBytes)
+		// save qchannel in the bucket; it has no state yet
+		err = qcBucket.Put(KEYutxo, qcBytes)
 		if err != nil {
 			return err
 		}
@@ -358,7 +358,7 @@ func (ts *TxStore) MakeFundTx(
 
 		var buf bytes.Buffer
 		tx.SerializeWitness(&buf) // no witness yet, but it will be witty
-		return multiBucket.Put(KEYUnsig, buf.Bytes())
+		return qcBucket.Put(KEYUnsig, buf.Bytes())
 	})
 	if err != nil {
 		return nil, nil, nil, err

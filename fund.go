@@ -47,6 +47,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	qChanCapacity := int64(2000000) // this will be an arg
 	satPerByte := int64(80)
 	capBytes := uspv.I64tB(qChanCapacity)
+	initPayBytes := uspv.I64tB(1000000) // also will be an arg
 	if len(pubRespBytes) != 53 {
 		fmt.Printf("PubRespHandler err: pubRespBytes %d bytes, expect 53\n",
 			len(pubRespBytes))
@@ -110,15 +111,28 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
+	// load qchan from DB (that we just saved) to generate elkrem / sig / etc
+	var opArr [36]byte
+	copy(opArr[:], uspv.OutPointToBytes(*op))
+	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	if err != nil {
+		fmt.Printf("PubRespHandler err %s", err.Error())
+		return
+	}
 
-	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8)
+	sig, revH, err := SCon.TS.SignState(qc)
+
+	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8),
+	// initial payment (8), revokehash (20), signature (~70)
+	// total length
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPubBytes...)
 	msg = append(msg, myRefundBytes...)
-	// do you actually need to say the capacity?  They'll figure it out...
-	// nah, better to send capacity; needed for channel refund
 	msg = append(msg, capBytes...)
+	msg = append(msg, initPayBytes...)
+	msg = append(msg, revH[:]...)
+	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
 
 	return
@@ -127,8 +141,8 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) != 97 {
-		fmt.Printf("got %d byte multiDesc, expect 97\n", len(descbytes))
+	if len(descbytes) < 190 || len(descbytes) > 200 {
+		fmt.Printf("got %d byte multiDesc, expect ~195\n", len(descbytes))
 		return
 	}
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
@@ -144,7 +158,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	copy(opBytes[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opBytes)
 	copy(theirRefundAdr[:], descbytes[69:89])
-	amt := uspv.BtI64(descbytes[89:])
+	amt := uspv.BtI64(descbytes[89:97])
 
 	// save to db
 	// it should go into the next bucket and get the right key index.

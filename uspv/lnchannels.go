@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
 )
@@ -75,15 +76,38 @@ var (
 //	return script, nil
 //}
 
-// SignNextState generates your signature for their next state.
-// doesn't modify next state.
-func (t TxStore) SignState(q *Qchan) ([]byte, error) {
+func (q *Qchan) MakeRevokeHash() error {
+	if q == nil || q.ElkSnd == nil { // can't do anything
+		return fmt.Errorf("can't access elkrem")
+	}
+	elk, err := q.ElkSnd.AtIndex(q.State.StateIdx)
+	if err != nil {
+		return err
+	}
+	copy(q.State.TheirRevHash[:], btcutil.Hash160(elk[:16]))
+	// preimage is first 16 bytes of elk
+	return nil
+}
+
+// SignNextState generates your signature for their state.  Also returns their
+// revoke hash (the one they store)
+// doesn't modify state.
+func (t TxStore) SignState(q *Qchan) ([]byte, [20]byte, error) {
+	var empty [20]byte
+	// generate their revoke hash
+	err := q.MakeRevokeHash()
+	if err != nil {
+		return nil, empty, err
+	}
 
 	// build transaction for next state
-	tx, err := q.BuildStateTx() // theirs, next
+	tx, err := q.BuildStateTx() // theirs, due to revoke hash
 	if err != nil {
-		return nil, err
+		return nil, empty, err
 	}
+	theirrev := q.State.TheirRevHash // copy the revoke hash to return
+
+	q.State.TheirRevHash = empty
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(tx)
@@ -92,7 +116,7 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	pre, _, err := FundTxScript(
 		q.MyPub.SerializeCompressed(), q.TheirPub.SerializeCompressed())
 	if err != nil {
-		return nil, err
+		return nil, empty, err
 	}
 
 	// get private signing key
@@ -104,7 +128,7 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	// truncate sig (last byte is sighash type, always sighashAll)
 	sig = sig[:len(sig)-1]
 
-	return sig, nil
+	return sig, theirrev, nil
 }
 
 // VerifyNextState verifies their signature for your next state.
@@ -328,29 +352,21 @@ func P2WSHify(scriptBytes []byte) []byte {
 	return b
 }
 
-// StatComs are State Commitments.
-//type StatCom struct {
-//	StateIdx uint64 // this is the n'th state commitment
-
-//	MyAmt int64 // my channel allocation
-//	// their Amt is the utxo.Value minus this
-
-//	TheirRevHash [20]byte // 16byte hash, preimage of which is needed to sweep.
-//	MyRevHash    [20]byte // the revoke hash I generate and send to them
-//	Sig          []byte   // Counterparty's signature (for StatCom tx)
-//}
-
 /*----- serialization for StatCom ------- */
 /*
-bytes   desc   at offset
-1	len			0
-8	StateIdx		1
-8	MyAmt		9
-20	TheirRev		17
-70?	Sig			37
-... to 107 bytes, ish.
+bytes   desc   ends at
+1	len			1
+8	StateIdx		9
+8	MyAmt		17
+4	Delta		21
+20	MyRev		41
+20	MyPrevRev	61
+70?	Sig			131
+... to 131 bytes, ish.
 
-my rev hash can be derived from the elkrem sender
+note that sigs are truncated and don't have the sighash type byte at the end.
+
+their rev hash can be derived from the elkrem sender
 and the stateidx.  hash160(elkremsend(sIdx)[:16])
 
 */
@@ -359,15 +375,6 @@ and the stateidx.  hash160(elkremsend(sIdx)[:16])
 func (s *StatCom) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	var err error
-
-	// Don't have this for now... gets saved separately
-	// write 1 byte length of this statcom
-	// (needed because sigs are #()# variable length
-	//	slen := uint8(len(s.Sig) + 36)
-	//	err := buf.WriteByte(slen)
-	//	if err != nil {
-	//		return nil, err
-	//	}
 
 	// write 8 byte state index
 	err = binary.Write(&buf, binary.BigEndian, s.StateIdx)
@@ -379,8 +386,19 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// write 20 byte their revocation hash
-	_, err = buf.Write(s.TheirRevHash[:])
+	// write 4 byte delta.  At steady state it's 0.
+	err = binary.Write(&buf, binary.BigEndian, s.Delta)
+	if err != nil {
+		return nil, err
+	}
+	// write 20 byte my revocation hash
+	_, err = buf.Write(s.MyRevHash[:])
+	if err != nil {
+		return nil, err
+	}
+	// write 20 byte my previous revocation hash
+	// at steady state it's 0s.
+	_, err = buf.Write(s.MyRevHash[:])
 	if err != nil {
 		return nil, err
 	}
@@ -395,8 +413,8 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 // StatComFromBytes turns 106ish bytes into a StatCom
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
-	if len(b) < 100 || len(b) > 110 {
-		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 106\n",
+	if len(b) < 120 || len(b) > 150 {
+		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
 			len(b))
 	}
 	buf := bytes.NewBuffer(b)
@@ -410,8 +428,15 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 	if err != nil {
 		return nil, err
 	}
-	// read the 20 bytes of their revocation hash
-	copy(s.TheirRevHash[:], buf.Next(20))
+	// read 4 byte delta.
+	err = binary.Read(buf, binary.BigEndian, &s.Delta)
+	if err != nil {
+		return nil, err
+	}
+	// read the 20 bytes of my revocation hash
+	copy(s.MyRevHash[:], buf.Next(20))
+	// read 20 byte my previous revocation hash
+	copy(s.MyPrevRev[:], buf.Next(20))
 	// the rest is their sig
 	s.Sig = buf.Bytes()
 
