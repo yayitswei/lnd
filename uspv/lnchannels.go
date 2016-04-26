@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
 )
@@ -24,9 +23,9 @@ const (
 type Qchan struct {
 	// S for stored (on disk), D for derived
 
-	Utxo                      // S underlying utxo data
-	MyPub    *btcec.PublicKey // D my channel specific pubkey
-	TheirPub *btcec.PublicKey // S their channel specific pubkey
+	Utxo              // S underlying utxo data
+	MyPub    [33]byte // D my channel specific pubkey
+	TheirPub [33]byte // S their channel specific pubkey
 
 	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
 
@@ -49,10 +48,10 @@ type StatCom struct {
 	Delta int32 // fun amount in-transit; is negative for the pusher
 
 	// Revocation hash, preimage of which is needed to sweep.
-	MyRevHash    [20]byte // saved to disk
-	TheirRevHash [20]byte // not saved, generated on the fly
+	MyRevPub    [33]byte // saved to disk
+	TheirRevPub [33]byte // not saved, generated on the fly from q.TheirPub
 
-	MyPrevRev [20]byte // When you haven't gotten their revocation preimage yet.
+	MyPrevRev [33]byte // When you haven't gotten their revocation preimage yet.
 
 	Sig []byte // Counterparty's signature (for StatCom tx)
 	// note sig can be nil during channel creation. if stateIdx isn't 0,
@@ -76,7 +75,7 @@ var (
 //	return script, nil
 //}
 
-func (q *Qchan) MakeRevokeHash() error {
+func (q *Qchan) MakeRevealablePubkey() error {
 	if q == nil || q.ElkSnd == nil { // can't do anything
 		return fmt.Errorf("can't access elkrem")
 	}
@@ -84,18 +83,23 @@ func (q *Qchan) MakeRevokeHash() error {
 	if err != nil {
 		return err
 	}
-	copy(q.State.TheirRevHash[:], btcutil.Hash160(elk[:16]))
-	// preimage is first 16 bytes of elk
+	// make a copy of their channel pubkey
+	RevPub, _ := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
+	// add your elkrem to the pubkey
+	PubKeyAddBytes(RevPub, elk.Bytes())
+	// copy the pubkey bytes into the state in ram
+	copy(q.State.TheirRevPub[:], RevPub.SerializeCompressed())
+
 	return nil
 }
 
 // SignNextState generates your signature for their state.  Also returns their
 // revoke hash (the one they store)
 // doesn't modify state.
-func (t TxStore) SignState(q *Qchan) ([]byte, [20]byte, error) {
-	var empty [20]byte
+func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
+	var empty [33]byte
 	// generate their revoke hash
-	err := q.MakeRevokeHash()
+	err := q.MakeRevealablePubkey()
 	if err != nil {
 		return nil, empty, err
 	}
@@ -105,16 +109,15 @@ func (t TxStore) SignState(q *Qchan) ([]byte, [20]byte, error) {
 	if err != nil {
 		return nil, empty, err
 	}
-	theirrev := q.State.TheirRevHash // copy the revoke hash to return
+	theirrev := q.State.TheirRevPub // copy the revoke hash to return
 
-	q.State.TheirRevHash = empty
+	q.State.TheirRevPub = empty
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(tx)
 
 	// generate script preimage (ignore key order)
-	pre, _, err := FundTxScript(
-		q.MyPub.SerializeCompressed(), q.TheirPub.SerializeCompressed())
+	pre, _, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
 	if err != nil {
 		return nil, empty, err
 	}
@@ -141,7 +144,7 @@ func (q *Qchan) VerifyState(sig []byte) error {
 	}
 
 	// generate fund output script preimage (ignore key order)
-	pre, _, err := FundTxScript(q.MyPub.SerializeCompressed(), q.TheirPub.SerializeCompressed())
+	pre, _, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
 	if err != nil {
 		return err
 	}
@@ -161,8 +164,12 @@ func (q *Qchan) VerifyState(sig []byte) error {
 	if err != nil {
 		return err
 	}
+	theirPubKey, err := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
+	if err != nil {
+		return err
+	}
 
-	worked := pSig.Verify(hash, q.TheirPub)
+	worked := pSig.Verify(hash, theirPubKey)
 	if !worked {
 		return fmt.Errorf("Their sig was no good!!!!!111")
 	}
@@ -194,36 +201,35 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 		return nil, fmt.Errorf(
 			"BuildStateTx: delta is %d (expect 0)", s.Delta)
 	}
-	if q.MyPub == nil || q.TheirPub == nil {
-		return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
-	}
+	//	if q.MyPub == nil || q.TheirPub == nil {
+	//		return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
+	//	}
 
-	var fancyAmt, pkhAmt int64            // output amounts
-	var rHash [20]byte                    // revokable hash -- starts empty!!
-	var hashPub, timePub *btcec.PublicKey // pubkeys
-	var pkhAdr [20]byte                   // the simple output's pub key hash
-	fee := int64(5000)                    // fixed fee for now
-	delay := uint32(5)                    // fixed CSV delay for now
+	var empty [33]byte
+
+	var fancyAmt, pkhAmt int64   // output amounts
+	var revPub, timePub [33]byte // pubkeys
+	var pkhAdr [20]byte          // the simple output's pub key hash
+	fee := int64(5000)           // fixed fee for now
+	delay := uint32(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
-	if s.TheirRevHash == rHash { // theirRev is empty; build MY tx
-		hashPub = q.TheirPub
+	if s.TheirRevPub == empty { // theirRevPub is empty; build MY tx
+		revPub = s.MyRevPub
 		timePub = q.MyPub
 		pkhAdr = q.TheirRefundAdr
 		fancyAmt = s.MyAmt - fee
 		pkhAmt = (q.Value - s.MyAmt) - fee
-		rHash = s.MyRevHash
-	} else { // theirRev is full; build THEIR tx
-		hashPub = q.MyPub
+	} else { // theirRevPub is full; build THEIR tx
+		revPub = s.TheirRevPub
 		timePub = q.TheirPub
 		pkhAdr = q.MyRefundAdr
 		fancyAmt = (q.Value - s.MyAmt) - fee
 		pkhAmt = s.MyAmt - fee
-		rHash = s.TheirRevHash
 	}
 
 	// now that everything is chosen, build fancy script and pkh script
-	fancyScript, _ := CommitScript(hashPub, timePub, rHash, delay)
+	fancyScript, _ := CommitScript2(revPub, timePub, delay)
 	pkhScript := DirectWPKHScript(pkhAdr)
 
 	// create txouts by assigning amounts
@@ -289,16 +295,16 @@ func CommitScript(HKey, TKey *btcec.PublicKey,
 // CommitScript2 doesn't use hashes, but a modified pubkey.
 // To spend from it, push a 1 or a 0, then your sig.
 // 1 means CSV time delay, 0 means you have the revoked private key.
-func CommitScript2(RKey, TKey *btcec.PublicKey, delay uint32) ([]byte, error) {
+func CommitScript2(RKey, TKey [33]byte, delay uint32) ([]byte, error) {
 	builder := txscript.NewScriptBuilder()
 
 	builder.AddOp(txscript.OP_IF)
 	builder.AddInt64(int64(delay))
 	builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
 	builder.AddOp(txscript.OP_DROP)
-	builder.AddData(TKey.SerializeCompressed())
+	builder.AddData(TKey[:])
 	builder.AddOp(txscript.OP_ELSE)
-	builder.AddData(RKey.SerializeCompressed())
+	builder.AddData(RKey[:])
 	builder.AddOp(txscript.OP_ENDIF)
 	builder.AddOp(txscript.OP_CHECKSIG)
 
@@ -378,9 +384,9 @@ bytes   desc   ends at
 8	StateIdx		9
 8	MyAmt		17
 4	Delta		21
-20	MyRev		41
-20	MyPrevRev	61
-70?	Sig			131
+33	MyRev		54
+33	MyPrevRev	87
+70?	Sig			157
 ... to 131 bytes, ish.
 
 note that sigs are truncated and don't have the sighash type byte at the end.
@@ -410,14 +416,14 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// write 20 byte my revocation hash
-	_, err = buf.Write(s.MyRevHash[:])
+	// write 33 byte my revocation pubkey
+	_, err = buf.Write(s.MyRevPub[:])
 	if err != nil {
 		return nil, err
 	}
-	// write 20 byte my previous revocation hash
+	// write 33 byte my previous revocation hash
 	// at steady state it's 0s.
-	_, err = buf.Write(s.MyRevHash[:])
+	_, err = buf.Write(s.MyPrevRev[:])
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +438,7 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 // StatComFromBytes turns 106ish bytes into a StatCom
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
-	if len(b) < 120 || len(b) > 150 {
+	if len(b) < 150 || len(b) > 170 {
 		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
 			len(b))
 	}
@@ -453,9 +459,9 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 		return nil, err
 	}
 	// read the 20 bytes of my revocation hash
-	copy(s.MyRevHash[:], buf.Next(20))
+	copy(s.MyRevPub[:], buf.Next(33))
 	// read 20 byte my previous revocation hash
-	copy(s.MyPrevRev[:], buf.Next(20))
+	copy(s.MyPrevRev[:], buf.Next(33))
 	// the rest is their sig
 	s.Sig = buf.Bytes()
 
@@ -493,7 +499,7 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	}
 
 	// write 33 byte pubkey (theirs)
-	_, err = buf.Write(q.TheirPub.SerializeCompressed())
+	_, err = buf.Write(q.TheirPub[:])
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +512,7 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 }
 
 // MultiOutFromBytes turns bytes into a MultiOut.
-// the first 53 bytes are the utxo, then next 33 is the pubkey
+// the first 53 bytes are the utxo, then next 33 is the pubkey, then their pkh.
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
@@ -519,12 +525,9 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 		return q, err
 	}
 
-	//	buf := bytes.NewBuffer(b[53:86])
-	// will be 33, size checked up there
-
 	q.Utxo = u // assign the utxo
 
-	q.TheirPub, err = btcec.ParsePubKey(b[53:86], btcec.S256())
+	copy(q.TheirPub[:], b[53:86])
 	if err != nil {
 		return q, err
 	}

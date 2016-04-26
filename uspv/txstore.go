@@ -88,12 +88,12 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	if err != nil {
 		return nil, err
 	}
-	allMulti, err := t.GetAllQchans()
+	allQ, err := t.GetAllQchans()
 	if err != nil {
 		return nil, err
 	}
 
-	filterElements := uint32(len(allUtxos) + len(t.Adrs) + len(allMulti))
+	filterElements := uint32(len(allUtxos) + len(t.Adrs) + len(allQ))
 
 	f := bloom.NewFilter(filterElements, 0, 0.000001, wire.BloomUpdateAll)
 
@@ -107,7 +107,7 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	}
 	// actually... we should monitor addresses, not txids, right?
 	// or no...?
-	for _, m := range allMulti {
+	for _, m := range allQ {
 
 		// aha, add HASH here, not the outpoint!
 		f.AddShaHash(&m.Op.Hash)
@@ -117,6 +117,9 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 		// shahash. Might be that shahash operates differently (on txids, not txs)
 		f.AddOutPoint(&m.Op)
 	}
+	// still some problem with filter?  When they broadcast a close which doesn't
+	// send any to us, sometimes we don't see it and think the channel is still open.
+	// so not monitoring the channel outpoint properly?  here or in ingest()
 
 	fmt.Printf("made %d element filter\n", filterElements)
 	return f, nil

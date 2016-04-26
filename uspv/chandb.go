@@ -221,8 +221,9 @@ func (ts *TxStore) NewFundReq(peerBytes []byte) (uint32, error) {
 
 // NextPubForPeer returns the next pubkey to use with the peer.
 // It first checks that the peer exists, next pubkey.  Read only.
-func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, []byte, error) {
+func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
 	var peerIdx, cIdx uint32
+	var empty [33]byte
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -245,15 +246,15 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, []byte, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return empty, nil, err
 	}
 
 	pub := ts.GetFundPubkey(peerIdx, cIdx)
 	adr := ts.GetRefundAddressBytes(peerIdx, cIdx)
-	if pub == nil || adr == nil {
-		return nil, nil, fmt.Errorf("NextPubForPeer: nil key")
-	}
-	return pub.SerializeCompressed(), adr, nil
+	//	if pub == nil || adr == nil {
+	//		return nil, nil, fmt.Errorf("NextPubForPeer: nil key")
+	//	}
+	return pub, adr, nil
 }
 
 // MakeFundTx fills out a channel funding tx.
@@ -269,14 +270,12 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([]byte, []byte, error) {
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
 func (ts *TxStore) MakeFundTx(
-	tx *wire.MsgTx, amt int64, peerBytes []byte, theirPub *btcec.PublicKey,
-	theirRefund [20]byte) (*wire.OutPoint, []byte, []byte, error) {
+	tx *wire.MsgTx, amt int64, peerBytes []byte, theirPub [33]byte,
+	theirRefund [20]byte) (*wire.OutPoint, [33]byte, []byte, error) {
 
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
-	var myPubBytes []byte
-
-	theirPubBytes := theirPub.SerializeCompressed()
+	var myPub [33]byte
 
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
@@ -294,14 +293,11 @@ func (ts *TxStore) MakeFundTx(
 		peerIdx = BtU32(peerIdxBytes)                // store peer index for key creation
 		cIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
 		// generate pubkey from peer, multi indexes
-		myPub := ts.GetFundPubkey(peerIdx, cIdx)
-		if myPub == nil {
-			return fmt.Errorf("nil key")
-		}
-		myPubBytes = myPub.SerializeCompressed()
+		myPub = ts.GetFundPubkey(peerIdx, cIdx)
+		// check if mypub is empty?
 
 		// generate multisig output from two pubkeys
-		multiTxOut, err := FundTxOut(theirPubBytes, myPubBytes, amt)
+		multiTxOut, err := FundTxOut(theirPub[:], myPub[:], amt)
 		if err != nil {
 			return err
 		}
@@ -361,22 +357,22 @@ func (ts *TxStore) MakeFundTx(
 		return qcBucket.Put(KEYUnsig, buf.Bytes())
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, myPub, nil, err
 	}
 	// derive my refund adr bytes
 	myRefundBytes := ts.GetRefundAddressBytes(peerIdx, cIdx)
 	if myRefundBytes == nil {
-		return op, nil, nil, fmt.Errorf("nil key")
+		return op, myPub, nil, fmt.Errorf("nil key")
 	}
 
-	return op, myPubBytes, myRefundBytes, nil
+	return op, myPub, myRefundBytes, nil
 }
 
 // SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerBytes []byte, theirPub *btcec.PublicKey, theirRefund [20]byte) error {
+	peerBytes []byte, theirPub [33]byte, theirRefund [20]byte) error {
 
 	var cIdx uint32
 

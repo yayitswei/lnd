@@ -439,7 +439,7 @@ func Bal(args []string) error {
 			fmt.Printf("\t no valid state data\n")
 		} else {
 			fmt.Printf("\tSTATE myRev:%x prevRev:%x stateidx:%d mine:%d them:%d\n",
-				q.State.MyRevHash[:4], q.State.MyPrevRev[:4],
+				q.State.MyRevPub[:4], q.State.MyPrevRev[:4],
 				q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
 			fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())
 		}

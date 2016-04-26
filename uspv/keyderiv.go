@@ -135,8 +135,13 @@ func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 
 // GetFundPubkey generates and returns the fund tx pubkey for a given index.
 // It will return nil if there's an error / problem
-func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
-	return ts.GetPubkey(UseChannelFund, peerIdx, cIdx)
+func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
+	var b [33]byte
+	k := ts.GetPubkey(UseChannelFund, peerIdx, cIdx)
+	if k != nil {
+		copy(b[:], k.SerializeCompressed())
+	}
+	return b
 }
 
 // GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?

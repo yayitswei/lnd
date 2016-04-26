@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -11,16 +12,18 @@ import (
 func Math(args []string) error {
 	priv := SCon.TS.GetFundPrivkey(5, 5)
 
-	pub := SCon.TS.GetFundPubkey(5, 5)
+	pubArr := SCon.TS.GetFundPubkey(5, 5)
 
-	fmt.Printf("initial  pub: %x\n", pub.SerializeCompressed())
+	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
+	fmt.Printf("initial  pub: %x\n", pubArr)
+
 	//	for i := 0; i < 10000; i++ {
-	uspv.PubKeyAddBytes(pub, []byte("grand"))
+	uspv.PubKeyAddBytes(pub, []byte("bigint"))
 	//	}
 	fmt.Printf("modified pub: %x\n", pub.SerializeCompressed())
 
 	//	for i := 0; i < 10000; i++ {
-	uspv.PrivKeyAddBytes(priv, []byte("grane"))
+	uspv.PrivKeyAddBytes(priv, []byte("bigint"))
 	//	}
 	fmt.Printf("from prv pub: %x\n", priv.PubKey().SerializeCompressed())
 

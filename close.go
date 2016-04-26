@@ -93,25 +93,25 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	op := uspv.OutPointFromBytes(opArr)
 	adrBytes := reqbytes[36:] // 20 byte address (put a 0x00 in front)
 
-	mult, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
 	}
 	fmt.Printf("___Got close req for %s. our key is %d, %d, their key is %x\n",
-		op.String(), mult.PeerIdx, mult.KeyIdx, mult.TheirPub.SerializeCompressed())
+		op.String(), qc.PeerIdx, qc.KeyIdx, qc.TheirPub)
 
 	// we have the data needed to make the tx; make tx, sign, and send sig.
 	tx := wire.NewMsgTx() // make new tx
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := SCon.TS.GetFundPrivkey(mult.PeerIdx, mult.KeyIdx)
+	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
-	theirPubBytes := mult.TheirPub.SerializeCompressed()
+
 	// reconstruct output script (preimage)
 	// don't care if swapped as not aggregating signatures
-	pre, _, err := uspv.FundTxScript(myPubBytes, theirPubBytes)
+	pre, _, err := uspv.FundTxScript(myPubBytes, qc.TheirPub[:])
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -119,7 +119,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	subScript := uspv.P2WSHify(pre)
 	fmt.Printf("\n\t\t>>> recovered subscript: %x\npre: %x\n\n", subScript, pre)
-	fmt.Printf("spending multi %s\n", mult.Op.String())
+	fmt.Printf("spending multi %s\n", qc.Op.String())
 	// add multi input, with no subscript or witness or anything.
 	tx.AddTxIn(wire.NewTxIn(op, nil, nil))
 
@@ -136,12 +136,12 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 		return
 	}
 
-	tx.AddTxOut(wire.NewTxOut(mult.Value-fee, outputScript))
+	tx.AddTxOut(wire.NewTxOut(qc.Value-fee, outputScript))
 
 	hCache := txscript.NewTxSigHashes(tx)
 	// generate sig.  Use Raw because we don't want the pubkey
 	sig, err := txscript.RawTxInWitnessSignature(
-		tx, hCache, 0, mult.Value, pre, txscript.SigHashAll, priv)
+		tx, hCache, 0, qc.Value, pre, txscript.SigHashAll, priv)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -187,7 +187,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	// it uses both sigs and broadcasts.  Probably should break this middle
 	// part out into its own function or something.
 
-	mult, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -198,12 +198,12 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := SCon.TS.GetFundPrivkey(mult.PeerIdx, mult.KeyIdx)
+	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
-	theirPubBytes := mult.TheirPub.SerializeCompressed()
+
 	// reconstruct output script (preimage)
-	pre, swap, err := uspv.FundTxScript(myPubBytes, theirPubBytes)
+	pre, swap, err := uspv.FundTxScript(myPubBytes, qc.TheirPub[:])
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -211,7 +211,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	subScript := uspv.P2WSHify(pre)
 	fmt.Printf("\t\t>>> recovered subscript: %x\npre: %x\n", subScript, pre)
-	fmt.Printf("spending multi %s\n", mult.Op.String())
+	fmt.Printf("spending multi %s\n", qc.Op.String())
 	// add multi input, with no subscript or witness or anything.
 	tx.AddTxIn(wire.NewTxIn(op, nil, nil))
 
@@ -228,7 +228,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 		return
 	}
 
-	tx.AddTxOut(wire.NewTxOut(mult.Value-fee, outputScript))
+	tx.AddTxOut(wire.NewTxOut(qc.Value-fee, outputScript))
 
 	hCache := txscript.NewTxSigHashes(tx)
 	// check their sig.
@@ -238,7 +238,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	// generate sig.  Use Raw because we don't want the pubkey
 	// subscript is the preimage.  mkay.
 	mySig, err := txscript.RawTxInWitnessSignature(
-		tx, hCache, 0, mult.Value, pre, txscript.SigHashAll, priv)
+		tx, hCache, 0, qc.Value, pre, txscript.SigHashAll, priv)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return

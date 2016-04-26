@@ -35,7 +35,7 @@ func PubReqHandler(from [16]byte) {
 	fmt.Printf("Generated pubkey %x\n", pub)
 
 	msg := []byte{uwire.MSGID_PUBRESP}
-	msg = append(msg, pub...)
+	msg = append(msg, pub[:]...)
 	msg = append(msg, refundadr...)
 	_, err = RemoteCon.Write(msg)
 	return
@@ -53,19 +53,20 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 			len(pubRespBytes))
 		return
 	}
+	var theirPub [33]byte
+	copy(theirPub[:], pubRespBytes[:33])
 
-	theirPubBytes := pubRespBytes[:33]
 	var theirRefundAdr [20]byte
 	copy(theirRefundAdr[:], pubRespBytes[33:])
 
 	// make sure their pubkey is a pubkey
-	theirPub, err := btcec.ParsePubKey(theirPubBytes, btcec.S256())
+	_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
 
-	fmt.Printf("got pubkey response %x\n", theirPub.SerializeCompressed())
+	fmt.Printf("got pubkey response %x\n", theirPub)
 
 	tx := wire.NewMsgTx() // make new tx
 	//	tx.Flags = 0x01       // tx will be witty
@@ -100,7 +101,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
-	op, myPubBytes, myRefundBytes, err := SCon.TS.MakeFundTx(
+	op, myPub, myRefundBytes, err := SCon.TS.MakeFundTx(
 		tx, qChanCapacity, peerBytes, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
@@ -120,18 +121,18 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 		return
 	}
 
-	sig, revH, err := SCon.TS.SignState(qc)
+	sig, revPub, err := SCon.TS.SignState(qc)
 
 	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8),
-	// initial payment (8), revokehash (20), signature (~70)
+	// initial payment (8), revokepubkey (33), signature (~70)
 	// total length
 	msg := []byte{uwire.MSGID_MULTIDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	msg = append(msg, myPubBytes...)
+	msg = append(msg, myPub[:]...)
 	msg = append(msg, myRefundBytes...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
-	msg = append(msg, revH[:]...)
+	msg = append(msg, revPub[:]...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
 
@@ -141,13 +142,16 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 190 || len(descbytes) > 200 {
-		fmt.Printf("got %d byte multiDesc, expect ~195\n", len(descbytes))
+	if len(descbytes) < 200 || len(descbytes) > 215 {
+		fmt.Printf("got %d byte multiDesc, expect ~208\n", len(descbytes))
 		return
 	}
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	var theirPub [33]byte
+	copy(theirPub[:], descbytes[36:69])
+
 	// make sure their pubkey is a pubkey
-	theirPub, err := btcec.ParsePubKey(descbytes[36:69], btcec.S256())
+	_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
