@@ -69,76 +69,6 @@ func CountKeysInBucket(bkt *bolt.Bucket) uint32 {
 	return i
 }
 
-// RestoreQchanFromBucket loads the full qchan into memory from the
-// bucket where it's stored.  Loads the channel info, the elkrems,
-// and the current / next state.
-// You have to tell it the peer index because that comes from 1 level
-// up in the db.
-// restore happens all at once, but saving to the db can happen
-// incrementally (updating states)
-// This should populate everything int he Qchan struct: the elkrems and the states.
-// Elkrem sender always works; is derived from local key data.
-// Elkrem receiver can be "empty" with nothing in it (no data in db)
-// Current and next state can also be not in the DB, which results in
-// State *0* for either.  State 0 is no a valid state and states start at
-// state index 1.  Data errors within the db will return errors, but having
-// *no* data for states or elkrem receiver is not considered an error, and will
-// populate with a state 0 / empty elkrem receiver and return that.
-func (ts *TxStore) RestoreQchanFromBucket(
-	peerIdx uint32, bkt *bolt.Bucket) (*Qchan, error) {
-	if bkt == nil { // can't do anything without a bucket
-		return nil, fmt.Errorf("empty qchan bucket from peer %d", peerIdx)
-	}
-
-	// load the serialized channel base description
-	qc, err := QchanFromBytes(bkt.Get(KEYutxo))
-	if err != nil {
-		return nil, err
-	}
-
-	// note that peerIndex is not set from deserialization!  set it here!
-	qc.PeerIdx = peerIdx
-	// derive my channel pubkey
-	qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
-
-	// derive my refund from index
-	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
-	qc.State = new(StatCom)
-
-	// load state and next state.  If it exists.
-	// if it doesn't, leave as empty state, will fill in
-	stBytes := bkt.Get(KEYState)
-	if stBytes != nil {
-		qc.State, err = StatComFromBytes(stBytes)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load elkrem from elkrem bucket.
-	// shouldn't error even if nil.  So shouldn't error, ever.  Right?
-	// ignore error?
-	qc.ElkRcv, err = elkrem.ElkremReceiverFromBytes(bkt.Get(KEYElkRecv))
-	if err != nil {
-		return nil, err
-	}
-	if qc.ElkRcv != nil {
-		fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
-	}
-
-	// derive elkrem sender root from HD keychain
-	r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
-	// set sender
-	qc.ElkSnd = elkrem.NewElkremSender(r)
-
-	return &qc, nil
-}
-
-// Save / overwrite state of qChan in db
-func (ts *TxStore) SaveQchanState(q *Qchan) error {
-	return nil
-}
-
 // NewPeer saves a pubkey in the DB and assigns a peer index.  Call this
 // the first time you connect to someone.  Returns false if already known,
 // true if it added a new peer.  Errors for real errors.
@@ -372,11 +302,12 @@ func (ts *TxStore) MakeFundTx(
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerBytes []byte, theirPub [33]byte, theirRefund [20]byte) error {
+	peerBytes []byte, theirPub [33]byte, theirRefund [20]byte) (*Qchan, error) {
 
 	var cIdx uint32
+	qc := new(Qchan)
 
-	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
 			return fmt.Errorf("SaveMultiTx: no peers")
@@ -390,6 +321,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		if peerIdxBytes == nil {
 			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerBytes)
 		}
+		// use key counter here?
 		cIdx = uint32(pr.Stats().BucketN) // new non local, high bit 0
 
 		// make new bucket for this mutliout
@@ -398,29 +330,36 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 			return err
 		}
 
-		var mUtxo Utxo      // create new utxo and copy into it
-		mUtxo.AtHeight = -1 // not even broadcast yet
-		mUtxo.KeyIdx = cIdx
-		mUtxo.Value = amt
-		mUtxo.IsWit = true // multi/chan always wit
-		mUtxo.Op = *op
-		var qc Qchan
-		qc.Utxo = mUtxo
+		var cUtxo Utxo      // create new utxo and copy into it
+		cUtxo.AtHeight = -1 // not even broadcast yet
+		cUtxo.KeyIdx = cIdx
+		cUtxo.Value = amt
+		cUtxo.IsWit = true // multi/chan always wit
+		cUtxo.Op = *op
+
+		qc.Utxo = cUtxo
 		qc.TheirPub = theirPub
 		qc.TheirRefundAdr = theirRefund
+		qc.PeerIdx = BtU32(peerIdxBytes)
+		copy(qc.PeerPubId[:], peerBytes)
+
 		// serialize multiOut
-		mOutBytes, err := qc.ToBytes()
+		qcBytes, err := qc.ToBytes()
 		if err != nil {
 			return err
 		}
 
 		// save multiout in the bucket
-		err = multiBucket.Put(KEYutxo, mOutBytes)
+		err = multiBucket.Put(KEYutxo, qcBytes)
 		if err != nil {
 			return err
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return qc, nil
 }
 
 // SignFundTx happens once everything's ready for the tx to be signed and
@@ -507,6 +446,136 @@ func (ts *TxStore) SignFundTx(
 	return tx, nil
 }
 
+// RestoreQchanFromBucket loads the full qchan into memory from the
+// bucket where it's stored.  Loads the channel info, the elkrems,
+// and the current state.
+// You have to tell it the peer index because that comes from 1 level
+// up in the db.  Also the peer's id pubkey.
+// restore happens all at once, but saving to the db can happen
+// incrementally (updating states)
+// This should populate everything int he Qchan struct: the elkrems and the states.
+// Elkrem sender always works; is derived from local key data.
+// Elkrem receiver can be "empty" with nothing in it (no data in db)
+// Current state can also be not in the DB, which results in
+// State *0* for either.  State 0 is no a valid state and states start at
+// state index 1.  Data errors within the db will return errors, but having
+// *no* data for states or elkrem receiver is not considered an error, and will
+// populate with a state 0 / empty elkrem receiver and return that.
+func (ts *TxStore) RestoreQchanFromBucket(
+	peerIdx uint32, peerPub []byte, bkt *bolt.Bucket) (*Qchan, error) {
+	if bkt == nil { // can't do anything without a bucket
+		return nil, fmt.Errorf("empty qchan bucket from peer %d", peerIdx)
+	}
+
+	// load the serialized channel base description
+	qc, err := QchanFromBytes(bkt.Get(KEYutxo))
+	if err != nil {
+		return nil, err
+	}
+
+	// note that peerIndex is not set from deserialization!  set it here!
+	qc.PeerIdx = peerIdx
+	copy(qc.PeerPubId[:], peerPub)
+	// derive my channel pubkey
+	qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
+
+	// derive my refund from index
+	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
+	qc.State = new(StatCom)
+
+	// load state and next state.  If it exists.
+	// if it doesn't, leave as empty state, will fill in
+	stBytes := bkt.Get(KEYState)
+	if stBytes != nil {
+		qc.State, err = StatComFromBytes(stBytes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// load elkrem from elkrem bucket.
+	// shouldn't error even if nil.  So shouldn't error, ever.  Right?
+	// ignore error?
+	qc.ElkRcv, err = elkrem.ElkremReceiverFromBytes(bkt.Get(KEYElkRecv))
+	if err != nil {
+		return nil, err
+	}
+	if qc.ElkRcv != nil {
+		fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
+	}
+
+	// derive elkrem sender root from HD keychain
+	r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
+	// set sender
+	qc.ElkSnd = elkrem.NewElkremSender(r)
+
+	return &qc, nil
+}
+
+//func (ts *TxStore) GetQchan(
+//	peerBytes []byte, opArr [36]byte) (*Qchan, error) {
+
+//	qc := new(Qchan)
+//	var err error
+//	op := OutPointFromBytes(opArr)
+//	err = ts.StateDB.View(func(btx *bolt.Tx) error {
+//		prs := btx.Bucket(BKTPeers)
+//		if prs == nil {
+//			return fmt.Errorf("no peers")
+//		}
+//		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
+//		if pr == nil {
+//			return fmt.Errorf("peer %x not in db", peerBytes)
+//		}
+//		qcBucket := pr.Bucket(opArr[:])
+//		if qcBucket == nil {
+//			return fmt.Errorf("outpoint %s not in db under peer %x",
+//				op.String(), peerBytes)
+//		}
+
+//		pIdx := BtU32(pr.Get(KEYIdx))
+
+//		qc, err = ts.RestoreQchanFromBucket(pIdx, qcBucket)
+//		if err != nil {
+//			return err
+//		}
+//		return nil
+//	})
+//	if err != nil {
+//		return nil, err
+//	}
+//	return qc, nil
+//}
+
+// Save / overwrite state of qChan in db
+// the descent into the qchan bucket is boilerplate and it'd be nice
+// if we can make that it's own function.  Get channel bucket maybe?  But then
+// you have to close it...
+func (ts *TxStore) SaveQchanState(q *Qchan) error {
+	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(q.PeerPubId[:]) // go into this peer's bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not in db", q.PeerPubId)
+		}
+		opB := OutPointToBytes(q.Op)
+		qcBucket := pr.Bucket(opB)
+		if qcBucket == nil {
+			return fmt.Errorf("outpoint %s not in db under peer %x",
+				q.Op.String(), q.PeerPubId)
+		}
+		b, err := q.State.ToBytes()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("writing %d byte state to bucket\n", len(b))
+		return qcBucket.Put(KEYState, b)
+	})
+}
+
 // GetAllQchans returns a slice of all Multiouts. empty slice is OK.
 func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 	var qChans []*Qchan
@@ -533,7 +602,7 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 				}
 
 				pIdx := BtU32(pr.Get(KEYIdx))
-				newQc, err := ts.RestoreQchanFromBucket(pIdx, qcBucket)
+				newQc, err := ts.RestoreQchanFromBucket(pIdx, idPub, qcBucket)
 				if err != nil {
 					return err
 				}
@@ -565,7 +634,7 @@ func (ts *TxStore) GetQchan(
 		if prs == nil {
 			return fmt.Errorf("no peers")
 		}
-		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
+		pr := prs.Bucket(peerBytes) // go into this peer's bucket
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", peerBytes)
 		}
@@ -577,7 +646,7 @@ func (ts *TxStore) GetQchan(
 
 		pIdx := BtU32(pr.Get(KEYIdx))
 
-		qc, err = ts.RestoreQchanFromBucket(pIdx, qcBucket)
+		qc, err = ts.RestoreQchanFromBucket(pIdx, peerBytes, qcBucket)
 		if err != nil {
 			return err
 		}

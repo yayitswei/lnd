@@ -17,9 +17,9 @@ func Math(args []string) error {
 	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
 	fmt.Printf("initial  pub: %x\n", pubArr)
 
-	//	for i := 0; i < 10000; i++ {
-	uspv.PubKeyAddBytes(pub, []byte("bigint"))
-	//	}
+	for i := 0; i < 10000; i++ {
+		uspv.PubKeyAddBytes(pub, []byte("bigint"))
+	}
 	fmt.Printf("modified pub: %x\n", pub.SerializeCompressed())
 
 	//	for i := 0; i < 10000; i++ {

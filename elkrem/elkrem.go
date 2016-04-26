@@ -86,28 +86,12 @@ func NewElkremSender(r wire.ShaHash) *ElkremSender {
 	return &e
 }
 
-// Next() increments the index to the next hash and outputs it
-//func (e *ElkremSender) Next() (*wire.ShaHash, error) {
-//	sha, err := e.AtIndex(e.current)
-//	if err != nil {
-//		return nil, err
-//	}
-//	// increment index for next time
-//	e.current++
-//	return sha, nil
-//}
-
 // AtIndex skips to the requested index
 // should never error; remove error..?
 func (e *ElkremSender) AtIndex(w uint64) (*wire.ShaHash, error) {
 	out, err := descend(w, maxIndex, maxHeight, *e.root)
 	return &out, err
 }
-
-// CurrentIndex tells you the current (last sent) highest output index.
-//func (e *ElkremSender) CurrentIndex() uint64 {
-//	return e.current
-//}
 
 // AddNext inserts the next hash in the tree.  Returns an error if
 // the incoming hash doesn't fit.

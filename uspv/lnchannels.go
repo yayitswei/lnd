@@ -27,7 +27,8 @@ type Qchan struct {
 	MyPub    [33]byte // D my channel specific pubkey
 	TheirPub [33]byte // S their channel specific pubkey
 
-	PeerIdx uint32 // D local unique index of peer.  derived from place in db.
+	PeerIdx   uint32   // D local unique index of peer.  derived from place in db.
+	PeerPubId [33]byte // D useful for quick traverse of db
 
 	TheirRefundAdr [20]byte // S their address for when you break
 	MyRefundAdr    [20]byte // D my refund address when they break
@@ -432,10 +433,10 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return buf.Bytes(), nil
 }
 
-// StatComFromBytes turns 106ish bytes into a StatCom
+// StatComFromBytes turns 160 ish bytes into a StatCom
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
 	if len(b) < 150 || len(b) > 170 {

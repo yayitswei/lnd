@@ -120,6 +120,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
+	//	fmt.Printf()
 
 	sig, revPub, err := SCon.TS.SignState(qc)
 
@@ -159,15 +160,19 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// deserialize outpoint
 	var opBytes [36]byte
 	var theirRefundAdr [20]byte
+	var revokePub [33]byte
 	copy(opBytes[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opBytes)
 	copy(theirRefundAdr[:], descbytes[69:89])
 	amt := uspv.BtI64(descbytes[89:97])
+	initPay := uspv.BtI64(descbytes[97:105])
+	copy(revokePub[:], descbytes[105:138])
+	sig := descbytes[138:]
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	err = SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub, theirRefundAdr)
+	qc, err := SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
@@ -176,6 +181,19 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// before acking, add to bloom filter.  Otherwise we won't see it as
 	// it doesn't involve our utxos / adrs.
 	err = SCon.TS.RefilterLocal()
+	if err != nil {
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
+
+	// create initial state
+	qc.State = new(uspv.StatCom)
+	qc.State.StateIdx = 0
+	qc.State.MyAmt = initPay
+	qc.State.MyRevPub = revokePub
+	qc.State.Sig = sig
+
+	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
