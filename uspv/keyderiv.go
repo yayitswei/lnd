@@ -2,6 +2,7 @@ package uspv
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
@@ -24,6 +25,31 @@ const (
 	UseChannelElkrem = 4
 	UseIdKey         = 11
 )
+
+// PrivKeyAddBytes adds bytes to a private key.
+// NOTE that this modifies the key in place, overwriting it!!!!1
+func PrivKeyAddBytes(k *btcec.PrivateKey, b []byte) {
+	// turn arg bytes into a bigint
+	arg := new(big.Int).SetBytes(b)
+	// add private key to arg
+	k.D.Add(k.D, arg)
+	// mod 2^256ish
+	k.D.Mod(k.D, btcec.S256().N)
+	// new key derived from this sum
+	// D is already modified, need to update the pubkey x and y
+	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
+	return
+}
+
+// PubKeyAddBytes adds bytes to a public key.
+// NOTE that this modifies the key in place, overwriting it!!!!1
+func PubKeyAddBytes(k *btcec.PublicKey, b []byte) {
+	// turn b into a point on the curve
+	bx, by := k.ScalarBaseMult(b)
+	// add arg point to pubkey point
+	k.X, k.Y = btcec.S256().Add(bx, by, k.X, k.Y)
+	return
+}
 
 // GetPrivkey generates and returns a private key derived from the seed.
 // It will return nil if there's an error / problem, but there shouldn't be

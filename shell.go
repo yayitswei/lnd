@@ -66,7 +66,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 25000 // hardcoded; later base on keyfile date?
+		tip = 26222 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -228,7 +228,13 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-
+	if cmd == "math" {
+		err = Math(args)
+		if err != nil {
+			fmt.Printf("math error: %s\n", err)
+		}
+		return nil
+	}
 	fmt.Printf("Command not recognized. type help for command list.\n")
 	return nil
 }

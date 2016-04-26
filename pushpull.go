@@ -3,7 +3,29 @@ package main
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/lightningnetwork/lnd/uspv"
 )
+
+// Do math, see if this curve thing works.
+func Math(args []string) error {
+	priv := SCon.TS.GetFundPrivkey(5, 5)
+
+	pub := SCon.TS.GetFundPubkey(5, 5)
+
+	fmt.Printf("initial  pub: %x\n", pub.SerializeCompressed())
+	//	for i := 0; i < 10000; i++ {
+	uspv.PubKeyAddBytes(pub, []byte("grand"))
+	//	}
+	fmt.Printf("modified pub: %x\n", pub.SerializeCompressed())
+
+	//	for i := 0; i < 10000; i++ {
+	uspv.PrivKeyAddBytes(priv, []byte("grane"))
+	//	}
+	fmt.Printf("from prv pub: %x\n", priv.PubKey().SerializeCompressed())
+
+	return nil
+}
 
 // BreakChannel closes the channel without the other party's involvement.
 // The user causing the channel Break has to wait for the OP_CSV timeout

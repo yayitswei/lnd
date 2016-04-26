@@ -286,6 +286,25 @@ func CommitScript(HKey, TKey *btcec.PublicKey,
 	return builder.Script()
 }
 
+// CommitScript2 doesn't use hashes, but a modified pubkey.
+// To spend from it, push a 1 or a 0, then your sig.
+// 1 means CSV time delay, 0 means you have the revoked private key.
+func CommitScript2(RKey, TKey *btcec.PublicKey, delay uint32) ([]byte, error) {
+	builder := txscript.NewScriptBuilder()
+
+	builder.AddOp(txscript.OP_IF)
+	builder.AddInt64(int64(delay))
+	builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
+	builder.AddOp(txscript.OP_DROP)
+	builder.AddData(TKey.SerializeCompressed())
+	builder.AddOp(txscript.OP_ELSE)
+	builder.AddData(RKey.SerializeCompressed())
+	builder.AddOp(txscript.OP_ENDIF)
+	builder.AddOp(txscript.OP_CHECKSIG)
+
+	return builder.Script()
+}
+
 // FundMultiOut creates a TxOut for the funding transaction.
 // Give it the two pubkeys and it'll give you the p2sh'd txout.
 // You don't have to remember the p2sh preimage, as long as you remember the
