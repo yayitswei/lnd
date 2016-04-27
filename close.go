@@ -8,7 +8,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/lightningnetwork/lnd/uspv"
-	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
 // CloseChannel is a cooperative closing of a channel to a specified address.
@@ -66,7 +65,7 @@ func CloseChannel(args []string) error {
 
 	// close request specifies the outpoint, and the dest address.
 	// (no amounts yet, fixed fee of 8K sat. specify these later of course.)
-	msg := []byte{uwire.MSGID_CLOSEREQ}
+	msg := []byte{uspv.MSGID_CLOSEREQ}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, adr.ScriptAddress()...)
 
@@ -149,7 +148,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	fmt.Printf("generated sig %x\n", sig)
 
-	msg := []byte{uwire.MSGID_CLOSERESP}
+	msg := []byte{uspv.MSGID_CLOSERESP}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)

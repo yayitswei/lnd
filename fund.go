@@ -6,8 +6,14 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/uspv"
-	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
+
+/*
+right now fund makes a channel without actually building commit
+transactions before signing and broadcasting the fund transaction.
+Once state update push/pull messages work that will be added on to
+this process
+*/
 
 // FundChannel makes a multisig address with the node connected to...
 // first just request one of their pubkeys (1 byte message)
@@ -15,7 +21,7 @@ func FundChannel(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
-	msg := []byte{uwire.MSGID_PUBREQ}
+	msg := []byte{uspv.MSGID_PUBREQ}
 	_, err := RemoteCon.Write(msg)
 	return err
 }
@@ -34,7 +40,7 @@ func PubReqHandler(from [16]byte) {
 	}
 	fmt.Printf("Generated pubkey %x\n", pub)
 
-	msg := []byte{uwire.MSGID_PUBRESP}
+	msg := []byte{uspv.MSGID_PUBRESP}
 	msg = append(msg, pub[:]...)
 	msg = append(msg, refundadr...)
 	_, err = RemoteCon.Write(msg)
@@ -46,8 +52,8 @@ func PubReqHandler(from [16]byte) {
 func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	qChanCapacity := int64(2000000) // this will be an arg
 	satPerByte := int64(80)
+	initPay := int64(1000000) // also an arg
 	capBytes := uspv.I64tB(qChanCapacity)
-	initPayBytes := uspv.I64tB(1000000) // also will be an arg
 	if len(pubRespBytes) != 53 {
 		fmt.Printf("PubRespHandler err: pubRespBytes %d bytes, expect 53\n",
 			len(pubRespBytes))
@@ -120,21 +126,27 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
 	}
-	//	fmt.Printf()
 
-	sig, revPub, err := SCon.TS.SignState(qc)
+	// create initial state
+	qc.State.StateIdx = 0
+	qc.State.MyAmt = qc.Value - initPay
 
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("PubRespHandler err %s", err.Error())
+		return
+	}
+
+	initPayBytes := uspv.I64tB(qc.State.MyAmt) // also will be an arg
 	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8),
-	// initial payment (8), revokepubkey (33), signature (~70)
+	// initial payment (8)
 	// total length
-	msg := []byte{uwire.MSGID_MULTIDESC}
+	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, myPub[:]...)
 	msg = append(msg, myRefundBytes...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
-	msg = append(msg, revPub[:]...)
-	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
 
 	return
@@ -143,8 +155,8 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 200 || len(descbytes) > 215 {
-		fmt.Printf("got %d byte multiDesc, expect ~208\n", len(descbytes))
+	if len(descbytes) < 105 || len(descbytes) > 110 {
+		fmt.Printf("got %d byte multiDesc, expect 105\n", len(descbytes))
 		return
 	}
 	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
@@ -160,14 +172,11 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// deserialize outpoint
 	var opBytes [36]byte
 	var theirRefundAdr [20]byte
-	var revokePub [33]byte
 	copy(opBytes[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opBytes)
 	copy(theirRefundAdr[:], descbytes[69:89])
 	amt := uspv.BtI64(descbytes[89:97])
 	initPay := uspv.BtI64(descbytes[97:105])
-	copy(revokePub[:], descbytes[105:138])
-	sig := descbytes[138:]
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
@@ -190,8 +199,6 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	qc.State = new(uspv.StatCom)
 	qc.State.StateIdx = 0
 	qc.State.MyAmt = initPay
-	qc.State.MyRevPub = revokePub
-	qc.State.Sig = sig
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
@@ -200,9 +207,11 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	}
 
 	// ACK the channel address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), that's all.
-	msg := []byte{uwire.MSGID_MULTIACK}
+	// ACK is outpoint (36), revokepubkey (33) and signature (~70)
+	// except you don't need the outpoint if you have the signature...
+	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
+
 	_, err = RemoteCon.Write(msg)
 	return
 }

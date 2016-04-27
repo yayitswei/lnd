@@ -16,7 +16,6 @@ import (
 
 	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/uspv"
-	"github.com/lightningnetwork/lnd/uspv/uwire"
 )
 
 /* this is a CLI shell for testing out LND.  Right now it's only for uspv
@@ -332,7 +331,7 @@ func Say(args []string) error {
 	for _, s := range args {
 		chat += s + " "
 	}
-	msg := append([]byte{uwire.MSGID_TEXTCHAT}, []byte(chat)...)
+	msg := append([]byte{uspv.MSGID_TEXTCHAT}, []byte(chat)...)
 
 	_, err := RemoteCon.Write(msg)
 	return err
@@ -433,13 +432,13 @@ func Bal(args []string) error {
 		// display txid instead of outpoint because easier to copy/paste
 		fmt.Printf("%s h:%d (%d,%d) cap: %d\n",
 			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-		fmt.Printf("\t REFUND mine:%x them:%x\n",
-			q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
+		fmt.Printf("\t CHANNEL mine: %x them: %x REFUND mine:%x them:%x\n",
+			q.MyPub[:4], q.TheirPub[:4], q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
 		if q.State == nil {
 			fmt.Printf("\t no valid state data\n")
 		} else {
-			fmt.Printf("\tSTATE myRev:%x prevRev:%x stateidx:%d mine:%d them:%d\n",
-				q.State.MyRevPub[:4], q.State.MyPrevRev[:4],
+			fmt.Printf("\tSTATE myPub:%x prevPub:%x stateidx:%d mine:%d them:%d\n",
+				q.State.MyHAKDPub[:4], q.State.MyPrevHAKDPub[:4],
 				q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
 			fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())
 		}

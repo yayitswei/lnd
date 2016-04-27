@@ -31,6 +31,11 @@ be fewer than 536,870,912 previous states and we can seek directly to the
 correct pre-image.
 */
 
+/*
+this function isn't useful now for HAKD; can do the same thing in USPV with
+key derivation checks
+*/
+
 func (e *ElkremReceiver) FindPre(
 	target [20]byte, timeHint uint32) (*[16]byte, error) {
 

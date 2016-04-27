@@ -69,7 +69,7 @@ func BreakChannel(args []string) error {
 }
 
 func PushChannel(args []string) error {
-	if len(args) < 2 {
+	if len(args) < 3 {
 		return fmt.Errorf("need args: push peerIdx chanIdx amt")
 	}
 	if RemoteCon == nil {
@@ -88,7 +88,9 @@ func PushChannel(args []string) error {
 	if err != nil {
 		return err
 	}
-	amt++
+	if amt > 100000000 || amt < 1 {
+		return fmt.Errorf("push %d, max push is 1 coin / 100000000", amt)
+	}
 	peerIdx := uint32(peerIdx64)
 	cIdx := uint32(cIdx64)
 	// find the peer index of who we're connected to
@@ -102,15 +104,32 @@ func PushChannel(args []string) error {
 	}
 	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
 
-	//	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
-	//	qc.CurrentState = new(uspv.StatCom)
-	//	qc.CurrentState.MyAmt = 1000000
-	//	qc.CurrentState.MyRevHash = uspv.Hash88
-	//	qc.CurrentState.StateIdx = 22
-	//	qc.CurrentState.TheirRevHash = uspv.Hash88
-	//	qc.CurrentState.Sig = []byte("sig")
+	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	if err != nil {
+		return err
+	}
+	qc.State.Delta = int32(amt)
+	// save to db with ONLY delta changed
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		return err
+	}
+	qc.State.StateIdx++
+	qc.MakeHAKDPubkey()
 
+	fmt.Printf("will send RTS with delta:%d HAKD %x\n",
+		qc.State.Delta, qc.State.TheirHAKDPub[:4])
+
+	msg := []byte{uspv.MSGID_RTS}
+	msg = append(msg, uspv.U32tB(uint32(qc.State.Delta))...)
+	msg = append(msg, qc.State.TheirHAKDPub[:]...)
+	_, err = RemoteCon.Write(msg)
 	return nil
+}
+
+func RTSHandler(from [16]byte, RTSBytes []byte) {
+
+	return
 }
 
 // PushChannel pushes money to the other side of the channel.  It

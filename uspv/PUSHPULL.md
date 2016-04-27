@@ -2,20 +2,20 @@
 
 Here's how channels ("qChans" in the code, because you can't start anything with "chan" in go and nothing else started with q...) are updated.
 
-There's one state at a time, with 2 variables which indicate aspects of a next or previous state: delta and prevRH.  
+There's one state at a time, with 2 variables which indicate aspects of a next or previous state: delta and prevRH.
 
 States look like this
 
 prev | cur | next
 --- | --- | ---
- | idx | 
- | amt | delta 
-prevRH | revH | 
- | sig | 
+ | idx |
+ | amt | delta
+prevRH | revH |
+ | sig |
 
 When nothing is inflight, delta is 0 and prevRev is an empty 20 byte array.
 
-4 messages: RTS, ACKSIG, SIGREV, REV.  
+4 messages: RTS, ACKSIG, SIGREV, REV.
 Pusher is the side which initiate the payment.  Payments are always "push" and requesting a "pull" is out of the scope of this protocol.  Puller is the one who recives funds.
 
 Pusher - RTS: Request to send
@@ -34,73 +34,77 @@ State has a mutex in case something comes in over the wire before you're done mo
 
 ## Message and DB sequence:
 
-### Pusher: UI trigger (destination, amountToSend)  
-RAM state: set delta to -amountToSend (delta is negative for pusher)  
-##### save to DB (only negative delta is new)  
-idx++  
-send RTS (idx, amountToSend)  
-amt += delta  
-delta = 0  
-copy(prevRH, revH)  
-release lock  
+### Pusher: UI trigger (destination, amountToSend)
+load state from DB
+RAM state: set delta to -amountToSend (delta is negative for pusher)
+##### save to DB (only negative delta is new)
+idx++
+create theirHAKDPub(idx)
+send RTS (idx, amountToSend, theirHAKDPub)
+<!--clear theirHAKDPub-->
+<!--amt += delta-->
+<!--delta = 0-->
+release lock
 
-### Puller: Receive RTS  
-check RTS(idx) == idx+1  
-check RTS(amount) > 0  
-delta = RTS(amount)  
-##### Save to DB(only positive delta is new)  
-idx++  
-amt += delta  
-delta = 0  
-create theirRevH(idx)  
-- create tx (theirs)  
-sign tx  
-send ACKSIG(sig, theirRevH)  
-clear theirRevH  
-release lock  
+### Puller: Receive RTS
+load state from DB
+check RTS(idx) == idx+1
+check RTS(amount) > 0
+delta = RTS(amount)
+myHAKDpub = RTS(HAKDpub)
+##### Save to DB(positive delta and HADKpub are new)
+idx++
+amt += delta
+delta = 0
+- create tx (theirs)
+sign tx
+create theirHAKDPub(idx)
+send ACKSIG(sig, theirHAKDPub)
+clear theirHAKDPub
+release lock
 
-### Pusher: Receive ACKSIG  
-revH = SIGACK(revH)  
-sig = SIGACK(sig)  
-- create tx (mine)  
-verify sig (if fails, restore from DB, try RTS again..?)  
-##### Save to DB(all fields new; prevRH populated, delta = 0)  
-create theirRevH(idx)  
-- create tx (theirs)  
-sign tx  
-create elk(idx-1)  
-send SIGREV(sig, theirRevH, elk)  
+### Pusher: Receive ACKSIG
+myHAKDpub = SIGACK(HAKDpub)
+sig = SIGACK(sig)
+- create tx (mine)
+verify sig (if fails, restore from DB, try RTS again..?)
+##### Save to DB(all fields new; prevRH populated, delta = 0)
+create theirHAKDPub(idx)
+- create tx (theirs)
+sign tx
+create elk(idx-1)
+send SIGREV(sig, theirHAKDPub, elk)
 
-### Puller: Receive SIGREV  
-verify hash160(SIGREV(elk[:16])) == revH  
-verify elk insertion (do this first because we overwrite revH)  
-revH = SIGREV(revH)  
-sig = SIGREV(sig)  
-- create tx(mine)  
-verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)  
-##### Save to DB(all fields new, prevRH empty, delta = 0)  
-create elk(idx-1)  
-send REV(elk)  
+### Puller: Receive SIGREV
+verify elk insertion (do this first because we overwrite HAKDpub)
+verify addPrivToBytes(priv, elk) == myHAKDpub
+myHAKDpub = SIGREV(HAKDpub)
+sig = SIGREV(sig)
+- create tx(mine)
+verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)
+##### Save to DB(all fields new, prevRH empty, delta = 0)
+create elk(idx-1)
+send REV(elk)
 
-### Pusher: Receive REV  
-verify hash160(REV(elk[:16])) == prevRH  
-verify elk insertion  
-set prevRH to empty  
-##### Save to DB(prevRH empty)  
+### Pusher: Receive REV
+verify elk insertion
+verify addPrivToBytes(priv, elk) == myHAKDpub
+set prevHAKD to empty
+##### Save to DB(prevRH empty)
 
 ## Explanation
 
 The genral sequence is to take in data, use it to modify the state in RAM, and  verify it.  If it's OK, then save it to the DB, then after saving construct and send the response.  This way if something goes wrong and you pull the plug, you might not be sure if you sent a message or not, but you can safely construct and send it again, based on the data in the DB.  Based on the DB state you'll know where in the process you stopped and can hopefully resume.
 
-TLDR:  
+TLDR:
 
-Pusher sends amount he's sending.
+Pusher sends amount he's sending an a revokable pubkey.
 
-puller makes pusher tx, signs and sends sig.
+puller makes pusher tx, signs and sends sig, revokable pubkey.
 
 pusher makes pusher tx, verifies sig. makes puller tx, signs; sends sig and elkrem
 
-puller makes puller tx, verifies sig. sends elkrem. verifies pusher elkrem.
+puller makes puller tx, verifies sig. verifies pusher elkrem. sends elkrem.
 
 pusher verifies puller elkrem.
 

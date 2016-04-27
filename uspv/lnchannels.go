@@ -16,6 +16,25 @@ import (
 
 const (
 	timeHintMask = 0x1fffffff // 29 bits asserted
+
+	MSGID_PUBREQ  = 0x30
+	MSGID_PUBRESP = 0x31
+
+	MSGID_CHANDESC = 0x32
+	MSGID_CHANACK  = 0x3B
+
+	MSGID_CLOSEREQ  = 0x40
+	MSGID_CLOSERESP = 0x41
+
+	MSGID_TEXTCHAT = 0x70
+
+	MSGID_RTS    = 0x80 // pushing funds in channel; request to send
+	MSGID_ACKSIG = 0x81 // pulling funds in channel; acknowledge update and sign
+	MSGID_SIGREV = 0x82 // pushing funds; signing new state and revoking old
+	MSGID_REVOKE = 0x83 // pulling funds; revoking previous channel state
+
+	MSGID_FWDMSG     = 0x20
+	MSGID_FWDAUTHREQ = 0x21
 )
 
 // Uhh, quick channel.  For now.  Once you get greater spire it upgrades to
@@ -48,13 +67,16 @@ type StatCom struct {
 	// their Amt is the utxo.Value minus this
 	Delta int32 // fun amount in-transit; is negative for the pusher
 
-	// Revocation hash, preimage of which is needed to sweep.
-	MyRevPub    [33]byte // saved to disk
-	TheirRevPub [33]byte // not saved, generated on the fly from q.TheirPub
+	// Homomorphic Adversarial Key Derivation public keys (HAKD)
+	MyHAKDPub    [33]byte // saved to disk
+	TheirHAKDPub [33]byte // not saved, generated on the fly from q.TheirPub
+	// could get rid of this?  hand it between functions instead?
 
-	MyPrevRev [33]byte // When you haven't gotten their revocation preimage yet.
+	MyPrevHAKDPub [33]byte // When you haven't gotten their revocation elkrem yet.
 
-	Sig []byte // Counterparty's signature (for StatCom tx)
+	sig []byte // Counterparty's signature (for StatCom tx)
+	// don't write to sig directly; only overwrite via
+
 	// note sig can be nil during channel creation. if stateIdx isn't 0,
 	// sig should have a sig.
 	// only one sig is ever stored, to prevent broadcasting the wrong tx.
@@ -65,18 +87,8 @@ var (
 	Hash88 = [20]byte{0xd7, 0x9f, 0x49, 0x37, 0x1f, 0xb5, 0xd9, 0xe7, 0x92, 0xf0, 0x42, 0x66, 0x4c, 0xd6, 0x89, 0xd5, 0x0e, 0x3d, 0xcf, 0x03}
 )
 
-// ScriptAddress returns the *34* byte address of the outpoint.
-// note that it's got the 0020 in front.  [2:] if you want to get rid of that.
-//func (m *MultiOut) ScriptAddress() ([]byte, error) {
-//	script, _, err := FundMultiPre(
-//		m.MyPub.SerializeCompressed(), m.TheirPub.SerializeCompressed())
-//	if err != nil {
-//		return nil, err
-//	}
-//	return script, nil
-//}
-
-func (q *Qchan) MakeRevealablePubkey() error {
+// MakeHAKDPubkey generates the HAKD pubkey to send out.
+func (q *Qchan) MakeHAKDPubkey() error {
 	if q == nil || q.ElkSnd == nil { // can't do anything
 		return fmt.Errorf("can't access elkrem")
 	}
@@ -84,23 +96,23 @@ func (q *Qchan) MakeRevealablePubkey() error {
 	if err != nil {
 		return err
 	}
-	// make a copy of their channel pubkey
+	// deserialize their channel pubkey
 	RevPub, _ := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
 	// add your elkrem to the pubkey
 	PubKeyAddBytes(RevPub, elk.Bytes())
 	// copy the pubkey bytes into the state in ram
-	copy(q.State.TheirRevPub[:], RevPub.SerializeCompressed())
+	copy(q.State.TheirHAKDPub[:], RevPub.SerializeCompressed())
 
 	return nil
 }
 
 // SignNextState generates your signature for their state.  Also returns their
-// revoke hash (the one they store)
-// doesn't modify state.
+// HAKD key (the one they store)
+// temporarily sets TheirRevPub then clears it.
 func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
 	var empty [33]byte
 	// generate their revoke hash
-	err := q.MakeRevealablePubkey()
+	err := q.MakeHAKDPubkey()
 	if err != nil {
 		return nil, empty, err
 	}
@@ -110,9 +122,9 @@ func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
 	if err != nil {
 		return nil, empty, err
 	}
-	theirrev := q.State.TheirRevPub // copy the revoke hash to return
+	theirrev := q.State.TheirHAKDPub // copy the revoke hash to return
 
-	q.State.TheirRevPub = empty
+	q.State.TheirHAKDPub = empty
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(tx)
@@ -132,13 +144,20 @@ func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
 	// truncate sig (last byte is sighash type, always sighashAll)
 	sig = sig[:len(sig)-1]
 
+	fmt.Printf("____ sig creation for channel (%d,%d):\n", q.PeerIdx, q.KeyIdx)
+	fmt.Printf("\tinput %s\n", tx.TxIn[0].PreviousOutPoint.String())
+	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
+	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
+	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
+	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], theirrev[:4], sig)
+
 	return sig, theirrev, nil
 }
 
-// VerifyNextState verifies their signature for your next state.
-// it also saves the sig in the next state.
+// VerifySig verifies their signature for your next state.
+// it also saves the sig if it's good.
 // do bool, error or just error?  Bad sig is an error I guess.
-func (q *Qchan) VerifyState(sig []byte) error {
+func (q *Qchan) VerifySig(sig []byte) error {
 	tx, err := q.BuildStateTx()
 	if err != nil {
 		return err
@@ -149,7 +168,8 @@ func (q *Qchan) VerifyState(sig []byte) error {
 	if err != nil {
 		return err
 	}
-
+	// parse out opcodes... I don't think this does anything but this is what
+	// calc witness sighash wants.
 	opcodes, err := txscript.ParseScript(pre)
 	if err != nil {
 		return err
@@ -157,6 +177,7 @@ func (q *Qchan) VerifyState(sig []byte) error {
 
 	hCache := txscript.NewTxSigHashes(tx)
 
+	// always sighash all
 	hash := txscript.CalcWitnessSignatureHash(
 		opcodes, hCache, txscript.SigHashAll, tx, int(q.Op.Index), q.Value)
 
@@ -169,11 +190,20 @@ func (q *Qchan) VerifyState(sig []byte) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("____ sig verification for channel (%d,%d):\n", q.PeerIdx, q.KeyIdx)
+	fmt.Printf("\tinput %s\n", tx.TxIn[0].PreviousOutPoint.String())
+	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
+	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
+	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
+	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], q.State.TheirHAKDPub[:4], sig)
 
 	worked := pSig.Verify(hash, theirPubKey)
 	if !worked {
 		return fmt.Errorf("Their sig was no good!!!!!111")
 	}
+
+	// copy signature, overwriting old signature.
+	q.State.sig = sig
 
 	return nil
 }
@@ -215,14 +245,14 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 	delay := uint32(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
-	if s.TheirRevPub == empty { // theirRevPub is empty; build MY tx
-		revPub = s.MyRevPub
+	if s.TheirHAKDPub == empty { // theirRevPub is empty; build MY tx
+		revPub = s.MyHAKDPub
 		timePub = q.MyPub
 		pkhAdr = q.TheirRefundAdr
 		fancyAmt = s.MyAmt - fee
 		pkhAmt = (q.Value - s.MyAmt) - fee
 	} else { // theirRevPub is full; build THEIR tx
-		revPub = s.TheirRevPub
+		revPub = s.TheirHAKDPub
 		timePub = q.TheirPub
 		pkhAdr = q.MyRefundAdr
 		fancyAmt = (q.Value - s.MyAmt) - fee
@@ -418,18 +448,18 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 	// write 33 byte my revocation pubkey
-	_, err = buf.Write(s.MyRevPub[:])
+	_, err = buf.Write(s.MyHAKDPub[:])
 	if err != nil {
 		return nil, err
 	}
 	// write 33 byte my previous revocation hash
 	// at steady state it's 0s.
-	_, err = buf.Write(s.MyPrevRev[:])
+	_, err = buf.Write(s.MyPrevHAKDPub[:])
 	if err != nil {
 		return nil, err
 	}
 	// write their sig
-	_, err = buf.Write(s.Sig)
+	_, err = buf.Write(s.sig)
 	if err != nil {
 		return nil, err
 	}
@@ -437,9 +467,10 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 }
 
 // StatComFromBytes turns 160 ish bytes into a StatCom
+// it might be only 86 bytes because there is no sig (first save)
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
-	if len(b) < 150 || len(b) > 170 {
+	if len(b) < 80 || len(b) > 170 {
 		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
 			len(b))
 	}
@@ -459,12 +490,12 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 	if err != nil {
 		return nil, err
 	}
-	// read the 20 bytes of my revocation hash
-	copy(s.MyRevPub[:], buf.Next(33))
-	// read 20 byte my previous revocation hash
-	copy(s.MyPrevRev[:], buf.Next(33))
+	// read 33 byte HAKD pubkey
+	copy(s.MyHAKDPub[:], buf.Next(33))
+	// read 33 byte previous HAKD pubkey
+	copy(s.MyPrevHAKDPub[:], buf.Next(33))
 	// the rest is their sig
-	s.Sig = buf.Bytes()
+	s.sig = buf.Bytes()
 
 	return &s, nil
 }

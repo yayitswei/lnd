@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/lightningnetwork/lnd/uspv/uwire"
+	"github.com/lightningnetwork/lnd/uspv"
 )
 
 // handles stuff that comes in over the wire.  Not user-initiated.
@@ -21,45 +21,50 @@ func OmniHandler(OmniChan chan []byte) {
 		msgid := msg[0]
 
 		// TEXT MESSAGE.  SIMPLE
-		if msgid == uwire.MSGID_TEXTCHAT { //it's text
+		if msgid == uspv.MSGID_TEXTCHAT { //it's text
 			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
 		}
 
 		// PUBKEY REQUEST
-		if msgid == uwire.MSGID_PUBREQ {
+		if msgid == uspv.MSGID_PUBREQ {
 			fmt.Printf("got pubkey req from %x\n", from)
 			PubReqHandler(from) // goroutine ready
 			continue
 		}
 		// PUBKEY RESPONSE
-		if msgid == uwire.MSGID_PUBRESP {
+		if msgid == uspv.MSGID_PUBRESP {
 			fmt.Printf("got pubkey response from %x\n", from)
 			PubRespHandler(from, msg[1:]) // goroutine ready
 			continue
 		}
 		// MULTISIG DESCTIPTION
-		if msgid == uwire.MSGID_MULTIDESC {
+		if msgid == uspv.MSGID_CHANDESC {
 			fmt.Printf("Got multisig description from %x\n", from)
 			QChanDescHandler(from, msg[1:])
 			continue
 		}
 		// MULTISIG ACK
-		if msgid == uwire.MSGID_MULTIACK {
+		if msgid == uspv.MSGID_CHANACK {
 			fmt.Printf("Got multisig ack from %x\n", from)
 			QChanAckHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE REQ
-		if msgid == uwire.MSGID_CLOSEREQ {
+		if msgid == uspv.MSGID_CLOSEREQ {
 			fmt.Printf("Got close request from %x\n", from)
 			CloseReqHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE RESP
-		if msgid == uwire.MSGID_CLOSERESP {
+		if msgid == uspv.MSGID_CLOSERESP {
 			fmt.Printf("Got close response from %x\n", from)
 			CloseRespHandler(from, msg[1:])
+			continue
+		}
+		if msgid == uspv.MSGID_RTS {
+			fmt.Printf("Got RTS from %x\n", from)
+			RTSHandler(from, msg[1:])
 			continue
 		}
 		fmt.Printf("Unknown message id byte %x", msgid)

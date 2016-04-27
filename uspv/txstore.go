@@ -158,7 +158,7 @@ func CheckDoubleSpends(
 
 // TxToString prints out some info about a transaction. for testing / debugging
 func TxToString(tx *wire.MsgTx) string {
-	str := fmt.Sprintf("size %d vsize %d wsize %d locktime %d wit: %x txid %s\n",
+	str := fmt.Sprintf("size %d vsize %d wsize %d locktime %d wit: %t txid %s\n",
 		tx.SerializeSize(), tx.VirtualSize(), tx.SerializeSizeWitness(),
 		tx.LockTime, tx.HasWitness(), tx.TxSha().String())
 	for i, in := range tx.TxIn {
