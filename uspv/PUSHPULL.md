@@ -64,12 +64,16 @@ clear theirHAKDPub
 release lock
 
 ### Pusher: Receive ACKSIG
-myHAKDpub = SIGACK(HAKDpub)
+load state from DB
+idx++
+amt += delta
+delta = 0
+create theirHAKDPub(idx)
 sig = SIGACK(sig)
 - create tx (mine)
 verify sig (if fails, restore from DB, try RTS again..?)
 ##### Save to DB(all fields new; prevRH populated, delta = 0)
-create theirHAKDPub(idx)
+myHAKDpub = SIGACK(HAKDpub)
 - create tx (theirs)
 sign tx
 create elk(idx-1)

@@ -87,44 +87,39 @@ var (
 	Hash88 = [20]byte{0xd7, 0x9f, 0x49, 0x37, 0x1f, 0xb5, 0xd9, 0xe7, 0x92, 0xf0, 0x42, 0x66, 0x4c, 0xd6, 0x89, 0xd5, 0x0e, 0x3d, 0xcf, 0x03}
 )
 
-// MakeHAKDPubkey generates the HAKD pubkey to send out.
-func (q *Qchan) MakeHAKDPubkey() error {
+// MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
+// leaves channel struct the same; returns HAKD pubkey.
+func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
+	var HAKDpubArr [33]byte
+
 	if q == nil || q.ElkSnd == nil { // can't do anything
-		return fmt.Errorf("can't access elkrem")
+		return HAKDpubArr, fmt.Errorf("can't access elkrem")
 	}
 	elk, err := q.ElkSnd.AtIndex(q.State.StateIdx)
 	if err != nil {
-		return err
+		return HAKDpubArr, err
 	}
 	// deserialize their channel pubkey
-	RevPub, _ := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
+	HAKDPub, err := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
+	if err != nil {
+		return HAKDpubArr, err
+	}
 	// add your elkrem to the pubkey
-	PubKeyAddBytes(RevPub, elk.Bytes())
-	// copy the pubkey bytes into the state in ram
-	copy(q.State.TheirHAKDPub[:], RevPub.SerializeCompressed())
+	PubKeyAddBytes(HAKDPub, elk.Bytes())
 
-	return nil
+	copy(HAKDpubArr[:], HAKDPub.SerializeCompressed())
+
+	return HAKDpubArr, nil
 }
 
-// SignNextState generates your signature for their state.  Also returns their
-// HAKD key (the one they store)
-// temporarily sets TheirRevPub then clears it.
-func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
-	var empty [33]byte
-	// generate their revoke hash
-	err := q.MakeHAKDPubkey()
-	if err != nil {
-		return nil, empty, err
-	}
+// SignNextState generates your signature for their state.
+func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 
 	// build transaction for next state
-	tx, err := q.BuildStateTx() // theirs, due to revoke hash
+	tx, err := q.BuildStateTx() // generally their tx, as I'm signing
 	if err != nil {
-		return nil, empty, err
+		return nil, err
 	}
-	theirrev := q.State.TheirHAKDPub // copy the revoke hash to return
-
-	q.State.TheirHAKDPub = empty
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(tx)
@@ -132,7 +127,7 @@ func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
 	// generate script preimage (ignore key order)
 	pre, _, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
 	if err != nil {
-		return nil, empty, err
+		return nil, err
 	}
 
 	// get private signing key
@@ -149,16 +144,16 @@ func (t TxStore) SignState(q *Qchan) ([]byte, [33]byte, error) {
 	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
 	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
 	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], theirrev[:4], sig)
+	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], q.State.TheirHAKDPub[:4], sig)
 
-	return sig, theirrev, nil
+	return sig, nil
 }
 
 // VerifySig verifies their signature for your next state.
 // it also saves the sig if it's good.
 // do bool, error or just error?  Bad sig is an error I guess.
 func (q *Qchan) VerifySig(sig []byte) error {
-	tx, err := q.BuildStateTx()
+	tx, err := q.BuildStateTx() // generally my tx as I'm verifying.
 	if err != nil {
 		return err
 	}
@@ -245,23 +240,28 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 	delay := uint32(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
-	if s.TheirHAKDPub == empty { // theirRevPub is empty; build MY tx
-		revPub = s.MyHAKDPub
-		timePub = q.MyPub
-		pkhAdr = q.TheirRefundAdr
-		fancyAmt = s.MyAmt - fee
-		pkhAmt = (q.Value - s.MyAmt) - fee
-	} else { // theirRevPub is full; build THEIR tx
-		revPub = s.TheirHAKDPub
-		timePub = q.TheirPub
+	if s.TheirHAKDPub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
+		// Their tx that they store.  I get funds unencumbered.
 		pkhAdr = q.MyRefundAdr
-		fancyAmt = (q.Value - s.MyAmt) - fee
 		pkhAmt = s.MyAmt - fee
+
+		timePub = q.TheirPub // these are their funds, but they have to wait
+		revPub = s.MyHAKDPub // if they're given me the elkrem, it's mine
+		fancyAmt = (q.Value - s.MyAmt) - fee
+	} else { // theirHAKDPub is full; build MY tx (to verify) (unless breaking)
+		// My tx that I store.  They get funds unencumbered.
+		pkhAdr = q.TheirRefundAdr
+		pkhAmt = (q.Value - s.MyAmt) - fee
+
+		timePub = q.MyPub       // these are my funds, but I have to wait
+		revPub = s.TheirHAKDPub // I can revoke by giving them the elkrem
+		fancyAmt = s.MyAmt - fee
 	}
 
 	// now that everything is chosen, build fancy script and pkh script
 	fancyScript, _ := CommitScript2(revPub, timePub, delay)
-	pkhScript := DirectWPKHScript(pkhAdr)
+	pkhScript := DirectWPKHScript(pkhAdr) // p2wpkh-ify
+	fancyScript = P2WSHify(fancyScript)   // p2wsh-ify
 
 	// create txouts by assigning amounts
 	outFancy := wire.NewTxOut(fancyAmt, fancyScript)

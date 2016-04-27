@@ -170,10 +170,10 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	// deserialize outpoint
-	var opBytes [36]byte
+	var opArr [36]byte
 	var theirRefundAdr [20]byte
-	copy(opBytes[:], descbytes[:36])
-	op := uspv.OutPointFromBytes(opBytes)
+	copy(opArr[:], descbytes[:36])
+	op := uspv.OutPointFromBytes(opArr)
 	copy(theirRefundAdr[:], descbytes[69:89])
 	amt := uspv.BtI64(descbytes[89:97])
 	initPay := uspv.BtI64(descbytes[97:105])

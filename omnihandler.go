@@ -67,6 +67,11 @@ func OmniHandler(OmniChan chan []byte) {
 			RTSHandler(from, msg[1:])
 			continue
 		}
+		if msgid == uspv.MSGID_ACKSIG {
+			fmt.Printf("Got ACKSIG from %x\n", from)
+			ACKSIGHandler(from, msg[1:])
+			continue
+		}
 		fmt.Printf("Unknown message id byte %x", msgid)
 		continue
 	}
