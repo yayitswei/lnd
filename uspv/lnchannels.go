@@ -385,21 +385,33 @@ func CommitScript(HKey, TKey *btcec.PublicKey,
 	return builder.Script()
 }
 
+/* old script2
+builder.AddOp(txscript.OP_IF)
+builder.AddInt64(int64(delay))
+builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
+builder.AddOp(txscript.OP_DROP)
+builder.AddData(TKey[:])
+builder.AddOp(txscript.OP_ELSE)
+builder.AddData(RKey[:])
+builder.AddOp(txscript.OP_ENDIF)
+builder.AddOp(txscript.OP_CHECKSIG)
+*/
+
 // CommitScript2 doesn't use hashes, but a modified pubkey.
-// To spend from it, push a 1 or a 0, then your sig.
-// 1 means CSV time delay, 0 means you have the revoked private key.
+// To spend from it, push your sig.  If it's time-based,
+// you have to set the txin's sequence.
 func CommitScript2(RKey, TKey [33]byte, delay uint32) ([]byte, error) {
 	builder := txscript.NewScriptBuilder()
 
+	builder.AddData(TKey[:])
+	builder.AddOp(txscript.OP_CHECKSIG)
 	builder.AddOp(txscript.OP_IF)
 	builder.AddInt64(int64(delay))
 	builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
-	builder.AddOp(txscript.OP_DROP)
-	builder.AddData(TKey[:])
 	builder.AddOp(txscript.OP_ELSE)
 	builder.AddData(RKey[:])
-	builder.AddOp(txscript.OP_ENDIF)
 	builder.AddOp(txscript.OP_CHECKSIG)
+	builder.AddOp(txscript.OP_ENDIF)
 
 	return builder.Script()
 }
