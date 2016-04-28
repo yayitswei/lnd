@@ -200,15 +200,15 @@ func Shellparse(cmdslice []string) error {
 	if cmd == "fund" {
 		err = FundChannel(args)
 		if err != nil {
-			fmt.Printf("mult error: %s\n", err)
+			fmt.Printf("fund error: %s\n", err)
 		}
 		return nil
 	}
 	// push money in a channel away from you
 	if cmd == "push" {
-		err = PushChannel(args)
+		err = Push(args)
 		if err != nil {
-			fmt.Printf("PushChannel error: %s\n", err)
+			fmt.Printf("push error: %s\n", err)
 		}
 		return nil
 	}
@@ -216,14 +216,14 @@ func Shellparse(cmdslice []string) error {
 	if cmd == "cclose" {
 		err = CloseChannel(args)
 		if err != nil {
-			fmt.Printf("CloseChannel error: %s\n", err)
+			fmt.Printf("cclose error: %s\n", err)
 		}
 		return nil
 	}
 	if cmd == "break" {
 		err = BreakChannel(args)
 		if err != nil {
-			fmt.Printf("BreakChannel error: %s\n", err)
+			fmt.Printf("break error: %s\n", err)
 		}
 		return nil
 	}

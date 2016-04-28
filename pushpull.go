@@ -67,7 +67,8 @@ func BreakChannel(args []string) error {
 	return SCon.NewOutgoingTx(tx)
 }
 
-func PushChannel(args []string) error {
+// Push is the shell command which calls PushChannel
+func Push(args []string) error {
 	if len(args) < 3 {
 		return fmt.Errorf("need args: push peerIdx chanIdx amt")
 	}
@@ -92,6 +93,7 @@ func PushChannel(args []string) error {
 	}
 	peerIdx := uint32(peerIdx64)
 	cIdx := uint32(cIdx64)
+
 	// find the peer index of who we're connected to
 	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
 	if err != nil {
@@ -107,14 +109,26 @@ func PushChannel(args []string) error {
 	if err != nil {
 		return err
 	}
+	return PushChannel(qc, uint32(amt))
+}
+
+// PushChannel initiates a state update by sending an RTS
+func PushChannel(qc *uspv.Qchan, amt uint32) error {
 	// local sanity check
 	//	if amt >= qc.State.MyAmt {
 	//		return fmt.Errorf("push %d, you have %d in channel", amt, qc.State.MyAmt)
 	//	}
+	var empty [33]byte
+
+	// don't try to update state until all prior updates have cleared
+	// may want to change this later, but requires other changes.
+	if qc.State.Delta != 0 || qc.State.MyPrevHAKDPub != empty {
+		return fmt.Errorf("channel update in progress, cannot push")
+	}
 
 	qc.State.Delta = int32(-amt)
 	// save to db with ONLY delta changed
-	err = SCon.TS.SaveQchanState(qc)
+	err := SCon.TS.SaveQchanState(qc)
 	if err != nil {
 		return err
 	}
