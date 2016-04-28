@@ -65,7 +65,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 27070 // hardcoded; later base on keyfile date?
+		tip = 27350 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -432,7 +432,8 @@ func Bal(args []string) error {
 		// display txid instead of outpoint because easier to copy/paste
 		fmt.Printf("%s h:%d (%d,%d) cap: %d\n",
 			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-		fmt.Printf("\t CHANNEL mine: %x them: %x REFUND mine:%x them:%x\n",
+		fmt.Printf("spent by: %s\n", q.SpendTxid.String())
+		fmt.Printf("\t CHANNEL mine:%x them:%x REFUND mine:%x them:%x\n",
 			q.MyPub[:4], q.TheirPub[:4], q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
 		if q.State == nil {
 			fmt.Printf("\t no valid state data\n")
@@ -659,6 +660,6 @@ func Send(args []string) error {
 
 func Help(args []string) error {
 	fmt.Printf("commands:\n")
-	fmt.Printf("help adr bal send exit\n")
+	fmt.Printf("help adr bal send fake fan sweep lis con fund push cclose break exit\n")
 	return nil
 }

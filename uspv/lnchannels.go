@@ -42,7 +42,9 @@ const (
 type Qchan struct {
 	// S for stored (on disk), D for derived
 
-	Utxo              // S underlying utxo data
+	Utxo                   // S underlying utxo data
+	SpendTxid wire.ShaHash // S txid of transaction destroying channel
+
 	MyPub    [33]byte // D my channel specific pubkey
 	TheirPub [33]byte // S their channel specific pubkey
 
@@ -92,6 +94,8 @@ func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
 	if q == nil || q.ElkSnd == nil { // can't do anything
 		return HAKDpubArr, fmt.Errorf("can't access elkrem")
 	}
+	// use the elkrem sender at state's index.  not index + 1
+	// (you revoke index - 1)
 	elk, err := q.ElkSnd.AtIndex(q.State.StateIdx)
 	if err != nil {
 		return HAKDpubArr, err
@@ -166,7 +170,46 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 	return nil
 }
 
-// SignNextState generates your signature for their state.
+// SignBreak signs YOUR tx, which you already have a sig for
+func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
+	// generate their HAKDpub.  Be sure you haven't revoked it!
+	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
+	if err != nil {
+		fmt.Printf("ACKSIGHandler err %s", err.Error())
+		return nil, err
+	}
+
+	tx, err := q.BuildStateTx(theirHAKDpub)
+
+	// make hash cache for this tx
+	hCache := txscript.NewTxSigHashes(tx)
+
+	// generate script preimage (keep track of key order)
+	pre, swap, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// get private signing key
+	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+
+	// generate sig.
+	mySig, err := txscript.RawTxInWitnessSignature(
+		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
+
+	// put the sighash all byte on the end of their signature
+	theirSig := append(q.State.sig, byte(txscript.SigHashAll))
+
+	// add sigs to the witness stack
+	if swap {
+		tx.TxIn[0].Witness = SpendMultiSigWitStack(pre, theirSig, mySig)
+	} else {
+		tx.TxIn[0].Witness = SpendMultiSigWitStack(pre, mySig, theirSig)
+	}
+	return tx, nil
+}
+
+// SignNextState generates your signature for their state. (usually)
 func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	var empty [33]byte
 	// build transaction for next state
@@ -583,10 +626,9 @@ bytes   desc   at offset
 53	utxo		0
 33	thrpub	53
 20	thrref	86
+32	spendTx	106
 
-done at 	106, then
-statecom(current)
-statecom(next)
+length 138
 
 peeridx is inferred from position in db.
 */
@@ -609,21 +651,30 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// write their refund address pubkeyhash
 	_, err = buf.Write(q.TheirRefundAdr[:])
 	if err != nil {
 		return nil, err
 	}
+	// write txid of transaction spending this
+	// (this is mostly 00 so kindof a waste to serialize here...
+	_, err = buf.Write(q.SpendTxid.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
 	// done
 	return buf.Bytes(), nil
 }
 
-// MultiOutFromBytes turns bytes into a MultiOut.
+// QchanFromBytes turns bytes into a Qchan.
 // the first 53 bytes are the utxo, then next 33 is the pubkey, then their pkh.
+// then finally txid of spending transaction
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 106 {
-		return q, fmt.Errorf("Got %d bytes for MultiOut, expect 86", len(b))
+	if len(b) < 138 {
+		return q, fmt.Errorf("Got %d bytes for MultiOut, expect 138", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:53])
@@ -638,5 +689,11 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 		return q, err
 	}
 	copy(q.TheirRefundAdr[:], b[86:106])
+	// spend txid (can be 00)
+	err = q.SpendTxid.SetBytes(b[106:])
+	if err != nil {
+		return q, err
+	}
+
 	return q, nil
 }

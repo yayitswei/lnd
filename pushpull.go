@@ -52,22 +52,19 @@ func BreakChannel(args []string) error {
 	}
 
 	qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
+	if err != nil {
+		return err
+	}
 
-	fmt.Printf("%s (%d,%d) h: %d a: %d\n",
-		qc.Op.String(), qc.PeerIdx, qc.KeyIdx, qc.AtHeight, qc.Value)
+	fmt.Printf("breaking (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
 
-	//	qc.NextState = new(uspv.StatCom)
-	//	qc.NextState.MyAmt = 1000000
-	//	qc.NextState.TheirRevHash = uspv.Hash88
-	//	qc.NextState.MyRevHash = uspv.Hash88
+	tx, err := SCon.TS.SignBreakTx(qc)
+	if err != nil {
+		return err
+	}
 
-	//	sig, err := SCon.TS.SignNextState(qc)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	fmt.Printf("made sig: %x\n", sig)
-
-	return nil
+	// broadcast
+	return SCon.NewOutgoingTx(tx)
 }
 
 func PushChannel(args []string) error {
