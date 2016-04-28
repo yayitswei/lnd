@@ -72,6 +72,16 @@ func OmniHandler(OmniChan chan []byte) {
 			ACKSIGHandler(from, msg[1:])
 			continue
 		}
+		if msgid == uspv.MSGID_SIGREV {
+			fmt.Printf("Got SIGREV from %x\n", from)
+			SIGREVHandler(from, msg[1:])
+			continue
+		}
+		if msgid == uspv.MSGID_REVOKE {
+			fmt.Printf("Got REVOKE from %x\n", from)
+			REVHandler(from, msg[1:])
+			continue
+		}
 		fmt.Printf("Unknown message id byte %x", msgid)
 		continue
 	}

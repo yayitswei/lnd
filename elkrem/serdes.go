@@ -15,13 +15,13 @@ prepended with the total number of hashes, so the total max size is 2625 bytes.
 */
 
 // ToBytes turns the Elkrem Receiver into a bunch of bytes in a slice.
-// first the tree height (1 byte), then number of nodes (1 byte),
-// then a series of 41 byte long serialized nodes,
-// which are 1 byte height, 8 byte index, 32 byte hash.
+// first the number of nodes (1 byte), then a series of 41 byte long
+// serialized nodes, which are 1 byte height, 8 byte index, 32 byte hash.
 func (e *ElkremReceiver) ToBytes() ([]byte, error) {
 	numOfNodes := uint8(len(e.s))
+	// 0 element receiver also OK.  Just an empty slice.
 	if numOfNodes == 0 {
-		return nil, fmt.Errorf("Can't serialize empty ElkremReceiver")
+		return nil, nil
 	}
 	if numOfNodes > 64 {
 		return nil, fmt.Errorf("Broken ElkremReceiver has %d nodes, max 64",
@@ -69,7 +69,6 @@ func ElkremReceiverFromBytes(b []byte) (*ElkremReceiver, error) {
 	if len(b) == 0 { // empty receiver, which is OK
 		return &e, nil
 	}
-
 	buf := bytes.NewBuffer(b)
 	// read 1 byte number of nodes stored in receiver
 	numOfNodes, err := buf.ReadByte()
@@ -79,7 +78,6 @@ func ElkremReceiverFromBytes(b []byte) (*ElkremReceiver, error) {
 	if numOfNodes < 1 || numOfNodes > 64 {
 		return nil, fmt.Errorf("Read invalid number of nodes: %d", numOfNodes)
 	}
-
 	if buf.Len() != (int(numOfNodes) * 41) {
 		return nil, fmt.Errorf("Remaining buf wrong size, expect %d got %d",
 			(numOfNodes * 41), buf.Len())

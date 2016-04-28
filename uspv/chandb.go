@@ -567,10 +567,22 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
 				q.Op.String(), q.PeerPubId)
 		}
+		// serialize elkrem receiver
+		eb, err := q.ElkRcv.ToBytes()
+		if err != nil {
+			return err
+		}
+		// save it
+		err = qcBucket.Put(KEYElkRecv, eb)
+		if err != nil {
+			return err
+		}
+		// serialize state
 		b, err := q.State.ToBytes()
 		if err != nil {
 			return err
 		}
+		// save it
 		fmt.Printf("writing %d byte state to bucket\n", len(b))
 		return qcBucket.Put(KEYState, b)
 	})

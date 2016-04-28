@@ -65,7 +65,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 26950 // hardcoded; later base on keyfile date?
+		tip = 27070 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -437,7 +437,7 @@ func Bal(args []string) error {
 		if q.State == nil {
 			fmt.Printf("\t no valid state data\n")
 		} else {
-			fmt.Printf("\tSTATE myPub:%x prevPub:%x stateidx:%d mine:%d them:%d\n",
+			fmt.Printf("\tSTATE HAKD:%x prevHAKD:%x stateidx:%d mine:%d them:%d\n",
 				q.State.MyHAKDPub[:4], q.State.MyPrevHAKDPub[:4],
 				q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
 			fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())

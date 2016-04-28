@@ -68,10 +68,7 @@ type StatCom struct {
 	Delta int32 // fun amount in-transit; is negative for the pusher
 
 	// Homomorphic Adversarial Key Derivation public keys (HAKD)
-	MyHAKDPub    [33]byte // saved to disk
-	TheirHAKDPub [33]byte // not saved, generated on the fly from q.TheirPub
-	// could get rid of this?  hand it between functions instead?
-
+	MyHAKDPub     [33]byte // saved to disk
 	MyPrevHAKDPub [33]byte // When you haven't gotten their revocation elkrem yet.
 
 	sig []byte // Counterparty's signature (for StatCom tx)
@@ -112,11 +109,68 @@ func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
 	return HAKDpubArr, nil
 }
 
+// IngestElkrem takes in an elkrem hash, performing 2 checks:
+// that it produces the proper HAKD key, and that it fits into the elkrem tree.
+// if both of these are the case it updates the channel state, removing the
+// revoked HAKD. If either of these checks fail, and definitely the second one
+// fails, I'm pretty sure the channel is not recoverable and needs to be closed.
+func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
+	if elk == nil {
+		return fmt.Errorf("IngestElkrem: nil hash")
+	}
+
+	// first verify if the elkrem produces the previous HAKD's PUBLIC key.
+	// We don't actually use the private key operation here, because we can
+	// do the same operation on our pubkey that they did, and we have faith
+	// in the mysterious power of abelian group homomorphisms that the private
+	// key modification will also work.
+
+	// first verify the elkrem insertion (this only performs checks 1/2 the time, so
+	// 1/2 the time it'll work even if the elkrem is invalid, oh well)
+	err := q.ElkRcv.AddNext(elk)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("ingested hash, receiver now has up to %d\n", q.ElkRcv.UpTo())
+
+	// if this is state 1, this is elkrem 0 and we can stop here.
+	// there's nothing to revoke. (state 0, also? but that would imply
+	// elkrem -1 which isn't a thing... so fail in that case.)
+	if q.State.StateIdx == 1 {
+		return nil
+	}
+
+	// make my channel pubkey array into a pubkey
+	derivedPub, err := btcec.ParsePubKey(q.MyPub[:], btcec.S256())
+	if err != nil {
+		return err
+	}
+
+	// add elkrem to my pubkey
+	PubKeyAddBytes(derivedPub, elk.Bytes())
+
+	// re-serialize to compare
+	var derivedArr, empty [33]byte
+	copy(derivedArr[:], derivedPub.SerializeCompressed())
+
+	// see if it matches my previous HAKD pubkey
+	if derivedArr != q.State.MyPrevHAKDPub {
+		// didn't match, the whole channel is borked.
+		return fmt.Errorf("Provided elk doesn't create HAKD pub %x! Need to close",
+			q.State.MyPrevHAKDPub)
+	}
+
+	// it did match, so we can clear the previous HAKD pub
+	q.State.MyPrevHAKDPub = empty
+
+	return nil
+}
+
 // SignNextState generates your signature for their state.
 func (t TxStore) SignState(q *Qchan) ([]byte, error) {
-
+	var empty [33]byte
 	// build transaction for next state
-	tx, err := q.BuildStateTx() // generally their tx, as I'm signing
+	tx, err := q.BuildStateTx(empty) // generally their tx, as I'm signing
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +198,7 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
 	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
 	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], q.State.TheirHAKDPub[:4], sig)
+	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], empty[:4], sig)
 
 	return sig, nil
 }
@@ -152,8 +206,17 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 // VerifySig verifies their signature for your next state.
 // it also saves the sig if it's good.
 // do bool, error or just error?  Bad sig is an error I guess.
+// for verifying signature, always use theirHAKDpub, so generate & populate within
+// this function.
 func (q *Qchan) VerifySig(sig []byte) error {
-	tx, err := q.BuildStateTx() // generally my tx as I'm verifying.
+	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
+	if err != nil {
+		fmt.Printf("ACKSIGHandler err %s", err.Error())
+		return err
+	}
+
+	// ALWAYS my tx, ALWAYS their HAKD when I'm verifying.
+	tx, err := q.BuildStateTx(theirHAKDpub)
 	if err != nil {
 		return err
 	}
@@ -171,7 +234,6 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	}
 
 	hCache := txscript.NewTxSigHashes(tx)
-
 	// always sighash all
 	hash := txscript.CalcWitnessSignatureHash(
 		opcodes, hCache, txscript.SigHashAll, tx, int(q.Op.Index), q.Value)
@@ -190,7 +252,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
 	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
 	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], q.State.TheirHAKDPub[:4], sig)
+	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], theirHAKDpub[:4], sig)
 
 	worked := pSig.Verify(hash, theirPubKey)
 	if !worked {
@@ -208,15 +270,15 @@ func (q *Qchan) SignBreak() error {
 }
 
 // BuildStateTx constructs and returns a state tx.  As simple as I can make it.
-// This func just makes the tx with data from State in ram.  What's on the
-// disk may be different.  Delta should always be 0 when making this tx.
-// It decides whether to make THEIR tx or YOUR tx based on TheirRevHash --
-// if it's non-zero, then it makes their transaction (for signing)
-// If it's 0, it makes your transaction (for verification)
+// This func just makes the tx with data from State in ram, and HAKD key arg
+// Delta should always be 0 when making this tx.
+// It decides whether to make THEIR tx or YOUR tx based on the HAKD pubkey given --
+// if it's zero, then it makes their transaction (for signing onlu)
+// If it's zero, it makes your transaction (for verification in most cases,
+// but also for signing when breaking the channel)
 // Index is used to set nlocktime for state hints.
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
-
-func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
+func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	// sanity checks
 	s := q.State // use it a lot, make shorthand variable
 	if s == nil {
@@ -240,7 +302,7 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 	delay := uint32(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
-	if s.TheirHAKDPub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
+	if theirHAKDpub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
 		// Their tx that they store.  I get funds unencumbered.
 		pkhAdr = q.MyRefundAdr
 		pkhAmt = s.MyAmt - fee
@@ -253,8 +315,8 @@ func (q *Qchan) BuildStateTx() (*wire.MsgTx, error) {
 		pkhAdr = q.TheirRefundAdr
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
-		timePub = q.MyPub       // these are my funds, but I have to wait
-		revPub = s.TheirHAKDPub // I can revoke by giving them the elkrem
+		timePub = q.MyPub     // these are my funds, but I have to wait
+		revPub = theirHAKDpub // I can revoke by giving them the elkrem
 		fancyAmt = s.MyAmt - fee
 	}
 

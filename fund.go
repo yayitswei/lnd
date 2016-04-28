@@ -5,6 +5,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -13,6 +14,12 @@ right now fund makes a channel without actually building commit
 transactions before signing and broadcasting the fund transaction.
 Once state update push/pull messages work that will be added on to
 this process
+
+Note that the first elkrem exchange revokes state 0, which was never actually
+commited to  (there are no HAKDpubs for state 0; those start at state 1.)
+So it's kindof pointless, but you still have to send the right one, because
+elkrem 2 is the parent of elkrems 0 and 1, so that checks 0.
+
 */
 
 // FundChannel makes a multisig address with the node connected to...
@@ -199,6 +206,9 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	qc.State = new(uspv.StatCom)
 	qc.State.StateIdx = 0
 	qc.State.MyAmt = initPay
+	// create empty elkrem pair
+	qc.ElkRcv = new(elkrem.ElkremReceiver)
+	qc.ElkSnd = new(elkrem.ElkremSender)
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {

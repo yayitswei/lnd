@@ -40,10 +40,7 @@ RAM state: set delta to -amountToSend (delta is negative for pusher)
 ##### save to DB (only negative delta is new)
 idx++
 create theirHAKDPub(idx)
-send RTS (idx, amountToSend, theirHAKDPub)
-<!--clear theirHAKDPub-->
-<!--amt += delta-->
-<!--delta = 0-->
+send RTS (amountToSend, theirHAKDPub)
 release lock
 
 ### Puller: Receive RTS
@@ -51,8 +48,9 @@ load state from DB
 check RTS(idx) == idx+1
 check RTS(amount) > 0
 delta = RTS(amount)
+prevHAKD = myHAKDpub
 myHAKDpub = RTS(HAKDpub)
-##### Save to DB(positive delta and HADKpub are new)
+##### Save to DB(positive delta and prevHAKD, HADKpub are new)
 idx++
 amt += delta
 delta = 0
@@ -72,21 +70,26 @@ create theirHAKDPub(idx)
 sig = SIGACK(sig)
 - create tx (mine)
 verify sig (if fails, restore from DB, try RTS again..?)
-##### Save to DB(all fields new; prevRH populated, delta = 0)
+clear theirHAKDPub (never saved to DB anyway...)
+##### Save to DB(all fields new; prevHAKD populated, delta = 0)
+prevHAKD = myHAKDpub
 myHAKDpub = SIGACK(HAKDpub)
 - create tx (theirs)
 sign tx
 create elk(idx-1)
-send SIGREV(sig, theirHAKDPub, elk)
+send SIGREV(sig, elk)
 
 ### Puller: Receive SIGREV
-verify elk insertion (do this first because we overwrite HAKDpub)
-verify addPrivToBytes(priv, elk) == myHAKDpub
-myHAKDpub = SIGREV(HAKDpub)
+load state from DB
+idx++
+amt += delta
+delta = 0
 sig = SIGREV(sig)
 - create tx(mine)
 verify sig (if fails, reload from DB, send ACKSIG again..? or record error?)
-##### Save to DB(all fields new, prevRH empty, delta = 0)
+verify elk insertion (do this 2nd because can broadcast valid sig to close)
+verify addPrivToBytes(priv, elk) == prevHAKD
+##### Save to DB( sig fields new, prevRH empty, delta = 0)
 create elk(idx-1)
 send REV(elk)
 

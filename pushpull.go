@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -185,8 +187,16 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 			RTSDelta, qc.Value-qc.State.MyAmt)
 		return
 	}
-	qc.State.Delta = int32(RTSDelta) // assign delta
-	qc.State.MyHAKDPub = RTSHAKDpub  // assign HAKD pub
+	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+		fmt.Printf("RTSHandler err: peer %x trying to modify peer %x's channel\n",
+			peerBytes, qc.PeerPubId)
+		fmt.Printf("This can't happen now, but joseph wants this check here ",
+			"in case the code changes later and we forget.\n")
+		return
+	}
+	qc.State.Delta = int32(RTSDelta)            // assign delta
+	qc.State.MyPrevHAKDPub = qc.State.MyHAKDPub // copy previous HAKD pub
+	qc.State.MyHAKDPub = RTSHAKDpub             // assign HAKD pub
 	// save delta, HAKDpub to db
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
@@ -224,7 +234,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 
 	if len(ACKSIGBytes) < 135 || len(ACKSIGBytes) > 145 {
-		fmt.Printf("got %d byte RTS, expect 139", len(ACKSIGBytes))
+		fmt.Printf("got %d byte ACKSIG, expect 139", len(ACKSIGBytes))
 		return
 	}
 
@@ -249,15 +259,22 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
-
-	qc.State.StateIdx++
-	// construct tx and verify signature
-	qc.State.TheirHAKDPub, err = qc.MakeTheirHAKDPubkey()
-	if err != nil {
-		fmt.Printf("ACKSIGHandler err %s", err.Error())
+	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+		fmt.Printf("ACKSIGHandler err: peer %x trying to modify peer %x's channel\n",
+			peerBytes, qc.PeerPubId)
+		fmt.Printf("This can't happen now, but joseph wants this check here ",
+			"in case the code changes later and we forget.\n")
 		return
 	}
 
+	// increment state
+	qc.State.StateIdx++
+	// copy current HAKDPub to previous as state has been incremented
+	qc.State.MyPrevHAKDPub = qc.State.MyHAKDPub
+	// get new HAKDpub for signing
+	qc.State.MyHAKDPub = ACKSIGHAKDpub
+
+	// construct tx and verify signature
 	qc.State.MyAmt += int64(qc.State.Delta) // delta should be negative
 	qc.State.Delta = 0
 	err = qc.VerifySig(sig)
@@ -265,23 +282,159 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
+	// verify worked; Save to incremented state to DB with new & old myHAKDpubs
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("ACKSIGHandler err %s", err.Error())
+		return
+	}
 
+	// sign their tx with my new HAKD pubkey I just got.
+	sig, err = SCon.TS.SignState(qc)
+	if err != nil {
+		fmt.Printf("ACKSIGHandler err %s", err.Error())
+		return
+	}
+	// get elkrem for revoking *previous* state, so elkrem at index - 1.
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	if err != nil {
+		fmt.Printf("ACKSIGHandler err %s", err.Error())
+		return
+	}
+
+	// SIGREV is op (36), elk (32), sig (~70)
+	// total length ~138
+	msg := []byte{uspv.MSGID_SIGREV}
+	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, elk.Bytes()...)
+	msg = append(msg, sig...)
+	_, err = RemoteCon.Write(msg)
 	return
 }
 
-// PushChannel pushes money to the other side of the channel.  It
-// creates a sigpush message and sends that to the peer
-func PushSig(peerIdx, cIdx uint32, amt int64) error {
-	if RemoteCon == nil {
-		return fmt.Errorf("Not connected to anyone, can't push\n")
+// SIGREVHandler takes in an SIGREV and responds with a REV (if everything goes OK)
+func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
+
+	if len(SIGREVBytes) < 135 || len(SIGREVBytes) > 145 {
+		fmt.Printf("got %d byte SIGREV, expect 138", len(SIGREVBytes))
+		return
 	}
 
-	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
+	var opArr [36]byte
+	// deserialize SIGREV
+	copy(opArr[:], SIGREVBytes[:36])
+	sig := SIGREVBytes[68:]
+	revElk, err := wire.NewShaHash(SIGREVBytes[36:68])
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		return
+	}
 
-	return nil
+	// find who we're talkikng to
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	// load qchan & state from DB
+	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		return
+	}
+	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+		fmt.Printf("SIGREVHandler err: peer %x trying to modify peer %x's channel\n",
+			peerBytes, qc.PeerPubId)
+		fmt.Printf("This can't happen now, but joseph wants this check here ",
+			"in case the code changes later and we forget.\n")
+		return
+	}
+	qc.State.StateIdx++
+	qc.State.MyAmt += int64(qc.State.Delta)
+	qc.State.Delta = 0
+
+	// first verify sig.
+	// (if elkrem ingest fails later, at least we close out with a bit more money)
+	err = qc.VerifySig(sig)
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		return
+	}
+
+	// verify elkrem and save it in ram
+	err = qc.IngestElkrem(revElk)
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		fmt.Printf(" ! non-recoverable error, need to close the channel here.\n")
+		return
+	}
+	// if the elkrem failed but sig didn't... we should update the DB to reflect
+	// that and try to close with the incremented amount, why not.
+	// Implement that later though.
+
+	// all verified; Save finished state to DB, puller is pretty much done.
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		return
+	}
+
+	fmt.Printf("SIGREV OK, state %d, will send REV\n", qc.State.StateIdx)
+	// get elkrem for revoking *previous* state, so elkrem at index - 1.
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	if err != nil {
+		fmt.Printf("SIGREVHandler err %s", err.Error())
+		return
+	}
+	// REV is just op (36), elk (32)
+	// total length 68
+	msg := []byte{uspv.MSGID_REVOKE}
+	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, elk.Bytes()...)
+	_, err = RemoteCon.Write(msg)
+	return
 }
 
-//func PullSig(from [16]byte, sigpushBytes []byte) {
+// REVHandler takes in an REV and clears the state's prev HAKD.  This is the
+// final message in the state update process and there is no response.
+func REVHandler(from [16]byte, REVBytes []byte) {
+	if len(REVBytes) != 68 {
+		fmt.Printf("got %d byte REV, expect 68", len(REVBytes))
+		return
+	}
+	var opArr [36]byte
+	// deserialize SIGREV
+	copy(opArr[:], REVBytes[:36])
+	revElk, err := wire.NewShaHash(REVBytes[36:])
+	if err != nil {
+		fmt.Printf("REVHandler err %s", err.Error())
+		return
+	}
 
-//	return
-//}
+	// find who we're talkikng to
+	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	// load qchan & state from DB
+	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	if err != nil {
+		fmt.Printf("REVHandler err %s", err.Error())
+		return
+	}
+	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+		fmt.Printf("REVHandler err: peer %x trying to modify peer %x's channel\n",
+			peerBytes, qc.PeerPubId)
+		fmt.Printf("This can't happen now, but joseph wants this check here ",
+			"in case the code changes later and we forget.\n")
+		return
+	}
+	// verify elkrem
+	err = qc.IngestElkrem(revElk)
+	if err != nil {
+		fmt.Printf("REVHandler err %s", err.Error())
+		fmt.Printf(" ! non-recoverable error, need to close the channel here.\n")
+		return
+	}
+	// save to DB (only new elkrem)
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("REVHandler err %s", err.Error())
+		return
+	}
+	fmt.Printf("REV OK, state %d all clear.\n", qc.State.StateIdx)
+	return
+}
