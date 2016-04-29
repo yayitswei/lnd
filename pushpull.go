@@ -32,6 +32,37 @@ func Math(args []string) error {
 	return nil
 }
 
+func RecoverChannel(args []string) error {
+	// need args, fail
+	if len(args) < 2 {
+		return fmt.Errorf("need args: recov peerIdx chanIdx")
+	}
+
+	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	cIdx, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil {
+		return err
+	}
+
+	qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("try to recover (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
+
+	rtx, err := SCon.TS.RecoverTx(qc)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf(uspv.TxToString(rtx))
+	return SCon.NewOutgoingTx(rtx)
+}
+
 // BreakChannel closes the channel without the other party's involvement.
 // The user causing the channel Break has to wait for the OP_CSV timeout
 // before funds can be recovered.  Break output addresses are already in the

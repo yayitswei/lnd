@@ -227,6 +227,13 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
+	if cmd == "recov" {
+		err = RecoverChannel(args)
+		if err != nil {
+			fmt.Printf("recov error: %s\n", err)
+		}
+		return nil
+	}
 	if cmd == "math" {
 		err = Math(args)
 		if err != nil {
@@ -429,21 +436,9 @@ func Bal(args []string) error {
 		return err
 	}
 	for _, q := range qcs {
-		// display txid instead of outpoint because easier to copy/paste
-		fmt.Printf("%s h:%d (%d,%d) cap: %d\n",
-			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-		if q.IsClosed() {
-			fmt.Printf("spent by: %s\n", q.SpendTxid.String())
-		}
-		fmt.Printf("\t CHANNEL mine:%x them:%x REFUND mine:%x them:%x\n",
-			q.MyPub[:4], q.TheirPub[:4], q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
-		if q.State == nil {
-			fmt.Printf("\t no valid state data\n")
-		} else {
-			fmt.Printf("\tSTATE HAKD:%x prevHAKD:%x stateidx:%d mine:%d them:%d\n",
-				q.State.MyHAKDPub[:4], q.State.MyPrevHAKDPub[:4],
-				q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-			fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())
+		err = SCon.TS.QchanInfo(q)
+		if err != nil {
+			fmt.Printf("QchanInfo err: %s\n", err.Error())
 		}
 	}
 
