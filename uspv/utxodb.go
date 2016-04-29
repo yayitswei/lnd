@@ -486,35 +486,40 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					}
 					// check if we gain a known txid but unknown tx
 					for i, txid := range cachedShas {
-						if bytes.Equal(txid.Bytes(), hitQChan.Op.Hash.Bytes()) {
+						if txid.IsEqual(&hitQChan.Op.Hash) {
 							// hit; ingesting tx which matches chan/multi
 							// all we do is assign height and increment hits
 							// (which will save the tx)
-							hits++
 							hitTxs[i] = true
 							hitQChan.Utxo.AtHeight = height
-							mOutBytes, err := hitQChan.ToBytes()
+							qcBytes, err := hitQChan.ToBytes()
 							if err != nil {
 								return err
 							}
 							// save multiout in the bucket
-							err = qchanBucket.Put(KEYutxo, mOutBytes)
+							err = qchanBucket.Put(KEYutxo, qcBytes)
 							if err != nil {
 								return err
 							}
 						}
 					}
 					// check if it's spending the multiout
+					// there's some problem here as it doesn't always detect it
+					// properly...
 					for i, spentOP := range spentOPs {
 						if bytes.Equal(spentOP, opBytes) {
 							// this multixo is now spent.
 							// CHANGE THIS!  can't actually delete.
-							hits++
 							hitTxs[spentTxIdx[i]] = true
-							err = pr.DeleteBucket(opBytes)
+							// set qchan's spending txid
+							hitQChan.SpendTxid = *cachedShas[spentTxIdx[i]]
+							// re-serialize qchan
+							qcBytes, err := hitQChan.ToBytes()
 							if err != nil {
 								return err
 							}
+							// save qchan back in the bucket
+							return qchanBucket.Put(KEYutxo, qcBytes)
 						}
 					}
 					return nil
@@ -541,7 +546,6 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		for i, nOP := range spentOPs {
 			v := duf.Get(nOP)
 			if v != nil {
-				hits++
 				hitTxs[spentTxIdx[i]] = true
 				// do all this just to figure out value we lost
 				x := make([]byte, len(nOP)+len(v))
@@ -575,6 +579,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		// save all txs with hits
 		for i, tx := range txs {
 			if hitTxs[i] == true {
+				hits++
 				var buf bytes.Buffer
 				tx.SerializeWitness(&buf) // always store witness version
 				err = txns.Put(cachedShas[i].Bytes(), buf.Bytes())

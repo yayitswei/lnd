@@ -86,6 +86,19 @@ var (
 	Hash88 = [20]byte{0xd7, 0x9f, 0x49, 0x37, 0x1f, 0xb5, 0xd9, 0xe7, 0x92, 0xf0, 0x42, 0x66, 0x4c, 0xd6, 0x89, 0xd5, 0x0e, 0x3d, 0xcf, 0x03}
 )
 
+// IsClosed tells you if the channel is close (true) or still open (false)
+// nil channels are considered closed but really shouldn't be happening.
+func (q *Qchan) IsClosed() bool {
+	if q == nil {
+		return true
+	}
+	var empty wire.ShaHash
+	if q.SpendTxid.IsEqual(&empty) {
+		return false
+	}
+	return true
+}
+
 // MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
 // leaves channel struct the same; returns HAKD pubkey.
 func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
@@ -198,8 +211,12 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
 
 	// put the sighash all byte on the end of their signature
-	theirSig := append(q.State.sig, byte(txscript.SigHashAll))
+	// copy here because... otherwise I get unexpected fault address 0x...
+	theirSig := make([]byte, len(q.State.sig)+1)
+	copy(theirSig, q.State.sig)
+	theirSig[len(theirSig)-1] = byte(txscript.SigHashAll)
 
+	fmt.Printf("made mysig: %x theirsig: %x\n", mySig, theirSig)
 	// add sigs to the witness stack
 	if swap {
 		tx.TxIn[0].Witness = SpendMultiSigWitStack(pre, theirSig, mySig)

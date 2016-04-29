@@ -343,13 +343,13 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.PeerIdx = BtU32(peerIdxBytes)
 		copy(qc.PeerPubId[:], peerBytes)
 
-		// serialize multiOut
+		// serialize qchan
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
 			return err
 		}
 
-		// save multiout in the bucket
+		// save qchan in the bucket
 		err = multiBucket.Put(KEYutxo, qcBytes)
 		if err != nil {
 			return err
