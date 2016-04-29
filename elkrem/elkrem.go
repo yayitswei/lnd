@@ -26,15 +26,15 @@ discards leaves 0b0000 and 0b0001, as they have the parent node 8.
 For total hashes (2**h)-1 requires a tree of height h.
 
 Sender:
-as state, must store 1 hash (root) and current index (h bits)
-to move to the next index, compute at most h hashes.
+as state, must store 1 hash (root) and that's all
+generate any index, compute at most h hashes.
 
 Receiver:
 as state, must store at most h+1 hashes and the index of each hash (h*(h+1)) bits
 to compute a previous index, compute at most h hashes.
 */
-const maxIndex = uint64(18446744073709551614) // 2^64 - 2
-const maxHeight = uint8(63)
+const maxIndex = uint64(281474976710654) // 2^48 - 2
+const maxHeight = uint8(47)
 
 // You can calculate h from i but I can't figure out how without taking
 // O(i) ops.  Feels like there should be a clever O(h) way.  1 byte, whatever.

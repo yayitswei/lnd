@@ -10,8 +10,8 @@ import (
 
 /* Serialization and Deserialization methods for the Elkrem structs.
 Senders turn into 41 byte long slices.  Receivers are variable length,
-with 41 bytes for each stored hash, up to a maximum of 64.  Receivers are
-prepended with the total number of hashes, so the total max size is 2625 bytes.
+with 41 bytes for each stored hash, up to a maximum of 48.  Receivers are
+prepended with the total number of hashes, so the total max size is 1969 bytes.
 */
 
 // ToBytes turns the Elkrem Receiver into a bunch of bytes in a slice.
@@ -23,7 +23,7 @@ func (e *ElkremReceiver) ToBytes() ([]byte, error) {
 	if numOfNodes == 0 {
 		return nil, nil
 	}
-	if numOfNodes > 64 {
+	if numOfNodes > maxHeight+1 {
 		return nil, fmt.Errorf("Broken ElkremReceiver has %d nodes, max 64",
 			len(e.s))
 	}
@@ -75,7 +75,7 @@ func ElkremReceiverFromBytes(b []byte) (*ElkremReceiver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if numOfNodes < 1 || numOfNodes > 64 {
+	if numOfNodes < 1 || numOfNodes > maxHeight+1 {
 		return nil, fmt.Errorf("Read invalid number of nodes: %d", numOfNodes)
 	}
 	if buf.Len() != (int(numOfNodes) * 41) {

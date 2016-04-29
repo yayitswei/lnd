@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	timeHintMask = 0x1fffffff // 29 bits asserted
-	minHint      = 500000000
-	maxHint      = 1036870911
+	// high 3 bytes are in sequence, low 3 bytes are in time
+	seqMask  = 0xff000000 // assert high byte
+	timeMask = 0x21000000 // 1987 to 1988
 
 	MSGID_PUBREQ  = 0x30
 	MSGID_PUBRESP = 0x31
@@ -97,6 +97,54 @@ func (q *Qchan) IsClosed() bool {
 	return true
 }
 
+// GetStateIdxFromTx returns the state index from a commitment transaction.
+// No errors; returns 0 if there is no retrievable index.
+func GetStateIdxFromTx(tx *wire.MsgTx) uint64 {
+	if tx == nil {
+		//		fmt.Printf("nil tx\n")
+		return 0
+	}
+	if len(tx.TxIn) != 1 {
+		//		fmt.Printf("%d txins\n", len(tx.TxIn))
+		return 0
+	}
+	// check that indicating high bytes are correct
+	if tx.TxIn[0].Sequence>>24 != 0xff || tx.LockTime>>24 != 0x21 {
+		//		fmt.Printf("sequence byte %x, locktime byte %x\n",
+		//			tx.TxIn[0].Sequence>>24, tx.LockTime>>24 != 0x21)
+		return 0
+	}
+	// high 24 bits sequence, low 24 bits locktime
+	seqBits := uint64(tx.TxIn[0].Sequence & 0x00ffffff)
+	timeBits := uint64(tx.LockTime & 0x00ffffff)
+
+	return seqBits<<24 | timeBits
+}
+
+// SetStateIdxBits modifies the tx in place, setting the sequence and locktime
+// fields to indicate the given state index.
+func SetStateIdxBits(tx *wire.MsgTx, idx uint64) error {
+	if tx == nil {
+		return fmt.Errorf("SetStateIdxBits: nil tx")
+	}
+	if len(tx.TxIn) != 1 {
+		return fmt.Errorf("SetStateIdxBits: tx has %d inputs", len(tx.TxIn))
+	}
+	if idx >= 1<<48 {
+		return fmt.Errorf(
+			"SetStateIdxBits: index %d greater than max %d", idx, (1<<48)-1)
+	}
+
+	// high 24 bits sequence, low 24 bits locktime
+	seqBits := uint32(idx >> 24)
+	timeBits := uint32(idx & 0x00ffffff)
+
+	tx.TxIn[0].Sequence = seqBits | seqMask
+	tx.LockTime = timeBits | timeMask
+
+	return nil
+}
+
 // ChannelInfo prints info about a channel.
 func (t *TxStore) QchanInfo(q *Qchan) error {
 	// display txid instead of outpoint because easier to copy/paste
@@ -124,14 +172,14 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	fmt.Printf("\tCLOSED. Spent by: %s", spendTx.TxSha().String())
 	// if nlocktime is outside this range, we assume it was cooperatively
 	// closed, so no further action is needed.
-	broken := spendTx.LockTime >= minHint && spendTx.LockTime <= maxHint
-	if !broken {
-		fmt.Printf("\tchannel was closed cooperatively.")
+	txIdx := GetStateIdxFromTx(spendTx)
+
+	if txIdx == 0 {
+		fmt.Printf(" COOP\n")
 		return nil
 	}
 
 	// figure out who broke it
-
 	if len(spendTx.TxOut) != 2 {
 		return fmt.Errorf("break TX has %d outputs?!?", len(spendTx.TxOut))
 	}
@@ -141,13 +189,13 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 		fmt.Printf(" non-coop by me.\n")
 	} else {
 		fmt.Printf(" non-coop by them\n")
-		// QUICK detect bad state
-		if uint32(q.State.StateIdx%0x1fffffff)+minHint != spendTx.LockTime {
-			fmt.Printf("\tINVALID CHANNEL BREAK! State %d but locktime %d\n",
-				q.State.StateIdx, spendTx.LockTime)
+		// detect bad state
+		if txIdx != q.State.StateIdx {
+			fmt.Printf("\tINVALID CHANNEL BREAK! State %d but tx state %d\n",
+				q.State.StateIdx, txIdx)
 		} else {
-			fmt.Printf("\tchannel may be OK, state %d, locktime %d\n",
-				q.State.StateIdx, spendTx.LockTime)
+			fmt.Printf("\tchannel close OK, state %d, tx state %d\n",
+				q.State.StateIdx, txIdx)
 		}
 	}
 	return nil
@@ -167,11 +215,12 @@ func (t *TxStore) RecoverTx(q *Qchan) (*wire.MsgTx, error) {
 		return nil, fmt.Errorf("spend tx has %d outputs, can't sweep",
 			len(spendTx.TxOut))
 	}
-	if spendTx.LockTime < minHint || spendTx.LockTime > maxHint {
-		return nil, fmt.Errorf("no hint (%d), can't sweep", spendTx.LockTime)
+	txIdx := GetStateIdxFromTx(spendTx)
+	if txIdx == 0 {
+		return nil, fmt.Errorf("no hint, can't recover")
 	}
 
-	// outpoint we're trying to sweep
+	// outpoint we're trying to recover
 	op := wire.NewOutPoint(&q.SpendTxid, 0)
 	shOut := new(wire.TxOut)
 
@@ -183,47 +232,40 @@ func (t *TxStore) RecoverTx(q *Qchan) (*wire.MsgTx, error) {
 		op.Index = 1
 	}
 
-	// sanity check; if hinted state is greater than elkrem state we have no chance
-	if uint64(spendTx.LockTime-minHint) > q.ElkRcv.UpTo() {
-		return nil, fmt.Errorf("tx at LEAST state %d but elkrem only goes to %d",
-			spendTx.LockTime-minHint, q.ElkRcv.UpTo())
+	// if hinted state is greater than elkrem state we can't recover
+	if txIdx > q.ElkRcv.UpTo() {
+		return nil, fmt.Errorf("tx at state %d but elkrem only goes to %d",
+			txIdx, q.ElkRcv.UpTo())
 	}
 
 	// delay will be a channel-wide variable later.
 	delay := uint32(5)
 	var preScript []byte
-	// try to build shOut script, adding timeHintMask each time
-	tryState := uint64(spendTx.LockTime - minHint)
+	// build shOut script
 
-	for tryState <= q.ElkRcv.UpTo() {
-		// elkrem hash for this attempt
-		elk, err := q.ElkRcv.AtIndex(tryState)
-		if err != nil {
-			return nil, err
-		}
-		// make my channel pubkey array into a pubkey
-		derivedPub, err := btcec.ParsePubKey(q.MyPub[:], btcec.S256())
-		if err != nil {
-			return nil, err
-		}
-		// add elkrem to my pubkey
-		PubKeyAddBytes(derivedPub, elk.Bytes())
-		var HAKDpubArr [33]byte
-		copy(HAKDpubArr[:], derivedPub.SerializeCompressed())
+	elk, err := q.ElkRcv.AtIndex(txIdx)
+	if err != nil {
+		return nil, err
+	}
 
-		// now that everything is chosen, build fancy script and pkh script
-		preScript, _ = CommitScript2(HAKDpubArr, q.TheirPub, delay)
-		fancyScript := P2WSHify(preScript) // p2wsh-ify
-		fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
-		if bytes.Equal(fancyScript, shOut.PkScript) {
-			break // found the script
-		}
-		tryState += timeHintMask
+	// get private signing key
+	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+	// modify private key
+	PrivKeyAddBytes(priv, elk.Bytes())
+
+	// serialize pubkey part for script generation
+	var HAKDpubArr [33]byte
+	copy(HAKDpubArr[:], priv.PubKey().SerializeCompressed())
+
+	// now that everything is chosen, build fancy script and pkh script
+	preScript, _ = CommitScript2(HAKDpubArr, q.TheirPub, delay)
+	fancyScript := P2WSHify(preScript) // p2wsh-ify
+	fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
+	if !bytes.Equal(fancyScript, shOut.PkScript) {
+		return nil, fmt.Errorf("script hash mismatch, generated %x expect %x",
+			fancyScript, shOut.PkScript)
 	}
-	if tryState > q.ElkRcv.UpTo() {
-		return nil, fmt.Errorf("could not match output script %x", shOut.PkScript)
-	}
-	// we've found the matching state (tryState), and have the script (preScript)
+
 	// build tx and sign.
 	sweepTx := wire.NewMsgTx()
 	changeOut, err := t.NewChangeOut(0)
@@ -236,12 +278,6 @@ func (t *TxStore) RecoverTx(q *Qchan) (*wire.MsgTx, error) {
 	// add unsigned input
 	sweepIn := wire.NewTxIn(op, nil, nil)
 	sweepTx.AddTxIn(sweepIn)
-
-	// get private signing key
-	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
-	// modify private key
-	elk, _ := q.ElkRcv.AtIndex(tryState)
-	PrivKeyAddBytes(priv, elk.Bytes())
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(sweepTx)
@@ -550,16 +586,17 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 
 	// make a new tx
 	tx := wire.NewMsgTx()
-	tx.LockTime = minHint + uint32(s.StateIdx&timeHintMask)
 	// add txouts
 	tx.AddTxOut(outFancy)
 	tx.AddTxOut(outPKH)
 	// add unsigned txin
 	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
+	// set index hints
+	SetStateIdxBits(tx, s.StateIdx)
 
+	// sort outputs
 	txsort.InPlaceSort(tx)
 	return tx, nil
-	return nil, nil
 }
 
 func DirectWPKHScript(pkh [20]byte) []byte {
