@@ -483,7 +483,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
 	qc.State = new(StatCom)
 
-	// load state and next state.  If it exists.
+	// load state.  If it exists.
 	// if it doesn't, leave as empty state, will fill in
 	stBytes := bkt.Get(KEYState)
 	if stBytes != nil {
@@ -512,40 +512,46 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	return &qc, nil
 }
 
-//func (ts *TxStore) GetQchan(
-//	peerBytes []byte, opArr [36]byte) (*Qchan, error) {
+// ReloadQchan loads updated data from the db into the qchan.  Loads elkrem
+// and state, but does not change qchan info itself.  Faster than GetQchan()
+func (ts *TxStore) ReloadQchan(q *Qchan) error {
+	var err error
+	opBytes := OutPointToBytes(q.Op)
 
-//	qc := new(Qchan)
-//	var err error
-//	op := OutPointFromBytes(opArr)
-//	err = ts.StateDB.View(func(btx *bolt.Tx) error {
-//		prs := btx.Bucket(BKTPeers)
-//		if prs == nil {
-//			return fmt.Errorf("no peers")
-//		}
-//		pr := prs.Bucket(peerBytes[:]) // go into this peer's bucket
-//		if pr == nil {
-//			return fmt.Errorf("peer %x not in db", peerBytes)
-//		}
-//		qcBucket := pr.Bucket(opArr[:])
-//		if qcBucket == nil {
-//			return fmt.Errorf("outpoint %s not in db under peer %x",
-//				op.String(), peerBytes)
-//		}
+	return ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("no peers")
+		}
+		pr := prs.Bucket(q.PeerPubId[:]) // go into this peer's bucket
+		if pr == nil {
+			return fmt.Errorf("peer %x not in db", q.PeerPubId[:])
+		}
+		qcBucket := pr.Bucket(opBytes)
+		if qcBucket == nil {
+			return fmt.Errorf("outpoint %s not in db under peer %x",
+				q.Op.String(), q.PeerPubId[:])
+		}
 
-//		pIdx := BtU32(pr.Get(KEYIdx))
+		// load state and update
+		// if it doesn't, leave as empty state, will fill in
+		stBytes := qcBucket.Get(KEYState)
+		if stBytes == nil {
+			return fmt.Errorf("state value empty")
+		}
+		q.State, err = StatComFromBytes(stBytes)
+		if err != nil {
+			return err
+		}
 
-//		qc, err = ts.RestoreQchanFromBucket(pIdx, qcBucket)
-//		if err != nil {
-//			return err
-//		}
-//		return nil
-//	})
-//	if err != nil {
-//		return nil, err
-//	}
-//	return qc, nil
-//}
+		// load elkrem from elkrem bucket.
+		q.ElkRcv, err = elkrem.ElkremReceiverFromBytes(qcBucket.Get(KEYElkRecv))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
 
 // Save / overwrite state of qChan in db
 // the descent into the qchan bucket is boilerplate and it'd be nice

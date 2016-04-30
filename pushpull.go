@@ -145,11 +145,17 @@ func Push(args []string) error {
 	}
 	fmt.Printf("push %d to (%d,%d) %d times\n", amt, peerIdx, cIdx, times)
 
+	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	if err != nil {
+		return err
+	}
+
 	for times > 0 {
-		qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+		err = SCon.TS.ReloadQchan(qc)
 		if err != nil {
 			return err
 		}
+
 		err = PushChannel(qc, uint32(amt))
 		if err != nil {
 			return err
