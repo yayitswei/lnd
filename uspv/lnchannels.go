@@ -383,11 +383,13 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	// generate their HAKDpub.  Be sure you haven't revoked it!
 	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
 	if err != nil {
-		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return nil, err
 	}
 
 	tx, err := q.BuildStateTx(theirHAKDpub)
+	if err != nil {
+		return nil, err
+	}
 
 	// make hash cache for this tx
 	hCache := txscript.NewTxSigHashes(tx)

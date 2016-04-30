@@ -89,7 +89,8 @@ func BreakChannel(args []string) error {
 	}
 
 	fmt.Printf("breaking (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
-
+	// set delta to 0...
+	qc.State.Delta = 0
 	tx, err := SCon.TS.SignBreakTx(qc)
 	if err != nil {
 		return err
