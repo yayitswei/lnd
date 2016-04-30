@@ -155,7 +155,7 @@ func Push(args []string) error {
 			return err
 		}
 		// such a hack.. obviously need indicator of when state update complete
-		time.Sleep(time.Millisecond * 500)
+		time.Sleep(time.Millisecond * 100)
 		times--
 	}
 	return nil

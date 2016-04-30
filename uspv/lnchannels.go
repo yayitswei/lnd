@@ -491,7 +491,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	hCache := txscript.NewTxSigHashes(tx)
 	// always sighash all
 	hash := txscript.CalcWitnessSignatureHash(
-		opcodes, hCache, txscript.SigHashAll, tx, int(q.Op.Index), q.Value)
+		opcodes, hCache, txscript.SigHashAll, tx, 0, q.Value)
 
 	// sig is pre-truncated; last byte for sighashtype is always sighashAll
 	pSig, err := btcec.ParseDERSignature(sig, btcec.S256())
