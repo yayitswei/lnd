@@ -108,7 +108,7 @@ func LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
 		}
 		msg = msg[:n]
 		msg = append(id[:], msg...)
-		fmt.Printf("incoming msg %x\n", msg)
+		//		fmt.Printf("incoming msg %x\n", msg)
 		OmniChan <- msg
 	}
 }

@@ -132,7 +132,7 @@ func SetStateIdxBits(tx *wire.MsgTx, idx uint64) error {
 	}
 	if idx >= 1<<48 {
 		return fmt.Errorf(
-			"SetStateIdxBits: index %d greater than max %d", idx, (1<<48)-1)
+			"SetStateIdxBits: index %d greater than max %d", idx, uint64(1<<48)-1)
 	}
 
 	// high 24 bits sequence, low 24 bits locktime

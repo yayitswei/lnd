@@ -76,9 +76,9 @@ func (ts *TxStore) GetPrivkey(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
 		fmt.Printf("GetPrivkey err %s", err.Error())
 		return nil
 	}
-	pubbyte := priv.PubKey().SerializeCompressed()
-	fmt.Printf("- - -generated %d,%d,%d %x\n",
-		use, peerIdx, cIdx, pubbyte[:8])
+	//	pubbyte := priv.PubKey().SerializeCompressed()
+	//	fmt.Printf("- - -generated %d,%d,%d %x\n",
+	//		use, peerIdx, cIdx, pubbyte[:8])
 	return priv
 }
 

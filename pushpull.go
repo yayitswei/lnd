@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
@@ -101,7 +102,7 @@ func BreakChannel(args []string) error {
 // Push is the shell command which calls PushChannel
 func Push(args []string) error {
 	if len(args) < 3 {
-		return fmt.Errorf("need args: push peerIdx chanIdx amt")
+		return fmt.Errorf("need args: push peerIdx chanIdx amt (times)")
 	}
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone, can't push\n")
@@ -119,6 +120,14 @@ func Push(args []string) error {
 	if err != nil {
 		return err
 	}
+	times := int64(1)
+	if len(args) > 3 {
+		times, err = strconv.ParseInt(args[3], 10, 32)
+		if err != nil {
+			return err
+		}
+	}
+
 	if amt > 100000000 || amt < 1 {
 		return fmt.Errorf("push %d, max push is 1 coin / 100000000", amt)
 	}
@@ -134,13 +143,22 @@ func Push(args []string) error {
 		return fmt.Errorf("Want to close with peer %d but connected to %d",
 			peerIdx, currentPeerIdx)
 	}
-	fmt.Printf("push %d to (%d,%d)\n", peerIdx, cIdx, amt)
+	fmt.Printf("push %d to (%d,%d) %d times\n", amt, peerIdx, cIdx, times)
 
-	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
-	if err != nil {
-		return err
+	for times > 0 {
+		qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+		if err != nil {
+			return err
+		}
+		err = PushChannel(qc, uint32(amt))
+		if err != nil {
+			return err
+		}
+		// such a hack.. obviously need indicator of when state update complete
+		time.Sleep(time.Millisecond * 500)
+		times--
 	}
-	return PushChannel(qc, uint32(amt))
+	return nil
 }
 
 // PushChannel initiates a state update by sending an RTS

@@ -276,8 +276,8 @@ func (c *LNDConn) Read(b []byte) (n int, err error) {
 		var nonceBuf [8]byte
 		binary.BigEndian.PutUint64(nonceBuf[:], c.remoteNonceInt)
 
-		fmt.Printf("decrypt %d byte from %x nonce %d\n",
-			len(ctext), c.RemoteLNId, c.remoteNonceInt)
+		//		fmt.Printf("decrypt %d byte from %x nonce %d\n",
+		//			len(ctext), c.RemoteLNId, c.remoteNonceInt)
 
 		c.remoteNonceInt++ // increment remote nonce, no matter what...
 
@@ -303,8 +303,8 @@ func (c *LNDConn) Write(b []byte) (n int, err error) {
 	if b == nil {
 		return 0, fmt.Errorf("write to %x nil", c.RemoteLNId)
 	}
-	fmt.Printf("Encrypt %d byte plaintext to %x nonce %d\n",
-		len(b), c.RemoteLNId, c.myNonceInt)
+	//	fmt.Printf("Encrypt %d byte plaintext to %x nonce %d\n",
+	//		len(b), c.RemoteLNId, c.myNonceInt)
 
 	// first encrypt message with shared key
 	var nonceBuf [8]byte
