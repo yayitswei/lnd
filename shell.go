@@ -227,10 +227,10 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	if cmd == "recov" {
-		err = RecoverChannel(args)
+	if cmd == "grab" {
+		err = Grab(args)
 		if err != nil {
-			fmt.Printf("recov error: %s\n", err)
+			fmt.Printf("grab error: %s\n", err)
 		}
 		return nil
 	}

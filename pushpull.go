@@ -33,7 +33,7 @@ func Math(args []string) error {
 	return nil
 }
 
-func RecoverChannel(args []string) error {
+func Grab(args []string) error {
 	// need args, fail
 	if len(args) < 2 {
 		return fmt.Errorf("need args: recov peerIdx chanIdx")
@@ -55,7 +55,7 @@ func RecoverChannel(args []string) error {
 
 	fmt.Printf("try to recover (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
 
-	rtx, err := SCon.TS.RecoverTx(qc)
+	rtx, err := SCon.TS.RemedyTx(qc)
 	if err != nil {
 		return err
 	}

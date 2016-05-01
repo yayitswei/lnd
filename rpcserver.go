@@ -89,7 +89,7 @@ func (r *rpcServer) NewAddress(ctx context.Context, in *lnrpc.NewAddressRequest)
 	r.server.lnwallet.KeyGenMtx.Lock()
 	defer r.server.lnwallet.KeyGenMtx.Unlock()
 
-	addr, err := r.server.lnwallet.NewAddress(defaultAccount)
+	addr, err := r.server.lnwallet.NewAddress(defaultAccount, waddrmgr.WitnessPubKey)
 	if err != nil {
 		return nil, err
 	}

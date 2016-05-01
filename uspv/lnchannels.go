@@ -201,11 +201,11 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	return nil
 }
 
-// RecoverTx produces the recovery transaction to get all the money if they broadcast
-// an old state which they invalidated.
+// RemedyTx produces the "remedy" transaction to get all the money if they
+// broadcast an old state which they invalidated.
 // This function assumes a recovery is possible; if it can't construct the right
 // keys and scripts it will return an error.
-func (t *TxStore) RecoverTx(q *Qchan) (*wire.MsgTx, error) {
+func (t *TxStore) RemedyTx(q *Qchan) (*wire.MsgTx, error) {
 	// load spending tx
 	spendTx, err := t.GetTx(&q.SpendTxid)
 	if err != nil {
