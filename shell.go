@@ -405,6 +405,24 @@ func Bal(args []string) error {
 	if SCon.TS == nil {
 		return fmt.Errorf("Can't get balance, spv connection broken")
 	}
+
+	if len(args) > 1 {
+		peerIdx, err := strconv.ParseInt(args[0], 10, 32)
+		if err != nil {
+			return err
+		}
+		cIdx, err := strconv.ParseInt(args[1], 10, 32)
+		if err != nil {
+			return err
+		}
+
+		qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
+		if err != nil {
+			return err
+		}
+		return SCon.TS.QchanInfo(qc)
+	}
+
 	fmt.Printf(" ----- Account Balance ----- \n")
 	rawUtxos, err := SCon.TS.GetAllUtxos()
 	if err != nil {
@@ -436,10 +454,13 @@ func Bal(args []string) error {
 		return err
 	}
 	for _, q := range qcs {
-		err = SCon.TS.QchanInfo(q)
-		if err != nil {
-			fmt.Printf("QchanInfo err: %s\n", err.Error())
+		if q.IsClosed() {
+			fmt.Printf("CLOSED ")
+		} else {
+			fmt.Printf("CHANNEL")
 		}
+		fmt.Printf(" %s h:%d (%d,%d) cap: %d\n",
+			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
 	}
 
 	height, _ := SCon.TS.GetDBSyncHeight()

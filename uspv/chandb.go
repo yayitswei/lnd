@@ -121,34 +121,6 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	return idx, err
 }
 
-// NewFundReq initiate a channel request.  Get an index based on peer pubkey
-func (ts *TxStore) NewFundReq(peerBytes []byte) (uint32, error) {
-	var cIdx uint32
-	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
-		prs := btx.Bucket(BKTPeers)
-		if prs == nil {
-			return fmt.Errorf("NewMultReq: no peers")
-		}
-		pr := prs.Bucket(peerBytes)
-		if pr == nil {
-			return fmt.Errorf("NewMultReq: peer %x not found", peerBytes)
-		}
-		// chanIdx starts at 1, because there's another key in the peer bucket
-		// (pdx) for peer data (right now just peerIdx)
-		cIdx = uint32(pr.Stats().BucketN)
-		// make empty bucket for the new multisig
-		_, err := pr.CreateBucket(U32tB(cIdx))
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return cIdx, nil
-}
-
 // NextPubForPeer returns the next pubkey to use with the peer.
 // It first checks that the peer exists, next pubkey.  Read only.
 func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
@@ -172,7 +144,7 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
 		// NO SUB-BUCKETS in peers.  If we want to add sub buckets we'll need
 		// to count or track a different way.
 		// nah we can't use this.  Gotta count each time.  Lame.
-		cIdx = uint32(pr.Stats().BucketN)
+		cIdx = CountKeysInBucket(pr) << 1
 		return nil
 	})
 	if err != nil {
@@ -220,8 +192,9 @@ func (ts *TxStore) MakeFundTx(
 		if peerIdxBytes == nil {
 			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerBytes)
 		}
-		peerIdx = BtU32(peerIdxBytes)                // store peer index for key creation
-		cIdx = uint32(pr.Stats().BucketN) + localIdx // local so high bit 1
+		peerIdx = BtU32(peerIdxBytes)           // store peer index for key creation
+		cIdx = (CountKeysInBucket(pr) << 1) | 1 // local, lsb 1
+
 		// generate pubkey from peer, multi indexes
 		myPub = ts.GetFundPubkey(peerIdx, cIdx)
 		// check if mypub is empty?
@@ -322,7 +295,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerBytes)
 		}
 		// use key counter here?
-		cIdx = uint32(pr.Stats().BucketN) // new non local, high bit 0
+		cIdx = CountKeysInBucket(pr) << 1 // new non local, lsb 0
 
 		// make new bucket for this mutliout
 		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))

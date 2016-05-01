@@ -64,6 +64,7 @@ type Qchan struct {
 }
 
 // StatComs are State Commitments.
+// all elements are saved to the db.
 type StatCom struct {
 	StateIdx uint64 // this is the n'th state commitment
 
@@ -152,13 +153,15 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 		q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
 	fmt.Printf("\tPUB mine:%x them:%x REFUND mine:%x them:%x\n",
 		q.MyPub[:4], q.TheirPub[:4], q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
-	if q.State == nil {
-		fmt.Printf("\t no valid state data\n")
+	if q.State == nil || q.ElkRcv == nil {
+		fmt.Printf("\t no valid state or elkrem\n")
 	} else {
-		fmt.Printf("\tSTATE HAKD:%x prevHAKD:%x stateidx:%d mine:%d them:%d\n",
-			q.State.MyHAKDPub[:4], q.State.MyPrevHAKDPub[:4],
-			q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-		fmt.Printf("\telkrem receiver @%d\n", q.ElkRcv.UpTo())
+
+		fmt.Printf("\ta %d (them %d) state index %d\n",
+			q.State.MyAmt, q.Value-q.State.MyAmt, q.State.StateIdx)
+		fmt.Printf("\tdelta:%d HAKD:%x prevHAKD:%x elk@ %d\n",
+			q.State.Delta, q.State.MyHAKDPub[:4], q.State.MyPrevHAKDPub[:4],
+			q.ElkRcv.UpTo())
 	}
 
 	if !q.IsClosed() { // still open, finish here

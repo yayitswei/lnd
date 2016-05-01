@@ -241,7 +241,7 @@ func Push(args []string) error {
 			return err
 		}
 		// such a hack.. obviously need indicator of when state update complete
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 25)
 		times--
 	}
 	return nil
@@ -600,7 +600,7 @@ func REVHandler(from [16]byte, REVBytes []byte) {
 
 	// check if there's nothing for them to revoke
 	var empty [33]byte
-	if qc.State.MyPrevHAKDPub == empty {
+	if qc.State.StateIdx > 1 && qc.State.MyPrevHAKDPub == empty {
 		fmt.Printf("got REV message with hash %s, but nothing to revoke\n",
 			revElk.String())
 		return
