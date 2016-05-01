@@ -11,28 +11,7 @@ import (
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
-// Do math, see if this curve thing works.
-func Math(args []string) error {
-	priv := SCon.TS.GetFundPrivkey(5, 5)
-
-	pubArr := SCon.TS.GetFundPubkey(5, 5)
-
-	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
-	fmt.Printf("initial  pub: %x\n", pubArr)
-
-	for i := 0; i < 10000; i++ {
-		uspv.PubKeyAddBytes(pub, []byte("bigint"))
-	}
-	fmt.Printf("modified pub: %x\n", pub.SerializeCompressed())
-
-	//	for i := 0; i < 10000; i++ {
-	uspv.PrivKeyAddBytes(priv, []byte("bigint"))
-	//	}
-	fmt.Printf("from prv pub: %x\n", priv.PubKey().SerializeCompressed())
-
-	return nil
-}
-
+// Grab the coins that are rightfully yours! Plus some more.
 func Grab(args []string) error {
 	// need args, fail
 	if len(args) < 2 {
@@ -98,6 +77,106 @@ func BreakChannel(args []string) error {
 
 	// broadcast
 	return SCon.NewOutgoingTx(tx)
+}
+
+// Resume is a shell command which resumes a message exchange for channels that
+// are in a non-final state.  If the channel is in a final state it will send
+// a REV (which it already sent, and should be ignored)
+func Resume(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("need args: fix peerIdx chanIdx")
+	}
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone, can't fix\n")
+	}
+	// this stuff is all the same as in cclose, should put into a function...
+	peerIdx64, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	cIdx64, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil {
+		return err
+	}
+	peerIdx := uint32(peerIdx64)
+	cIdx := uint32(cIdx64)
+
+	// find the peer index of who we're connected to
+	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+	if uint32(peerIdx) != currentPeerIdx {
+		return fmt.Errorf("Want to close with peer %d but connected to %d",
+			peerIdx, currentPeerIdx)
+	}
+	fmt.Printf("fix channel (%d,%d)\n", peerIdx, cIdx)
+
+	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	if err != nil {
+		return err
+	}
+
+	return SendNextMsg(qc)
+}
+
+/*
+SendNextMsg logic:
+
+Message to send: channel state (sanity check)
+
+RTS:
+delta < 0
+(prevHAKD == 0)
+
+ACKSIG:
+delta > 0
+(prevHAKD != 0)
+
+SIGREV:
+delta == 0
+prevHAKD != 0
+
+REV:
+delta == 0
+prevHAKD == 0
+
+Note that when there's nothing to send, it'll send a REV message,
+revoking the previous state which has already been revoked.
+
+We could distinguish by writing to the db that we've sent the REV message...
+but that doesn't seem that useful because we don't know if they got it so
+we might have to send it again anyway.
+*/
+
+// SendNextMsg determines what message needs to be sent next
+// based on the channel state.  It then calls the appropriate function.
+func SendNextMsg(qc *uspv.Qchan) error {
+	var empty [33]byte
+
+	// RTS
+	if qc.State.Delta < 0 {
+		if qc.State.MyPrevHAKDPub != empty {
+			return fmt.Errorf("delta is %d but prevHAKD full!", qc.State.Delta)
+		}
+		return SendRTS(qc)
+	}
+
+	// ACKSIG
+	if qc.State.Delta > 0 {
+		if qc.State.MyPrevHAKDPub == empty {
+			return fmt.Errorf("delta is %d but prevHAKD empty!", qc.State.Delta)
+		}
+		return SendACKSIG(qc)
+	}
+
+	//SIGREV (delta must be 0 by now)
+	if qc.State.MyPrevHAKDPub != empty {
+		return SendSIGREV(qc)
+	}
+
+	// REV
+	return SendREV(qc)
 }
 
 // Push is the shell command which calls PushChannel
@@ -188,6 +267,12 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 	if err != nil {
 		return err
 	}
+	return SendRTS(qc)
+
+}
+
+// SendRTS based on channel info
+func SendRTS(qc *uspv.Qchan) error {
 	qc.State.StateIdx++
 	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
 	if err != nil {
@@ -200,16 +285,14 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 	// RTS is op (36), delta (4), HAKDPub (33)
 	// total length 73
 	// could put index as well here but for now index just goes ++ each time.
-
 	msg := []byte{uspv.MSGID_RTS}
 	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
-	msg = append(msg, uspv.U32tB(uint32(amt))...)
+	msg = append(msg, uspv.U32tB(uint32(-qc.State.Delta))...)
 	msg = append(msg, theirHAKDpub[:]...)
 	_, err = RemoteCon.Write(msg)
 	if err != nil {
 		return err
 	}
-	// clear their HAKDpub once sent.
 	return nil
 }
 
@@ -272,19 +355,27 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	}
 	// saved to db, now proceed to create & sign their tx, and generate their
 	// HAKD pub for them to sign
+	err = SendACKSIG(qc)
+	if err != nil {
+		fmt.Printf("RTSHandler err %s", err.Error())
+		return
+	}
+	return
+}
+
+// SendACKSIG sends an ACKSIG message based on channel info
+func SendACKSIG(qc *uspv.Qchan) error {
 	qc.State.StateIdx++
 	qc.State.MyAmt += int64(qc.State.Delta)
 	qc.State.Delta = 0
 	sig, err := SCon.TS.SignState(qc)
 	if err != nil {
-		fmt.Printf("RTSHandler err %s", err.Error())
-		return
+		return err
 	}
 	fmt.Printf("made sig %x\n", sig)
 	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
 	if err != nil {
-		fmt.Printf("RTSHandler err %s", err.Error())
-		return
+		return err
 	}
 
 	// ACKSIG is op (36), HAKDPub (33), sig (~70)
@@ -294,7 +385,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	msg = append(msg, theirHAKDpub[:]...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
-	return
+	return err
 }
 
 // ACKSIGHandler takes in an ACKSIG and responds with an SIGREV (if everything goes OK)
@@ -355,18 +446,25 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
-
-	// sign their tx with my new HAKD pubkey I just got.
-	sig, err = SCon.TS.SignState(qc)
+	err = SendSIGREV(qc)
 	if err != nil {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
+	return
+}
+
+// SendSIGREV sends a SIGREV message based on channel info
+func SendSIGREV(qc *uspv.Qchan) error {
+	// sign their tx with my new HAKD pubkey I just got.
+	sig, err := SCon.TS.SignState(qc)
+	if err != nil {
+		return err
+	}
 	// get elkrem for revoking *previous* state, so elkrem at index - 1.
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
-		fmt.Printf("ACKSIGHandler err %s", err.Error())
-		return
+		return err
 	}
 
 	// SIGREV is op (36), elk (32), sig (~70)
@@ -376,7 +474,7 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
-	return
+	return err
 }
 
 // SIGREVHandler takes in an SIGREV and responds with a REV (if everything goes OK)
@@ -443,11 +541,21 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 	}
 
 	fmt.Printf("SIGREV OK, state %d, will send REV\n", qc.State.StateIdx)
-	// get elkrem for revoking *previous* state, so elkrem at index - 1.
-	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	err = SendREV(qc)
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
 		return
+	}
+	return
+}
+
+// SendREV sends a REV message based on channel info
+func SendREV(qc *uspv.Qchan) error {
+	// get elkrem for revoking *previous* state, so elkrem at index - 1.
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	if err != nil {
+
+		return err
 	}
 	// REV is just op (36), elk (32)
 	// total length 68
@@ -455,7 +563,7 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
 	msg = append(msg, elk.Bytes()...)
 	_, err = RemoteCon.Write(msg)
-	return
+	return err
 }
 
 // REVHandler takes in an REV and clears the state's prev HAKD.  This is the
@@ -489,6 +597,15 @@ func REVHandler(from [16]byte, REVBytes []byte) {
 			"in case the code changes later and we forget.\n")
 		return
 	}
+
+	// check if there's nothing for them to revoke
+	var empty [33]byte
+	if qc.State.MyPrevHAKDPub == empty {
+		fmt.Printf("got REV message with hash %s, but nothing to revoke\n",
+			revElk.String())
+		return
+	}
+
 	// verify elkrem
 	err = qc.IngestElkrem(revElk)
 	if err != nil {
