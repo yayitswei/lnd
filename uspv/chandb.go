@@ -123,6 +123,7 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 
 // NextPubForPeer returns the next pubkey to use with the peer.
 // It first checks that the peer exists, next pubkey.  Read only.
+// only channel initiator uses this.
 func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
 	var peerIdx, cIdx uint32
 	var empty [33]byte
@@ -144,7 +145,7 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
 		// NO SUB-BUCKETS in peers.  If we want to add sub buckets we'll need
 		// to count or track a different way.
 		// nah we can't use this.  Gotta count each time.  Lame.
-		cIdx = CountKeysInBucket(pr) << 1
+		cIdx = (CountKeysInBucket(pr) << 1) | 1
 		return nil
 	})
 	if err != nil {
@@ -178,6 +179,7 @@ func (ts *TxStore) MakeFundTx(
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
 	var myPub [33]byte
+	var ckdn wire.ShaHash
 
 	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
@@ -192,11 +194,11 @@ func (ts *TxStore) MakeFundTx(
 		if peerIdxBytes == nil {
 			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerBytes)
 		}
-		peerIdx = BtU32(peerIdxBytes)           // store peer index for key creation
-		cIdx = (CountKeysInBucket(pr) << 1) | 1 // local, lsb 1
+		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
+		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
-		// generate pubkey from peer, multi indexes
-		myPub = ts.GetFundPubkey(peerIdx, cIdx)
+		// generate channel pubkey.  Id pubkey + ckdn
+		myPub, ckdn = ts.GetChannelPub(peerIdx, cIdx)
 		// check if mypub is empty?
 
 		// generate multisig output from two pubkeys
@@ -295,7 +297,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerBytes)
 		}
 		// use key counter here?
-		cIdx = CountKeysInBucket(pr) << 1 // new non local, lsb 0
+		cIdx = (CountKeysInBucket(pr) << 1) | 1 // new remote, lsb 1
 
 		// make new bucket for this mutliout
 		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
@@ -445,13 +447,15 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	if err != nil {
 		return nil, err
 	}
-
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	copy(qc.PeerPubId[:], peerPub)
-	// derive my channel pubkey
-	qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
-
+	// derive my channel pubkey; if remote use CKDN
+	if qc.KeyIdx&1 == 0 { // local
+		qc.MyPub, _ = ts.GetChannelPub(peerIdx, qc.KeyIdx)
+	} else {
+		qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
+	}
 	// derive my refund from index
 	copy(qc.MyRefundAdr[:], ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx))
 	qc.State = new(StatCom)

@@ -105,6 +105,11 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
+
+	if qc.KeyIdx&1 == 0 { //local, use ckdn
+		fmt.Printf("local\n")
+		priv = SCon.TS.GetChannelPrivkey(qc.PeerIdx, qc.KeyIdx)
+	}
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
 
@@ -198,6 +203,10 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
+	if qc.KeyIdx&1 == 0 { //local, use ckdn
+		fmt.Printf("local\n")
+		priv = SCon.TS.GetChannelPrivkey(qc.PeerIdx, qc.KeyIdx)
+	}
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
 

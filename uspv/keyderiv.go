@@ -23,6 +23,7 @@ const (
 	UseChannelFund   = 2
 	UseChannelRefund = 3
 	UseChannelElkrem = 4
+	UseCKDN          = 10 // links Id and channel. replaces UseChannelFund
 	UseIdKey         = 11
 )
 
@@ -45,18 +46,31 @@ func PrivKeyAddBytes(k *btcec.PrivateKey, b []byte) {
 // NOTE that this modifies the key in place, overwriting it!!!!1
 func PubKeyAddBytes(k *btcec.PublicKey, b []byte) {
 	// turn b into a point on the curve
-	bx, by := k.ScalarBaseMult(b)
+	bx, by := btcec.S256().ScalarBaseMult(b)
 	// add arg point to pubkey point
 	k.X, k.Y = btcec.S256().Add(bx, by, k.X, k.Y)
 	return
+}
+
+func PubKeyArrAddBytes(p *[33]byte, b []byte) error {
+	pub, err := btcec.ParsePubKey(p[:], btcec.S256())
+	if err != nil {
+		return err
+	}
+	// turn b into a point on the curve
+	bx, by := pub.ScalarBaseMult(b)
+	// add arg point to pubkey point
+	pub.X, pub.Y = btcec.S256().Add(bx, by, pub.X, pub.Y)
+	copy(p[:], pub.SerializeCompressed())
+	return nil
 }
 
 // GetPrivkey generates and returns a private key derived from the seed.
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.
 // All other specialized derivation functions should call this.
-func (ts *TxStore) GetPrivkey(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
-	multiRoot, err := ts.rootPrivKey.Child(use + hdkeychain.HardenedKeyStart)
+func (t *TxStore) GetPrivkey(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
+	multiRoot, err := t.rootPrivKey.Child(use + hdkeychain.HardenedKeyStart)
 	if err != nil {
 		fmt.Printf("GetPrivkey err %s", err.Error())
 		return nil
@@ -84,8 +98,8 @@ func (ts *TxStore) GetPrivkey(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
 
 // GetPubkey generates and returns the pubkey for a given path.
 // It will return nil if there's an error / problem.
-func (ts *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
-	priv := ts.GetPrivkey(use, peerIdx, cIdx)
+func (t *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
+	priv := t.GetPrivkey(use, peerIdx, cIdx)
 	if priv == nil {
 		fmt.Printf("GetPubkey peer %d idx %d failed", peerIdx, cIdx)
 		return nil
@@ -95,15 +109,15 @@ func (ts *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
 
 // GetAddress generates and returns the pubkeyhash address for a given path.
 // It will return nil if there's an error / problem.
-func (ts *TxStore) GetAddress(
+func (t *TxStore) GetAddress(
 	use, peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
-	pub := ts.GetPubkey(use, peerIdx, cIdx)
+	pub := t.GetPubkey(use, peerIdx, cIdx)
 	if pub == nil {
 		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
 		return nil
 	}
 	adr, err := btcutil.NewAddressWitnessPubKeyHash(
-		btcutil.Hash160(pub.SerializeCompressed()), ts.Param)
+		btcutil.Hash160(pub.SerializeCompressed()), t.Param)
 	if err != nil {
 		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
 		return nil
@@ -116,32 +130,61 @@ func (t *TxStore) IdKey() *btcec.PrivateKey {
 	return t.GetPrivkey(UseIdKey, 0, 0)
 }
 
-// get a private key from the regular wallet
-func (ts *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
-	return ts.GetPrivkey(UseWallet, 0, idx)
-}
-
-// get a public key from the regular wallet
-func (ts *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash {
-	return ts.GetAddress(UseWallet, 0, idx)
-}
-
-// GetFundPrivkey generates and returns the private key for a given peer, index.
-// It will return nil if there's an error / problem, but there shouldn't be
-// unless the root key itself isn't there or something.
-func (ts *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	return ts.GetPrivkey(UseChannelFund, peerIdx, cIdx)
-}
-
-// GetFundPubkey generates and returns the fund tx pubkey for a given index.
-// It will return nil if there's an error / problem
-func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
+func (t *TxStore) IdPub() [33]byte {
 	var b [33]byte
-	k := ts.GetPubkey(UseChannelFund, peerIdx, cIdx)
+	k := t.GetPubkey(UseIdKey, 0, 0)
 	if k != nil {
 		copy(b[:], k.SerializeCompressed())
 	}
 	return b
+}
+
+// get a private key from the regular wallet
+func (t *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
+	return t.GetPrivkey(UseWallet, 0, idx)
+}
+
+// get a public key from the regular wallet
+func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash {
+	return t.GetAddress(UseWallet, 0, idx)
+}
+
+// ----- Get fund priv/pub replaced with channel / ckdn? -------------------
+
+// GetFundPrivkey generates and returns the private key for a given peer, index.
+// It will return nil if there's an error / problem, but there shouldn't be
+// unless the root key itself isn't there or something.
+func (t *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
+	return t.GetPrivkey(UseChannelFund, peerIdx, cIdx)
+}
+
+// GetFundPubkey generates and returns the fund tx pubkey for a given index.
+// It will return nil if there's an error / problem
+func (t *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
+	var b [33]byte
+	k := t.GetPubkey(UseChannelFund, peerIdx, cIdx)
+	if k != nil {
+		copy(b[:], k.SerializeCompressed())
+	}
+	return b
+}
+
+// GetChannelPub returns your channel pubkey, and the CKDN used to
+// derive it from your ID key.  The CKDN is needed in channel setup.
+func (t *TxStore) GetChannelPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
+	idpriv := t.IdKey()
+	ckdn := t.GetCKDN(peerIdx, cIdx)
+	PrivKeyAddBytes(idpriv, ckdn.Bytes())
+	return idpriv
+}
+
+// GetChannelPub returns your channel pubkey, and the CKDN used to
+// derive it from your ID key.  The CKDN is needed in channel setup.
+func (t *TxStore) GetChannelPub(peerIdx, cIdx uint32) ([33]byte, wire.ShaHash) {
+	pub := t.IdPub()
+	ckdn := t.GetCKDN(peerIdx, cIdx)
+	PubKeyArrAddBytes(&pub, ckdn.Bytes())
+	return pub, ckdn
 }
 
 // GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?
@@ -150,14 +193,20 @@ func (ts *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
 //	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
 //}
 
-// GetElkremRoot gives the Elkrem sender root hash for a channel.
-func (ts *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
-	priv := ts.GetPrivkey(UseChannelElkrem, peerIdx, cIdx)
+// GetCKDN gets the channel key deriation nonce for funding the channel.
+func (t *TxStore) GetCKDN(peerIdx, cIdx uint32) wire.ShaHash {
+	priv := t.GetPrivkey(UseCKDN, peerIdx, cIdx)
 	return wire.DoubleSha256SH(priv.Serialize())
 }
 
-func (ts *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	return ts.GetPrivkey(UseChannelRefund, peerIdx, cIdx)
+// GetElkremRoot gives the Elkrem sender root hash for a channel.
+func (t *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
+	priv := t.GetPrivkey(UseChannelElkrem, peerIdx, cIdx)
+	return wire.DoubleSha256SH(priv.Serialize())
+}
+
+func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
+	return t.GetPrivkey(UseChannelRefund, peerIdx, cIdx)
 }
 
 // useless / remove?
@@ -165,9 +214,9 @@ func (ts *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 //	return ts.GetPubkey(UseChannelRefund, peerIdx, cIdx)
 //}
 
-func (ts *TxStore) GetRefundAddressBytes(
+func (t *TxStore) GetRefundAddressBytes(
 	peerIdx, cIdx uint32) []byte {
-	adr := ts.GetAddress(UseChannelRefund, peerIdx, cIdx)
+	adr := t.GetAddress(UseChannelRefund, peerIdx, cIdx)
 	if adr == nil {
 		return nil
 	}

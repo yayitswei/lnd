@@ -65,7 +65,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 28333 // hardcoded; later base on keyfile date?
+		tip = 29303 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
