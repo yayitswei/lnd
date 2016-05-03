@@ -22,6 +22,49 @@ elkrem 2 is the parent of elkrems 0 and 1, so that checks 0.
 
 */
 
+/*
+New funding process.
+A opens channel with B:
+A creates their channel key derivation nonce (CKDN), and computes their
+channel keypair from this. (A's channel key = A's ID key + CKDN).
+A also computes B's channel key, which is sha2(A's channel key) + B's ID key.
+A creates the output script and script hash.
+A creates the tx, and txid.
+A sends the CKDN over.  From that B can figure out A and B's channel key.
+
+Messages --
+
+A -> B Channel Description:
+outpoint (36)
+capacity (8)
+initial push (8)
+A refund (20)
+CKDN (32)
+B's HAKD pub (33)
+(fee / timeout...?  hardcoded for now)
+
+B -> A  Channel Acknowledge:
+B refund address (20)
+A's HAKD pub (33)
+signature (~70)
+
+=== time passes, fund tx gets in a block ===
+
+A -> B SigProof
+SPV proof of the outpoint (block height, tree depth, tx index, hashes)
+signature (~70)
+
+
+B knows the channel is open and he got paid when he receives the sigproof.
+A's got B's signature already.  So "payment happened" is sortof the same as
+bitcoin now; wait for confirmations.
+
+Alternatively A can open a channel with no initial funding going to B, then
+update the state once the channel is open.  If for whatever reason you want
+an exact timing for the payment.
+
+*/
+
 // FundChannel makes a multisig address with the node connected to...
 // first just request one of their pubkeys (1 byte message)
 func FundChannel(args []string) error {
