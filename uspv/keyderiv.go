@@ -23,7 +23,7 @@ const (
 	UseChannelFund   = 2
 	UseChannelRefund = 3
 	UseChannelElkrem = 4
-	UseCKDN          = 10 // links Id and channel. replaces UseChannelFund
+	UseCKDH          = 10 // links Id and channel. replaces UseChannelFund
 	UseIdKey         = 11
 )
 
@@ -149,7 +149,7 @@ func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash
 	return t.GetAddress(UseWallet, 0, idx)
 }
 
-// ----- Get fund priv/pub replaced with channel / ckdn? -------------------
+// ----- Get fund priv/pub replaced with channel / CKDH? -------------------
 
 // GetFundPrivkey generates and returns the private key for a given peer, index.
 // It will return nil if there's an error / problem, but there shouldn't be
@@ -169,22 +169,22 @@ func (t *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
 	return b
 }
 
-// GetChannelPub returns your channel pubkey, and the CKDN used to
-// derive it from your ID key.  The CKDN is needed in channel setup.
+// GetChannelPub returns your channel pubkey, and the CKDH used to
+// derive it from your ID key.  The CKDH is needed in channel setup.
 func (t *TxStore) GetChannelPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 	idpriv := t.IdKey()
-	ckdn := t.GetCKDN(peerIdx, cIdx)
-	PrivKeyAddBytes(idpriv, ckdn.Bytes())
+	CKDH := t.GetCKDH(peerIdx, cIdx)
+	PrivKeyAddBytes(idpriv, CKDH.Bytes())
 	return idpriv
 }
 
-// GetChannelPub returns your channel pubkey, and the CKDN used to
-// derive it from your ID key.  The CKDN is needed in channel setup.
+// GetChannelPub returns your channel pubkey, and the CKDH used to
+// derive it from your ID key.  The CKDH is needed in channel setup.
 func (t *TxStore) GetChannelPub(peerIdx, cIdx uint32) ([33]byte, wire.ShaHash) {
-	pub := t.IdPub()
-	ckdn := t.GetCKDN(peerIdx, cIdx)
-	PubKeyArrAddBytes(&pub, ckdn.Bytes())
-	return pub, ckdn
+	myID := t.IdPub()
+	CKDH := t.GetCKDH(peerIdx, cIdx)
+	PubKeyArrAddBytes(&myID, CKDH.Bytes())
+	return myID, CKDH
 }
 
 // GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?
@@ -193,9 +193,9 @@ func (t *TxStore) GetChannelPub(peerIdx, cIdx uint32) ([33]byte, wire.ShaHash) {
 //	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
 //}
 
-// GetCKDN gets the channel key deriation nonce for funding the channel.
-func (t *TxStore) GetCKDN(peerIdx, cIdx uint32) wire.ShaHash {
-	priv := t.GetPrivkey(UseCKDN, peerIdx, cIdx)
+// GetCKDH gets the channel key deriation nonce for funding the channel.
+func (t *TxStore) GetCKDH(peerIdx, cIdx uint32) wire.ShaHash {
+	priv := t.GetPrivkey(UseCKDH, peerIdx, cIdx)
 	return wire.DoubleSha256SH(priv.Serialize())
 }
 

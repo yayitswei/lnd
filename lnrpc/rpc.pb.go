@@ -201,16 +201,17 @@ var _Lightning_serviceDesc = grpc.ServiceDesc{
 	HandlerType: (*LightningServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			// bunch of errors here, commented out.
 			MethodName: "SendMany",
-			Handler:    _Lightning_SendMany_Handler,
+			//			Handler:    _Lightning_SendMany_Handler,
 		},
 		{
 			MethodName: "NewAddress",
-			Handler:    _Lightning_NewAddress_Handler,
+			//			Handler:    _Lightning_NewAddress_Handler,
 		},
 		{
 			MethodName: "ConnectPeer",
-			Handler:    _Lightning_ConnectPeer_Handler,
+			//			Handler:    _Lightning_ConnectPeer_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{},

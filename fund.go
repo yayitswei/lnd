@@ -25,12 +25,12 @@ elkrem 2 is the parent of elkrems 0 and 1, so that checks 0.
 /*
 New funding process.
 A opens channel with B:
-A creates their channel key derivation nonce (CKDN), and computes their
-channel keypair from this. (A's channel key = A's ID key + CKDN).
+A creates their channel key derivation hash (CKDH), and computes their
+channel keypair from this. (A's channel key = A's ID key + CKDH).
 A also computes B's channel key, which is sha2(A's channel key) + B's ID key.
 A creates the output script and script hash.
 A creates the tx, and txid.
-A sends the CKDN over.  From that B can figure out A and B's channel key.
+A sends the CKDH over.  From that B can figure out A and B's channel key.
 
 Messages --
 
@@ -39,7 +39,7 @@ outpoint (36)
 capacity (8)
 initial push (8)
 A refund (20)
-CKDN (32)
+CKDH (32)
 B's HAKD pub (33)
 (fee / timeout...?  hardcoded for now)
 
