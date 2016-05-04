@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
@@ -105,14 +106,15 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	tx := wire.NewMsgTx() // make new tx
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
+	priv := new(btcec.PrivateKey)
 
-	if qc.KeyIdx&1 == 0 { //local, use ckdh
+	if qc.KeyIdx&1 == 0 { //local, use ckdn
 		fmt.Printf("local\n")
-		cn := SCon.TS.CreateChannelNonce(qc.PeerIdx, qc.KeyIdx)
-		ckdh := uspv.CalcCKDH(SCon.TS.IdPub(), qc.PeerId, cn)
-		priv = SCon.TS.GetChannelPrivkey(ckdh)
+		priv = SCon.TS.GetChanPrivkey(SCon.TS.IdPub(), qc.PeerId, qc.ChannelNonce)
+	} else { // remote
+		priv = SCon.TS.GetChanPrivkey(qc.PeerId, SCon.TS.IdPub(), qc.ChannelNonce)
 	}
+
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
 
@@ -206,13 +208,13 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
+	priv := new(btcec.PrivateKey)
+
 	if qc.KeyIdx&1 == 0 { //local, use ckdn
 		fmt.Printf("local\n")
-		// calc now; store later
-		cn := SCon.TS.CreateChannelNonce(qc.PeerIdx, qc.KeyIdx)
-		ckdh := uspv.CalcCKDH(SCon.TS.IdPub(), qc.PeerId, cn)
-		priv = SCon.TS.GetChannelPrivkey(ckdh)
+		priv = SCon.TS.GetChanPrivkey(SCon.TS.IdPub(), qc.PeerId, qc.ChannelNonce)
+	} else { // remote
+		priv = SCon.TS.GetChanPrivkey(qc.PeerId, SCon.TS.IdPub(), qc.ChannelNonce)
 	}
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()

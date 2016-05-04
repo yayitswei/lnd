@@ -47,11 +47,12 @@ type Qchan struct {
 	Utxo                   // S underlying utxo data
 	SpendTxid wire.ShaHash // S txid of transaction destroying channel
 
-	MyPub    [33]byte // D my channel specific pubkey
-	TheirPub [33]byte // S their channel specific pubkey
+	ChannelNonce [20]byte // S made by funder; stored by both
+	MyPub        [33]byte // D my channel specific pubkey
+	TheirPub     [33]byte // D their channel specific pubkey
 
-	PeerIdx   uint32   // D local unique index of peer.  derived from place in db.
-	PeerId [33]byte // D useful for quick traverse of db
+	PeerIdx uint32   // D local unique index of peer.  derived from place in db.
+	PeerId  [33]byte // D useful for quick traverse of db
 
 	TheirRefundAdr [20]byte // S their address for when you break
 	MyRefundAdr    [20]byte // D my refund address when they break
@@ -252,7 +253,14 @@ func (t *TxStore) RemedyTx(q *Qchan) (*wire.MsgTx, error) {
 	}
 
 	// get private signing key
-	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+	priv := new(btcec.PrivateKey)
+	// get private signing key
+	if q.KeyIdx&1 == 0 { //local, use ckdn
+		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
+	} else { // remote
+		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
+	}
+
 	// modify private key
 	PrivKeyAddBytes(priv, elk.Bytes())
 
@@ -404,7 +412,13 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	}
 
 	// get private signing key
-	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+	priv := new(btcec.PrivateKey)
+	// get private signing key
+	if q.KeyIdx&1 == 0 { //local, use ckdn
+		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
+	} else { // remote
+		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
+	}
 
 	// generate sig.
 	mySig, err := txscript.RawTxInWitnessSignature(
@@ -444,8 +458,13 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 		return nil, err
 	}
 
+	priv := new(btcec.PrivateKey)
 	// get private signing key
-	priv := t.GetFundPrivkey(q.PeerIdx, q.KeyIdx)
+	if q.KeyIdx&1 == 0 { //local, use ckdn
+		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
+	} else { // remote
+		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
+	}
 
 	// generate sig.
 	sig, err := txscript.RawTxInWitnessSignature(
@@ -608,42 +627,6 @@ func DirectWPKHScript(pkh [20]byte) []byte {
 	builder := txscript.NewScriptBuilder()
 	b, _ := builder.AddOp(txscript.OP_0).AddData(pkh[:]).Script()
 	return b
-}
-
-// for testing: h160(0x88): d79f49371fb5d9e792f042664cd689d50e3dcf03
-
-// commitScript constructs the public key script for the output on the
-// commitment transaction paying to the "owner" of said commitment transaction.
-// If the other party learns of the pre-image to the revocation hash, then they
-// can claim all the settled funds in the channel, plus the unsettled funds.
-// uses op_cltv
-func CommitScript(HKey, TKey *btcec.PublicKey,
-	revokeHash [20]byte, cltvDelay uint32) ([]byte, error) {
-
-	// This script is spendable under two conditions: either the 'cltvtime'
-	// has passed and T(ime)Key signs, or revokeHash's preimage is presented
-	// and H(ash)Key signs.
-	builder := txscript.NewScriptBuilder()
-
-	// If the pre-image for the revocation hash is presented, then allow a
-	// spend provided the proper signature.
-	builder.AddOp(txscript.OP_HASH160)
-	builder.AddData(revokeHash[:])
-	builder.AddOp(txscript.OP_EQUAL)
-	builder.AddOp(txscript.OP_IF)
-	builder.AddData(HKey.SerializeCompressed())
-	builder.AddOp(txscript.OP_ELSE)
-
-	// Otherwise, we can re-claim our funds after CLTV time
-	// 'csvTimeout' timeout blocks, and a valid signature.
-	builder.AddInt64(int64(cltvDelay))
-	builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
-	builder.AddOp(txscript.OP_DROP)
-	builder.AddData(TKey.SerializeCompressed())
-	builder.AddOp(txscript.OP_ENDIF)
-	builder.AddOp(txscript.OP_CHECKSIG)
-
-	return builder.Script()
 }
 
 /* old script2, need to push a 1 or 0 to select
@@ -858,11 +841,11 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 bytes   desc   at offset
 
 53	utxo		0
-33	thrpub	53
-20	thrref	86
-32	spendTx	106
+20	nonce	53
+20	thrref	73
+32	spendTx	93
 
-length 138
+length 125
 
 peeridx is inferred from position in db.
 */
@@ -879,12 +862,12 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// write 33 byte pubkey (theirs)
-	_, err = buf.Write(q.TheirPub[:])
+	// write 20 byte channel nonce
+	_, err = buf.Write(q.ChannelNonce[:])
 	if err != nil {
 		return nil, err
 	}
+
 	// write their refund address pubkeyhash
 	_, err = buf.Write(q.TheirRefundAdr[:])
 	if err != nil {
@@ -907,8 +890,8 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 138 {
-		return q, fmt.Errorf("Got %d bytes for MultiOut, expect 138", len(b))
+	if len(b) < 125 {
+		return q, fmt.Errorf("Got %d bytes for MultiOut, expect 125", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:53])
@@ -918,13 +901,13 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 
 	q.Utxo = u // assign the utxo
 
-	copy(q.TheirPub[:], b[53:86])
+	copy(q.ChannelNonce[:], b[53:73])
 	if err != nil {
 		return q, err
 	}
-	copy(q.TheirRefundAdr[:], b[86:106])
+	copy(q.TheirRefundAdr[:], b[73:93])
 	// spend txid (can be 00)
-	err = q.SpendTxid.SetBytes(b[106:])
+	err = q.SpendTxid.SetBytes(b[93:])
 	if err != nil {
 		return q, err
 	}

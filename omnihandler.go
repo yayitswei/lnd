@@ -26,25 +26,25 @@ func OmniHandler(OmniChan chan []byte) {
 			continue
 		}
 
-		// PUBKEY REQUEST
-		if msgid == uspv.MSGID_PUBREQ {
-			fmt.Printf("got pubkey req from %x\n", from)
-			PubReqHandler(from) // goroutine ready
-			continue
-		}
-		// PUBKEY RESPONSE
-		if msgid == uspv.MSGID_PUBRESP {
-			fmt.Printf("got pubkey response from %x\n", from)
-			PubRespHandler(from, msg[1:]) // goroutine ready
-			continue
-		}
-		// MULTISIG DESCTIPTION
+		//		// PUBKEY REQUEST
+		//		if msgid == uspv.MSGID_PUBREQ {
+		//			fmt.Printf("got pubkey req from %x\n", from)
+		//			PubReqHandler(from) // goroutine ready
+		//			continue
+		//		}
+		//		// PUBKEY RESPONSE
+		//		if msgid == uspv.MSGID_PUBRESP {
+		//			fmt.Printf("got pubkey response from %x\n", from)
+		//			PubRespHandler(from, msg[1:]) // goroutine ready
+		//			continue
+		//		}
+		// CHANNEL DESCRIPTION
 		if msgid == uspv.MSGID_CHANDESC {
 			fmt.Printf("Got multisig description from %x\n", from)
 			QChanDescHandler(from, msg[1:])
 			continue
 		}
-		// MULTISIG ACK
+		// CHANNEL ACKNOWLEDGE
 		if msgid == uspv.MSGID_CHANACK {
 			fmt.Printf("Got multisig ack from %x\n", from)
 			QChanAckHandler(from, msg[1:])

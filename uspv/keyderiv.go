@@ -174,7 +174,7 @@ func (t *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
 // CreateChannelNonce returns the channel nonce used to get a CKDH.
 // Maybe later this nonce can be the hash of some
 // provable info, or a merkle root or something.
-func (t *TxStore) CreateChannelNonce(peerIdx, cIdx uint32) [20]byte {
+func (t *TxStore) CreateChanNonce(peerIdx, cIdx uint32) [20]byte {
 	priv := t.GetPrivkey(UseChannelNonce, peerIdx, cIdx)
 	var nonce [20]byte
 	copy(nonce[:], btcutil.Hash160(priv.Serialize()))
@@ -205,7 +205,8 @@ func CalcChanPubs(f, r [33]byte, cn [20]byte) ([33]byte, [33]byte, error) {
 
 // GetChannelPrivkey gets your private key for the channel.  Call CalcCKDH
 // first and feed that in.
-func (t *TxStore) GetChannelPrivkey(ckdh wire.ShaHash) *btcec.PrivateKey {
+func (t *TxStore) GetChanPrivkey(f, r [33]byte, cn [20]byte) *btcec.PrivateKey {
+	ckdh := CalcCKDH(f, r, cn)
 	k := t.IdKey()
 	PrivKeyAddBytes(k, ckdh.Bytes())
 	return k
@@ -233,10 +234,12 @@ func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 //}
 
 func (t *TxStore) GetRefundAddressBytes(
-	peerIdx, cIdx uint32) []byte {
+	peerIdx, cIdx uint32) [20]byte {
+	var adrarr [20]byte
 	adr := t.GetAddress(UseChannelRefund, peerIdx, cIdx)
 	if adr == nil {
-		return nil
+		return adrarr
 	}
-	return adr.ScriptAddress()
+	copy(adrarr[:], adr.ScriptAddress())
+	return adrarr
 }

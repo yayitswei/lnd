@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/uspv"
@@ -35,17 +34,20 @@ A sends the CKDH over.  From that B can figure out A and B's channel key.
 Messages --
 
 A -> B Channel Description:
+---
 outpoint (36)
+channel nonce (20)
+A refund (20)
 capacity (8)
 initial push (8)
-A refund (20)
-CKDH (32)
-B's HAKD pub (33)
+---
+add next:
+B's HAKD pub #1 (33)
 (fee / timeout...?  hardcoded for now)
 
 B -> A  Channel Acknowledge:
 B refund address (20)
-A's HAKD pub (33)
+A's HAKD pub #1 (33)
 signature (~70)
 
 === time passes, fund tx gets in a block ===
@@ -71,58 +73,11 @@ func FundChannel(args []string) error {
 	if RemoteCon == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
-	msg := []byte{uspv.MSGID_PUBREQ}
-	_, err := RemoteCon.Write(msg)
-	return err
-}
 
-// PubReqHandler gets a (content-less) pubkey request.  Respond with a pubkey
-// and a refund pubkey hash. (currently makes pubkey hash, need to only make 1)
-// so if someone sends 10 pubkeyreqs, they'll get the same pubkey back 10 times.
-// they have to provide an actual tx before the next pubkey will come out.
-func PubReqHandler(from [16]byte) {
-	// pub req; check that idx matches next idx of ours and create pubkey
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	pub, refundadr, err := SCon.TS.NextPubForPeer(peerBytes)
-	if err != nil {
-		fmt.Printf("MultiReqHandler err %s", err.Error())
-		return
-	}
-	fmt.Printf("Generated pubkey %x\n", pub)
-
-	msg := []byte{uspv.MSGID_PUBRESP}
-	msg = append(msg, pub[:]...)
-	msg = append(msg, refundadr...)
-	_, err = RemoteCon.Write(msg)
-	return
-}
-
-// PubRespHandler -once the pubkey response comes back, we can create the
-// transaction.  Create, save to DB, sign and send over the wire (and broadcast)
-func PubRespHandler(from [16]byte, pubRespBytes []byte) {
-	qChanCapacity := int64(2000000) // this will be an arg
+	qChanCapacity := int64(2000000) // this will be an arg. soon.
 	satPerByte := int64(80)
-	initPay := int64(1000000) // also an arg
+	initPay := int64(1000000) // also an arg. real soon.
 	capBytes := uspv.I64tB(qChanCapacity)
-	if len(pubRespBytes) != 53 {
-		fmt.Printf("PubRespHandler err: pubRespBytes %d bytes, expect 53\n",
-			len(pubRespBytes))
-		return
-	}
-	var theirPub [33]byte
-	copy(theirPub[:], pubRespBytes[:33])
-
-	var theirRefundAdr [20]byte
-	copy(theirRefundAdr[:], pubRespBytes[33:])
-
-	// make sure their pubkey is a pubkey
-	_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
-	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
-	}
-
-	fmt.Printf("got pubkey response %x\n", theirPub)
 
 	tx := wire.NewMsgTx() // make new tx
 	//	tx.Flags = 0x01       // tx will be witty
@@ -130,12 +85,10 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	// first get inputs. comes sorted from PickUtxos.
 	utxos, overshoot, err := SCon.PickUtxos(qChanCapacity, true)
 	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
+		return err
 	}
 	if overshoot < 0 {
-		fmt.Printf("witness utxos undershoot by %d", -overshoot)
-		return
+		return fmt.Errorf("witness utxos undershoot by %d", -overshoot)
 	}
 	// add all the inputs to the tx
 	for _, utxo := range utxos {
@@ -146,23 +99,18 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	// create change output
 	changeOut, err := SCon.TS.NewChangeOut(overshoot - fee)
 	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
+		return err
 	}
 
 	tx.AddTxOut(changeOut) // add change output
 
-	//	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
-	//		overshoot, idx, multiOut.PkScript)
 	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	// send partial tx to db to be saved and have output populated
-	op, myPub, myRefundBytes, err := SCon.TS.MakeFundTx(
-		tx, qChanCapacity, peerArr, theirPub, theirRefundAdr)
+	// save partial tx to db; populate output, get their channel pubkey
+	op, err := SCon.TS.MakeFundTx(tx, qChanCapacity, peerArr)
 	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
+		return err
 	}
 	// don't need to add to filters; we'll pick the TX up anyway because it
 	// spends our utxos.
@@ -170,12 +118,12 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	// tx saved in DB.  Next then notify peer (then sign and broadcast)
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 	// load qchan from DB (that we just saved) to generate elkrem / sig / etc
+	// this is kindof dumb; remove later.
 	var opArr [36]byte
 	copy(opArr[:], uspv.OutPointToBytes(*op))
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
+		return err
 	}
 
 	// create initial state
@@ -184,55 +132,48 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
-		fmt.Printf("PubRespHandler err %s", err.Error())
-		return
+		return err
 	}
 
 	initPayBytes := uspv.I64tB(qc.State.MyAmt) // also will be an arg
-	// description is outpoint (36), myPubkey(33), myrefund(20), capacity (8),
+	// description is outpoint (36), nonce(20), myrefund(20), capacity (8),
 	// initial payment (8)
-	// total length
+	// total length 92
 	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	msg = append(msg, myPub[:]...)
-	msg = append(msg, myRefundBytes...)
+	msg = append(msg, qc.ChannelNonce[:]...)
+	msg = append(msg, qc.MyRefundAdr[:]...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
 	_, err = RemoteCon.Write(msg)
 
-	return
+	return err
 }
 
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 105 || len(descbytes) > 110 {
-		fmt.Printf("got %d byte multiDesc, expect 105\n", len(descbytes))
+	if len(descbytes) < 92 || len(descbytes) > 92 {
+		fmt.Printf("got %d byte multiDesc, expect 92", len(descbytes))
 		return
 	}
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	var theirPub [33]byte
-	copy(theirPub[:], descbytes[36:69])
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	// make sure their pubkey is a pubkey
-	_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
-	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
-		return
-	}
 	// deserialize outpoint
 	var opArr [36]byte
-	var theirRefundAdr [20]byte
+	var cNonce, theirRefundAdr [20]byte
 	copy(opArr[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opArr)
-	copy(theirRefundAdr[:], descbytes[69:89])
-	amt := uspv.BtI64(descbytes[89:97])
-	initPay := uspv.BtI64(descbytes[97:105])
+	copy(cNonce[:], descbytes[36:56])
+	copy(theirRefundAdr[:], descbytes[56:76])
+	amt := uspv.BtI64(descbytes[76:84])
+	initPay := uspv.BtI64(descbytes[84:92])
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	qc, err := SCon.TS.SaveFundTx(op, amt, peerBytes, theirPub, theirRefundAdr)
+	qc, err := SCon.TS.SaveFundTx(op, amt, peerArr, cNonce, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
@@ -261,11 +202,11 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	}
 
 	// ACK the channel address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), revokepubkey (33) and signature (~70)
+	// ACK is outpoint (36), refund adr (20), HAKD (33) and signature (~70)
 	// except you don't need the outpoint if you have the signature...
 	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-
+	msg = append(msg, qc.MyRefundAdr[:]...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -273,17 +214,35 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func QChanAckHandler(from [16]byte, ackbytes []byte) {
-	if len(ackbytes) != 36 {
-		fmt.Printf("got %d byte multiAck, expect 36\n", len(ackbytes))
+	if len(ackbytes) != 56 {
+		fmt.Printf("got %d byte multiAck, expect 56\n", len(ackbytes))
 		return
 	}
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
-	// deserialize outpoint
-	var opBytes [36]byte
-	copy(opBytes[:], ackbytes)
-	op := uspv.OutPointFromBytes(opBytes)
+
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	// deserialize chanACK
+	var opArr [36]byte
+	copy(opArr[:], ackbytes[:36])
+	var refund [20]byte
+	copy(refund[:], ackbytes[36:56])
+	op := uspv.OutPointFromBytes(opArr)
+
+	// load channel to save their refund address
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+
+	// save the refund address they gave us
+	err = SCon.TS.SetQchanRefund(qc, refund)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
 	// sign multi tx
-	tx, err := SCon.TS.SignFundTx(op, peerBytes)
+	tx, err := SCon.TS.SignFundTx(op, peerArr)
 	if err != nil {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return

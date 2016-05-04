@@ -267,7 +267,6 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 		return err
 	}
 	return SendRTS(qc)
-
 }
 
 // SendRTS based on channel info
