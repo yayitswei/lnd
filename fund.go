@@ -154,11 +154,12 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 
 	//	fmt.Printf("overshoot %d pub idx %d; made output script: %x\n",
 	//		overshoot, idx, multiOut.PkScript)
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// send partial tx to db to be saved and have output populated
 	op, myPub, myRefundBytes, err := SCon.TS.MakeFundTx(
-		tx, qChanCapacity, peerBytes, theirPub, theirRefundAdr)
+		tx, qChanCapacity, peerArr, theirPub, theirRefundAdr)
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return
@@ -171,7 +172,7 @@ func PubRespHandler(from [16]byte, pubRespBytes []byte) {
 	// load qchan from DB (that we just saved) to generate elkrem / sig / etc
 	var opArr [36]byte
 	copy(opArr[:], uspv.OutPointToBytes(*op))
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("PubRespHandler err %s", err.Error())
 		return

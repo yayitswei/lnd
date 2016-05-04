@@ -173,36 +173,40 @@ func (ts *TxStore) NextPubForPeer(peerBytes []byte) ([33]byte, []byte, error) {
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
 func (ts *TxStore) MakeFundTx(
-	tx *wire.MsgTx, amt int64, peerBytes []byte, theirPub [33]byte,
+	tx *wire.MsgTx, amt int64, peerIdPub [33]byte, theirPub [33]byte,
 	theirRefund [20]byte) (*wire.OutPoint, [33]byte, []byte, error) {
 
+	var err error
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
-	var myPub [33]byte
-	var ckdn wire.ShaHash
+	var myChanPub [33]byte
 
-	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
+	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
 			return fmt.Errorf("MakeMultiTx: no peers")
 		}
-		pr := prs.Bucket(peerBytes) // go into this peers bucket
+		pr := prs.Bucket(peerIdPub[:]) // go into this peers bucket
 		if pr == nil {
-			return fmt.Errorf("MakeMultiTx: peer %x not found", peerBytes)
+			return fmt.Errorf("MakeMultiTx: peer %x not found", peerIdPub)
 		}
 		peerIdxBytes := pr.Get(KEYIdx) // find peer index
 		if peerIdxBytes == nil {
-			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerBytes)
+			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerIdPub)
 		}
 		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
 		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
-		// generate channel pubkey.  Id pubkey + ckdn
-		myPub, ckdn = ts.GetChannelPub(peerIdx, cIdx)
-		// check if mypub is empty?
+		// make channel nonce, pubkeys
+		cn := ts.CreateChannelNonce(peerIdx, cIdx)
+
+		myChanPub, _, err = CalcChanPubs(ts.IdPub(), peerIdPub, cn)
+		if err != nil {
+			return err
+		}
 
 		// generate multisig output from two pubkeys
-		multiTxOut, err := FundTxOut(theirPub[:], myPub[:], amt)
+		multiTxOut, err := FundTxOut(theirPub[:], myChanPub[:], amt)
 		if err != nil {
 			return err
 		}
@@ -262,15 +266,15 @@ func (ts *TxStore) MakeFundTx(
 		return qcBucket.Put(KEYUnsig, buf.Bytes())
 	})
 	if err != nil {
-		return nil, myPub, nil, err
+		return nil, myChanPub, nil, err
 	}
 	// derive my refund adr bytes
 	myRefundBytes := ts.GetRefundAddressBytes(peerIdx, cIdx)
 	if myRefundBytes == nil {
-		return op, myPub, nil, fmt.Errorf("nil key")
+		return op, myChanPub, nil, fmt.Errorf("nil key")
 	}
 
-	return op, myPub, myRefundBytes, nil
+	return op, myChanPub, myRefundBytes, nil
 }
 
 // SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
@@ -316,7 +320,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.TheirPub = theirPub
 		qc.TheirRefundAdr = theirRefund
 		qc.PeerIdx = BtU32(peerIdxBytes)
-		copy(qc.PeerPubId[:], peerBytes)
+		copy(qc.PeerId[:], peerBytes)
 
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
@@ -449,10 +453,15 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	}
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
-	copy(qc.PeerPubId[:], peerPub)
+	copy(qc.PeerId[:], peerPub)
 	// derive my channel pubkey; if remote use CKDN
 	if qc.KeyIdx&1 == 0 { // local
-		qc.MyPub, _ = ts.GetChannelPub(peerIdx, qc.KeyIdx)
+		cn := ts.CreateChannelNonce(peerIdx, qc.KeyIdx)
+
+		qc.MyPub, _, err = CalcChanPubs(ts.IdPub(), qc.PeerId, cn)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		qc.MyPub = ts.GetFundPubkey(peerIdx, qc.KeyIdx)
 	}
@@ -500,14 +509,14 @@ func (ts *TxStore) ReloadQchan(q *Qchan) error {
 		if prs == nil {
 			return fmt.Errorf("no peers")
 		}
-		pr := prs.Bucket(q.PeerPubId[:]) // go into this peer's bucket
+		pr := prs.Bucket(q.PeerId[:]) // go into this peer's bucket
 		if pr == nil {
-			return fmt.Errorf("peer %x not in db", q.PeerPubId[:])
+			return fmt.Errorf("peer %x not in db", q.PeerId[:])
 		}
 		qcBucket := pr.Bucket(opBytes)
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
-				q.Op.String(), q.PeerPubId[:])
+				q.Op.String(), q.PeerId[:])
 		}
 
 		// load state and update
@@ -540,15 +549,15 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 		if prs == nil {
 			return fmt.Errorf("no peers")
 		}
-		pr := prs.Bucket(q.PeerPubId[:]) // go into this peer's bucket
+		pr := prs.Bucket(q.PeerId[:]) // go into this peer's bucket
 		if pr == nil {
-			return fmt.Errorf("peer %x not in db", q.PeerPubId)
+			return fmt.Errorf("peer %x not in db", q.PeerId)
 		}
 		opB := OutPointToBytes(q.Op)
 		qcBucket := pr.Bucket(opB)
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
-				q.Op.String(), q.PeerPubId)
+				q.Op.String(), q.PeerId)
 		}
 		// serialize elkrem receiver
 		eb, err := q.ElkRcv.ToBytes()
@@ -619,7 +628,7 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 // GetQchan returns a single multi out.  You need to specify the peer
 // pubkey and outpoint bytes.
 func (ts *TxStore) GetQchan(
-	peerBytes []byte, opArr [36]byte) (*Qchan, error) {
+	peerArr [33]byte, opArr [36]byte) (*Qchan, error) {
 
 	qc := new(Qchan)
 	var err error
@@ -629,19 +638,19 @@ func (ts *TxStore) GetQchan(
 		if prs == nil {
 			return fmt.Errorf("no peers")
 		}
-		pr := prs.Bucket(peerBytes) // go into this peer's bucket
+		pr := prs.Bucket(peerArr[:]) // go into this peer's bucket
 		if pr == nil {
-			return fmt.Errorf("peer %x not in db", peerBytes)
+			return fmt.Errorf("peer %x not in db", peerArr)
 		}
 		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
-				op.String(), peerBytes)
+				op.String(), peerArr)
 		}
 
 		pIdx := BtU32(pr.Get(KEYIdx))
 
-		qc, err = ts.RestoreQchanFromBucket(pIdx, peerBytes, qcBucket)
+		qc, err = ts.RestoreQchanFromBucket(pIdx, peerArr[:], qcBucket)
 		if err != nil {
 			return err
 		}
@@ -729,7 +738,9 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 	}
 	var op [36]byte
 	copy(op[:], opBytes)
-	qc, err := ts.GetQchan(pubBytes, op)
+	var peerArr [33]byte
+	copy(peerArr[:], pubBytes)
+	qc, err := ts.GetQchan(peerArr, op)
 	if err != nil {
 		return nil, err
 	}

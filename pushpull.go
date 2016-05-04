@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"time"
@@ -321,9 +320,10 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	}
 
 	// find who we're talkikng to
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("RTSHandler err %s", err.Error())
 		return
@@ -337,9 +337,9 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 			RTSDelta, qc.Value-qc.State.MyAmt)
 		return
 	}
-	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+	if peerArr != qc.PeerId {
 		fmt.Printf("RTSHandler err: peer %x trying to modify peer %x's channel\n",
-			peerBytes, qc.PeerPubId)
+			peerArr, qc.PeerId)
 		fmt.Printf("This can't happen now, but joseph wants this check here ",
 			"in case the code changes later and we forget.\n")
 		return
@@ -410,16 +410,17 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 		return
 	}
 	// find who we're talkikng to
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
-	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+	if peerArr != qc.PeerId {
 		fmt.Printf("ACKSIGHandler err: peer %x trying to modify peer %x's channel\n",
-			peerBytes, qc.PeerPubId)
+			peerArr, qc.PeerId)
 		fmt.Printf("This can't happen now, but joseph wants this check here ",
 			"in case the code changes later and we forget.\n")
 		return
@@ -496,16 +497,17 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 	}
 
 	// find who we're talkikng to
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
 		return
 	}
-	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+	if peerArr != qc.PeerId {
 		fmt.Printf("SIGREVHandler err: peer %x trying to modify peer %x's channel\n",
-			peerBytes, qc.PeerPubId)
+			peerArr, qc.PeerId)
 		fmt.Printf("This can't happen now, but joseph wants this check here ",
 			"in case the code changes later and we forget.\n")
 		return
@@ -583,16 +585,17 @@ func REVHandler(from [16]byte, REVBytes []byte) {
 	}
 
 	// find who we're talkikng to
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("REVHandler err %s", err.Error())
 		return
 	}
-	if !bytes.Equal(peerBytes, qc.PeerPubId[:]) {
+	if peerArr != qc.PeerId {
 		fmt.Printf("REVHandler err: peer %x trying to modify peer %x's channel\n",
-			peerBytes, qc.PeerPubId)
+			peerArr, qc.PeerId)
 		fmt.Printf("This can't happen now, but joseph wants this check here ",
 			"in case the code changes later and we forget.\n")
 		return

@@ -85,14 +85,15 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	}
 	fee := int64(8000) // fix fixed fee later
 
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// deserialize outpoint
 	var opArr [36]byte
 	copy(opArr[:], reqbytes[:36])
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	op := uspv.OutPointFromBytes(opArr)
 	adrBytes := reqbytes[36:] // 20 byte address (put a 0x00 in front)
 
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("CloseReqHandler err %s", err.Error())
 		return
@@ -106,9 +107,11 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	// get private key for this (need pubkey now but will need priv soon)
 	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
 
-	if qc.KeyIdx&1 == 0 { //local, use ckdn
+	if qc.KeyIdx&1 == 0 { //local, use ckdh
 		fmt.Printf("local\n")
-		priv = SCon.TS.GetChannelPrivkey(qc.PeerIdx, qc.KeyIdx)
+		cn := SCon.TS.CreateChannelNonce(qc.PeerIdx, qc.KeyIdx)
+		ckdh := uspv.CalcCKDH(SCon.TS.IdPub(), qc.PeerId, cn)
+		priv = SCon.TS.GetChannelPrivkey(ckdh)
 	}
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
@@ -171,15 +174,16 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	}
 
 	fee := int64(8000) // fix fixed fee later
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	peerBytes := RemoteCon.RemotePub.SerializeCompressed()
 	// deserialize outpoint
 	var opArr [36]byte
 	copy(opArr[:], respbytes[:36])
 	op := uspv.OutPointFromBytes(opArr)
 	theirSig := respbytes[36:] // sig is everything after the outpoint
 
-	adrBytes, err := SCon.TS.GetChanClose(peerBytes, opArr)
+	adrBytes, err := SCon.TS.GetChanClose(peerArr[:], opArr)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -191,7 +195,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	// it uses both sigs and broadcasts.  Probably should break this middle
 	// part out into its own function or something.
 
-	qc, err := SCon.TS.GetQchan(peerBytes, opArr)
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("CloseRespHandler err %s", err.Error())
 		return
@@ -205,7 +209,10 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	priv := SCon.TS.GetFundPrivkey(qc.PeerIdx, qc.KeyIdx)
 	if qc.KeyIdx&1 == 0 { //local, use ckdn
 		fmt.Printf("local\n")
-		priv = SCon.TS.GetChannelPrivkey(qc.PeerIdx, qc.KeyIdx)
+		// calc now; store later
+		cn := SCon.TS.CreateChannelNonce(qc.PeerIdx, qc.KeyIdx)
+		ckdh := uspv.CalcCKDH(SCon.TS.IdPub(), qc.PeerId, cn)
+		priv = SCon.TS.GetChannelPrivkey(ckdh)
 	}
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()

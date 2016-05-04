@@ -51,7 +51,7 @@ type Qchan struct {
 	TheirPub [33]byte // S their channel specific pubkey
 
 	PeerIdx   uint32   // D local unique index of peer.  derived from place in db.
-	PeerPubId [33]byte // D useful for quick traverse of db
+	PeerId [33]byte // D useful for quick traverse of db
 
 	TheirRefundAdr [20]byte // S their address for when you break
 	MyRefundAdr    [20]byte // D my refund address when they break

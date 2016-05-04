@@ -23,7 +23,7 @@ const (
 	UseChannelFund   = 2
 	UseChannelRefund = 3
 	UseChannelElkrem = 4
-	UseCKDH          = 10 // links Id and channel. replaces UseChannelFund
+	UseChannelNonce  = 10 // links Id and channel. replaces UseChannelFund
 	UseIdKey         = 11
 )
 
@@ -169,22 +169,46 @@ func (t *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
 	return b
 }
 
-// GetChannelPub returns your channel pubkey, and the CKDH used to
-// derive it from your ID key.  The CKDH is needed in channel setup.
-func (t *TxStore) GetChannelPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	idpriv := t.IdKey()
-	CKDH := t.GetCKDH(peerIdx, cIdx)
-	PrivKeyAddBytes(idpriv, CKDH.Bytes())
-	return idpriv
+// ---------------------------------------------------------
+
+// CreateChannelNonce returns the channel nonce used to get a CKDH.
+// Maybe later this nonce can be the hash of some
+// provable info, or a merkle root or something.
+func (t *TxStore) CreateChannelNonce(peerIdx, cIdx uint32) [20]byte {
+	priv := t.GetPrivkey(UseChannelNonce, peerIdx, cIdx)
+	var nonce [20]byte
+	copy(nonce[:], btcutil.Hash160(priv.Serialize()))
+	return nonce
 }
 
-// GetChannelPub returns your channel pubkey, and the CKDH used to
-// derive it from your ID key.  The CKDH is needed in channel setup.
-func (t *TxStore) GetChannelPub(peerIdx, cIdx uint32) ([33]byte, wire.ShaHash) {
-	myID := t.IdPub()
-	CKDH := t.GetCKDH(peerIdx, cIdx)
-	PubKeyArrAddBytes(&myID, CKDH.Bytes())
-	return myID, CKDH
+// CalcCKDH calculates the channel key derivation hash from the two
+// f is funder ID pub, r is receiver ID pub, cn is channel nonce.
+func CalcCKDH(f, r [33]byte, cn [20]byte) wire.ShaHash {
+	pre := make([]byte, 86)
+	copy(pre[:33], f[:])
+	copy(pre[33:66], r[:])
+	copy(pre[66:], cn[:])
+	return wire.DoubleSha256SH(pre)
+}
+
+// CalcChannelPub calculates the two channel pubkeys given a channel nonce.
+// f is funder ID pub, r is receiver ID pub, cn is channel nonce.
+func CalcChanPubs(f, r [33]byte, cn [20]byte) ([33]byte, [33]byte, error) {
+	ckdh := CalcCKDH(f, r, cn)
+	err := PubKeyArrAddBytes(&f, ckdh.Bytes())
+	if err != nil {
+		return f, r, err
+	}
+	err = PubKeyArrAddBytes(&r, ckdh.Bytes())
+	return f, r, err
+}
+
+// GetChannelPrivkey gets your private key for the channel.  Call CalcCKDH
+// first and feed that in.
+func (t *TxStore) GetChannelPrivkey(ckdh wire.ShaHash) *btcec.PrivateKey {
+	k := t.IdKey()
+	PrivKeyAddBytes(k, ckdh.Bytes())
+	return k
 }
 
 // GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?
@@ -192,12 +216,6 @@ func (t *TxStore) GetChannelPub(peerIdx, cIdx uint32) ([33]byte, wire.ShaHash) {
 //	peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
 //	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
 //}
-
-// GetCKDH gets the channel key deriation nonce for funding the channel.
-func (t *TxStore) GetCKDH(peerIdx, cIdx uint32) wire.ShaHash {
-	priv := t.GetPrivkey(UseCKDH, peerIdx, cIdx)
-	return wire.DoubleSha256SH(priv.Serialize())
-}
 
 // GetElkremRoot gives the Elkrem sender root hash for a channel.
 func (t *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
