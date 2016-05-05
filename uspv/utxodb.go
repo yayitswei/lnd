@@ -511,8 +511,9 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							// this multixo is now spent.
 							// CHANGE THIS!  can't actually delete.
 							hitTxs[spentTxIdx[i]] = true
+
 							// set qchan's spending txid
-							hitQChan.SpendTxid = *cachedShas[spentTxIdx[i]]
+							hitQChan.CloseTXO.Op.Hash = *cachedShas[spentTxIdx[i]]
 							// re-serialize qchan
 							qcBytes, err := hitQChan.ToBytes()
 							if err != nil {

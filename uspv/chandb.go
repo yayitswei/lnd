@@ -48,9 +48,10 @@ var (
 	KEYIdx     = []byte("idx") // index for key derivation
 	KEYutxo    = []byte("utx") // serialized utxo for the channel
 	KEYUnsig   = []byte("usg") // unsigned fund tx
-	KEYCladr   = []byte("cdr") // close address (Don't make fun of my lisp)
+	KEYCladr   = []byte("cdr") // coop close address (Don't make fun of my lisp)
 	KEYState   = []byte("ima") // channel state
 	KEYElkRecv = []byte("elk") // elkrem receiver
+	KEYqclose  = []byte("qcl") // channel close outpoint & height
 )
 
 // CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
