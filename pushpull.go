@@ -371,7 +371,6 @@ func SendACKSIG(qc *uspv.Qchan) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("made sig %x\n", sig)
 	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
 	if err != nil {
 		return err

@@ -40,9 +40,12 @@ channel nonce (20)
 A refund (20)
 capacity (8)
 initial push (8)
----
-add next:
 B's HAKD pub #1 (33)
+---
+
+add next:
+timeout (2)
+fee? fee can
 (fee / timeout...?  hardcoded for now)
 
 B -> A  Channel Acknowledge:
@@ -127,10 +130,15 @@ func FundChannel(args []string) error {
 	}
 
 	// create initial state
-	qc.State.StateIdx = 0
+	qc.State.StateIdx = 1
 	qc.State.MyAmt = qc.Value - initPay
 
 	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		return err
+	}
+
+	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
 	if err != nil {
 		return err
 	}
@@ -145,6 +153,7 @@ func FundChannel(args []string) error {
 	msg = append(msg, qc.MyRefundAdr[:]...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
+	msg = append(msg, theirHAKDpub[:]...)
 	_, err = RemoteCon.Write(msg)
 
 	return err
@@ -153,11 +162,11 @@ func FundChannel(args []string) error {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 92 || len(descbytes) > 92 {
-		fmt.Printf("got %d byte multiDesc, expect 92", len(descbytes))
+	if len(descbytes) < 125 || len(descbytes) > 125 {
+		fmt.Printf("got %d byte multiDesc, expect 125", len(descbytes))
 		return
 	}
-	var peerArr [33]byte
+	var peerArr, myFirstHAKD [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
 	// deserialize outpoint
@@ -169,6 +178,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	copy(theirRefundAdr[:], descbytes[56:76])
 	amt := uspv.BtI64(descbytes[76:84])
 	initPay := uspv.BtI64(descbytes[84:92])
+	copy(myFirstHAKD[:], descbytes[92:])
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
@@ -189,8 +199,12 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 
 	// create initial state
 	qc.State = new(uspv.StatCom)
-	qc.State.StateIdx = 0
+	// similar to SIGREV in pushpull
 	qc.State.MyAmt = initPay
+	qc.State.StateIdx = 1
+	// use new HAKDpub for signing
+	qc.State.MyHAKDPub = myFirstHAKD
+
 	// create empty elkrem pair
 	qc.ElkRcv = new(elkrem.ElkremReceiver)
 	qc.ElkSnd = new(elkrem.ElkremSender)
@@ -200,13 +214,31 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
 	}
-
+	// load ... the thing I just saved.  ugly.
+	qc, err = SCon.TS.GetQchan(peerArr, opArr)
+	if err != nil {
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
+	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+	if err != nil {
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
+	sig, err := SCon.TS.SignState(qc)
+	if err != nil {
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
 	// ACK the channel address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), refund adr (20), HAKD (33) and signature (~70)
 	// except you don't need the outpoint if you have the signature...
 	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, qc.MyRefundAdr[:]...)
+	msg = append(msg, theirHAKDpub[:]...)
+	msg = append(msg, sig...)
+
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -214,18 +246,21 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func QChanAckHandler(from [16]byte, ackbytes []byte) {
-	if len(ackbytes) != 56 {
-		fmt.Printf("got %d byte multiAck, expect 56\n", len(ackbytes))
+	if len(ackbytes) < 155 || len(ackbytes) > 165 {
+		fmt.Printf("got %d byte multiAck, expect ~160\n", len(ackbytes))
 		return
 	}
+	var opArr [36]byte
+	var peerArr, myFirstHAKD [33]byte
+	var refund [20]byte
 
-	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// deserialize chanACK
-	var opArr [36]byte
 	copy(opArr[:], ackbytes[:36])
-	var refund [20]byte
 	copy(refund[:], ackbytes[36:56])
+	copy(myFirstHAKD[:], ackbytes[56:89])
+	sig := ackbytes[89:]
+
 	op := uspv.OutPointFromBytes(opArr)
 
 	// load channel to save their refund address
@@ -235,12 +270,34 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 
-	// save the refund address they gave us
+	// set refund here instead of reloading...
+	qc.TheirRefundAdr = refund
+	// save the refund address they gave us.  Save state doesn't do this.
 	err = SCon.TS.SetQchanRefund(qc, refund)
 	if err != nil {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
+	err = qc.VerifySig(sig)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+	qc.State.MyHAKDPub = myFirstHAKD
+	// verify worked; Save state 1 to DB
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+	// sign their com tx to send
+	sig, err = SCon.TS.SignState(qc)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+
+	// verify is all OK so fund away.
 	// sign multi tx
 	tx, err := SCon.TS.SignFundTx(op, peerArr)
 	if err != nil {
@@ -253,5 +310,48 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
+
+	// sig proof should be sent later once there are confirmations.
+	// it'll have an spv proof of the fund tx.
+	// but for now just send the sig.
+	msg := []byte{uspv.MSGID_SIGPROOF}
+	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, sig...)
+	_, err = RemoteCon.Write(msg)
+	return
+}
+
+// QChanAckHandler takes in an acknowledgement multisig description.
+// when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
+func SigProofHandler(from [16]byte, sigproofbytes []byte) {
+	if len(sigproofbytes) < 100 || len(sigproofbytes) > 110 {
+		fmt.Printf("got %d byte Sigproof, expect ~105\n", len(sigproofbytes))
+		return
+	}
+	var peerArr [33]byte
+	var opArr [36]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	copy(opArr[:], sigproofbytes[:36])
+	sig := sigproofbytes[36:]
+
+	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	if err != nil {
+		fmt.Printf("SigProofHandler err %s", err.Error())
+		return
+	}
+
+	err = qc.VerifySig(sig)
+	if err != nil {
+		fmt.Printf("SigProofHandler err %s", err.Error())
+		return
+	}
+	// sig OK, save
+	err = SCon.TS.SaveQchanState(qc)
+	if err != nil {
+		fmt.Printf("SigProofHandler err %s", err.Error())
+		return
+	}
+	// sig OK; in terms of UI here's where you can say "payment received"
+	// "channel online" etc
 	return
 }

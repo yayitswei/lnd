@@ -13,7 +13,7 @@ func OmniHandler(OmniChan chan []byte) {
 	for {
 		newdata := <-OmniChan // blocks here
 		if len(newdata) < 17 {
-			fmt.Printf("got too short message")
+			fmt.Printf("got too short a message")
 			continue
 		}
 		copy(from[:], newdata[:16])
@@ -26,28 +26,22 @@ func OmniHandler(OmniChan chan []byte) {
 			continue
 		}
 
-		//		// PUBKEY REQUEST
-		//		if msgid == uspv.MSGID_PUBREQ {
-		//			fmt.Printf("got pubkey req from %x\n", from)
-		//			PubReqHandler(from) // goroutine ready
-		//			continue
-		//		}
-		//		// PUBKEY RESPONSE
-		//		if msgid == uspv.MSGID_PUBRESP {
-		//			fmt.Printf("got pubkey response from %x\n", from)
-		//			PubRespHandler(from, msg[1:]) // goroutine ready
-		//			continue
-		//		}
 		// CHANNEL DESCRIPTION
 		if msgid == uspv.MSGID_CHANDESC {
-			fmt.Printf("Got multisig description from %x\n", from)
+			fmt.Printf("Got channel description from %x\n", from)
 			QChanDescHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL ACKNOWLEDGE
 		if msgid == uspv.MSGID_CHANACK {
-			fmt.Printf("Got multisig ack from %x\n", from)
+			fmt.Printf("Got channel acknowledgement from %x\n", from)
 			QChanAckHandler(from, msg[1:])
+			continue
+		}
+		// HERE'S YOUR CHANNEL
+		if msgid == uspv.MSGID_SIGPROOF {
+			fmt.Printf("Got channel proof from %x\n", from)
+			SigProofHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE REQ
@@ -62,21 +56,25 @@ func OmniHandler(OmniChan chan []byte) {
 			CloseRespHandler(from, msg[1:])
 			continue
 		}
+		// REQUEST TO SEND
 		if msgid == uspv.MSGID_RTS {
 			fmt.Printf("Got RTS from %x\n", from)
 			RTSHandler(from, msg[1:])
 			continue
 		}
+		// CHANNEL UPDATE ACKNOWLEDGE AND SIGNATURE
 		if msgid == uspv.MSGID_ACKSIG {
 			fmt.Printf("Got ACKSIG from %x\n", from)
 			ACKSIGHandler(from, msg[1:])
 			continue
 		}
+		// SIGNATURE AND REVOCATION
 		if msgid == uspv.MSGID_SIGREV {
 			fmt.Printf("Got SIGREV from %x\n", from)
 			SIGREVHandler(from, msg[1:])
 			continue
 		}
+		// REVOCATION
 		if msgid == uspv.MSGID_REVOKE {
 			fmt.Printf("Got REVOKE from %x\n", from)
 			REVHandler(from, msg[1:])
