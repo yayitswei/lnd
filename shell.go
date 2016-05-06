@@ -454,7 +454,7 @@ func Bal(args []string) error {
 		return err
 	}
 	for _, q := range qcs {
-		if q.IsClosed() {
+		if q.CloseTXO.Closed {
 			fmt.Printf("CLOSED ")
 		} else {
 			fmt.Printf("CHANNEL")

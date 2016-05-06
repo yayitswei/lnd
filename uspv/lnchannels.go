@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/fastsha256"
 )
@@ -52,8 +53,8 @@ type Qchan struct {
 	PeerIdx uint32   // D local unique index of peer.  derived from place in db.
 	PeerId  [33]byte // D useful for quick traverse of db
 
-	TheirRefundAdr [20]byte // S their address for when you break
-	MyRefundAdr    [20]byte // D my refund address when they break
+	TheirRefundPub [33]byte // S their pubkey for channel break
+	MyRefundPub    [33]byte // D my refund pubkey for channel break
 
 	// Elkrem is used for revoking state commitments
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
@@ -178,8 +179,8 @@ func (q *Qchan) IngestCloseTx(tx *wire.MsgTx, height int32) error {
 	}
 	if txIdx == q.State.StateIdx {
 		// nothing grabbable;
-		if bytes.Equal(tx.TxOut[0].PkScript[2:22], q.MyRefundAdr[:]) || bytes.Equal(tx.TxOut[1].PkScript[2:22], q.MyRefundAdr[:]) {
-		}
+		//		if bytes.Equal(tx.TxOut[0].PkScript[2:22], q.MyRefundAdr[:]) || bytes.Equal(tx.TxOut[1].PkScript[2:22], q.MyRefundAdr[:]) {
+		//		}
 
 		// I broke; spendable
 
@@ -194,7 +195,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	fmt.Printf("CHANNEL %s h:%d (%d,%d) cap: %d\n",
 		q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
 	fmt.Printf("\tPUB mine:%x them:%x REFUND mine:%x them:%x\n",
-		q.MyPub[:4], q.TheirPub[:4], q.MyRefundAdr[:4], q.TheirRefundAdr[:4])
+		q.MyPub[:4], q.TheirPub[:4], q.MyRefundPub[:4], q.TheirRefundPub[:4])
 	if q.State == nil || q.ElkRcv == nil {
 		fmt.Printf("\t no valid state or elkrem\n")
 	} else {
@@ -229,8 +230,8 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 		return fmt.Errorf("break TX has %d outputs?!?", len(spendTx.TxOut))
 	}
 
-	if bytes.Equal(spendTx.TxOut[0].PkScript[2:22], q.TheirRefundAdr[:]) ||
-		bytes.Equal(spendTx.TxOut[1].PkScript[2:22], q.TheirRefundAdr[:]) {
+	if bytes.Equal(spendTx.TxOut[0].PkScript[2:22], btcutil.Hash160(q.TheirRefundPub[:])) ||
+		bytes.Equal(spendTx.TxOut[1].PkScript[2:22], btcutil.Hash160(q.TheirRefundPub[:])) {
 		fmt.Printf(" non-coop by me.\n")
 	} else {
 		fmt.Printf(" non-coop by them\n")
@@ -607,14 +608,14 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 
 	var fancyAmt, pkhAmt int64   // output amounts
 	var revPub, timePub [33]byte // pubkeys
-	var pkhAdr [20]byte          // the simple output's pub key hash
+	var pkhPub [33]byte          // the simple output's pub key hash
 	fee := int64(5000)           // fixed fee for now
 	delay := uint32(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
 	if theirHAKDpub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
 		// Their tx that they store.  I get funds unencumbered.
-		pkhAdr = q.MyRefundAdr
+		pkhPub = q.MyRefundPub
 		pkhAmt = s.MyAmt - fee
 
 		timePub = q.TheirPub // these are their funds, but they have to wait
@@ -622,7 +623,7 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 		fancyAmt = (q.Value - s.MyAmt) - fee
 	} else { // theirHAKDPub is full; build MY tx (to verify) (unless breaking)
 		// My tx that I store.  They get funds unencumbered.
-		pkhAdr = q.TheirRefundAdr
+		pkhPub = q.TheirRefundPub
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
 		timePub = q.MyPub     // these are my funds, but I have to wait
@@ -632,7 +633,7 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 
 	// now that everything is chosen, build fancy script and pkh script
 	fancyScript, _ := CommitScript2(revPub, timePub, delay)
-	pkhScript := DirectWPKHScript(pkhAdr) // p2wpkh-ify
+	pkhScript := DirectWPKHScript(pkhPub) // p2wpkh-ify
 	fancyScript = P2WSHify(fancyScript)   // p2wsh-ify
 
 	// create txouts by assigning amounts
@@ -654,9 +655,10 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	return tx, nil
 }
 
-func DirectWPKHScript(pkh [20]byte) []byte {
+func DirectWPKHScript(pub [33]byte) []byte {
 	builder := txscript.NewScriptBuilder()
-	b, _ := builder.AddOp(txscript.OP_0).AddData(pkh[:]).Script()
+	builder.AddOp(txscript.OP_0).AddData(btcutil.Hash160(pub[:]))
+	b, _ := builder.Script()
 	return b
 }
 
@@ -872,9 +874,9 @@ bytes   desc   at offset
 
 53	utxo		0
 20	nonce	53
-20	thrref	73
+33	thrref	73
 
-length 92
+length 105
 
 peeridx is inferred from position in db.
 */
@@ -899,8 +901,8 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 
-	// write their refund address pubkeyhash
-	_, err = buf.Write(q.TheirRefundAdr[:])
+	// write their refund pubkey
+	_, err = buf.Write(q.TheirRefundPub[:])
 	if err != nil {
 		return nil, err
 	}
@@ -921,8 +923,8 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 92 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 92", len(b))
+	if len(b) < 105 {
+		return q, fmt.Errorf("Got %d bytes for qchan, expect 105", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:53])
@@ -936,7 +938,7 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 	if err != nil {
 		return q, err
 	}
-	copy(q.TheirRefundAdr[:], b[73:93])
+	copy(q.TheirRefundPub[:], b[73:])
 
 	return q, nil
 }

@@ -144,13 +144,13 @@ func FundChannel(args []string) error {
 	}
 
 	initPayBytes := uspv.I64tB(qc.State.MyAmt) // also will be an arg
-	// description is outpoint (36), nonce(20), myrefund(20), capacity (8),
+	// description is outpoint (36), nonce(20), myrefund(33), capacity (8),
 	// initial payment (8)
-	// total length 92
+	// total length 138
 	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, qc.ChannelNonce[:]...)
-	msg = append(msg, qc.MyRefundAdr[:]...)
+	msg = append(msg, qc.MyRefundPub[:]...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
 	msg = append(msg, theirHAKDpub[:]...)
@@ -162,28 +162,28 @@ func FundChannel(args []string) error {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 125 || len(descbytes) > 125 {
-		fmt.Printf("got %d byte multiDesc, expect 125", len(descbytes))
+	if len(descbytes) < 138 || len(descbytes) > 138 {
+		fmt.Printf("got %d byte multiDesc, expect 138", len(descbytes))
 		return
 	}
-	var peerArr, myFirstHAKD [33]byte
+	var peerArr, myFirstHAKD, theirRefundPub [33]byte
+	var opArr [36]byte
+	var cNonce [20]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	// deserialize outpoint
-	var opArr [36]byte
-	var cNonce, theirRefundAdr [20]byte
+	// deserialize desc
 	copy(opArr[:], descbytes[:36])
 	op := uspv.OutPointFromBytes(opArr)
 	copy(cNonce[:], descbytes[36:56])
-	copy(theirRefundAdr[:], descbytes[56:76])
-	amt := uspv.BtI64(descbytes[76:84])
-	initPay := uspv.BtI64(descbytes[84:92])
-	copy(myFirstHAKD[:], descbytes[92:])
+	copy(theirRefundPub[:], descbytes[56:89])
+	amt := uspv.BtI64(descbytes[89:97])
+	initPay := uspv.BtI64(descbytes[97:105])
+	copy(myFirstHAKD[:], descbytes[105:])
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	qc, err := SCon.TS.SaveFundTx(op, amt, peerArr, cNonce, theirRefundAdr)
+	qc, err := SCon.TS.SaveFundTx(op, amt, peerArr, theirRefundPub, cNonce)
 	if err != nil {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
@@ -231,11 +231,11 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	// ACK the channel address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), refund adr (20), HAKD (33) and signature (~70)
+	// ACK is outpoint (36), refund pub (33), HAKD (33) and signature (~70)
 	// except you don't need the outpoint if you have the signature...
 	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	msg = append(msg, qc.MyRefundAdr[:]...)
+	msg = append(msg, qc.MyRefundPub[:]...)
 	msg = append(msg, theirHAKDpub[:]...)
 	msg = append(msg, sig...)
 
@@ -246,20 +246,19 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func QChanAckHandler(from [16]byte, ackbytes []byte) {
-	if len(ackbytes) < 155 || len(ackbytes) > 165 {
-		fmt.Printf("got %d byte multiAck, expect ~160\n", len(ackbytes))
+	if len(ackbytes) < 170 || len(ackbytes) > 175 {
+		fmt.Printf("got %d byte multiAck, expect ~173\n", len(ackbytes))
 		return
 	}
 	var opArr [36]byte
-	var peerArr, myFirstHAKD [33]byte
-	var refund [20]byte
+	var peerArr, myFirstHAKD, refund [33]byte
 
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// deserialize chanACK
 	copy(opArr[:], ackbytes[:36])
-	copy(refund[:], ackbytes[36:56])
-	copy(myFirstHAKD[:], ackbytes[56:89])
-	sig := ackbytes[89:]
+	copy(refund[:], ackbytes[36:69])
+	copy(myFirstHAKD[:], ackbytes[69:102])
+	sig := ackbytes[102:]
 
 	op := uspv.OutPointFromBytes(opArr)
 
@@ -271,7 +270,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	}
 
 	// set refund here instead of reloading...
-	qc.TheirRefundAdr = refund
+	qc.TheirRefundPub = refund
 	// save the refund address they gave us.  Save state doesn't do this.
 	err = SCon.TS.SetQchanRefund(qc, refund)
 	if err != nil {

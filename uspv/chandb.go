@@ -238,7 +238,7 @@ func (ts *TxStore) MakeFundTx(
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerArr [33]byte, cNonce, theirRefund [20]byte) (*Qchan, error) {
+	peerArr, theirRefund [33]byte, cNonce [20]byte) (*Qchan, error) {
 
 	var cIdx uint32
 	qc := new(Qchan)
@@ -285,8 +285,8 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.TheirPub = theirChanPub
 		qc.PeerIdx = BtU32(peerIdxBytes)
 		qc.PeerId = peerArr
-		qc.TheirRefundAdr = theirRefund
-		qc.MyRefundAdr = ts.GetRefundAddressBytes(qc.PeerIdx, cIdx)
+		qc.TheirRefundPub = theirRefund
+		qc.MyRefundPub = ts.GetRefundPubkeyBytes(qc.PeerIdx, cIdx)
 
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
@@ -435,7 +435,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 		}
 	}
 	// derive my refund from index
-	qc.MyRefundAdr = ts.GetRefundAddressBytes(peerIdx, qc.KeyIdx)
+	qc.MyRefundPub = ts.GetRefundPubkeyBytes(peerIdx, qc.KeyIdx)
 	qc.State = new(StatCom)
 
 	// load state.  If it exists.
@@ -510,7 +510,7 @@ func (ts *TxStore) ReloadQchan(q *Qchan) error {
 
 // SetQchanRefund overwrites "theirrefund" in a qchan.  This is needed
 // after getting a chanACK.
-func (ts *TxStore) SetQchanRefund(q *Qchan, refund [20]byte) error {
+func (ts *TxStore) SetQchanRefund(q *Qchan, refund [33]byte) error {
 	return ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -533,7 +533,7 @@ func (ts *TxStore) SetQchanRefund(q *Qchan, refund [20]byte) error {
 			return err
 		}
 		// modify their refund
-		qc.TheirRefundAdr = refund
+		qc.TheirRefundPub = refund
 		// re -serialize
 		qcBytes, err := qc.ToBytes()
 		if err != nil {

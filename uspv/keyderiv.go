@@ -233,13 +233,11 @@ func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 //	return ts.GetPubkey(UseChannelRefund, peerIdx, cIdx)
 //}
 
-func (t *TxStore) GetRefundAddressBytes(
-	peerIdx, cIdx uint32) [20]byte {
-	var adrarr [20]byte
-	adr := t.GetAddress(UseChannelRefund, peerIdx, cIdx)
-	if adr == nil {
-		return adrarr
+func (t *TxStore) GetRefundPubkeyBytes(peerIdx, cIdx uint32) [33]byte {
+	var b [33]byte
+	k := t.GetPubkey(UseChannelRefund, peerIdx, cIdx)
+	if k != nil {
+		copy(b[:], k.SerializeCompressed())
 	}
-	copy(adrarr[:], adr.ScriptAddress())
-	return adrarr
+	return b
 }
