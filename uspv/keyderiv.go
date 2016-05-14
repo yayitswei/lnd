@@ -65,6 +65,49 @@ func PubKeyArrAddBytes(p *[33]byte, b []byte) error {
 	return nil
 }
 
+// IDPointAdd adds an ID pubkey and a derivation point to make a channel pubkey.
+func IDPointAdd(id, dp *[32]byte) ([33]byte, error) {
+
+	cPub := new(btcec.PublicKey)
+	cPub.Curve = btcec.S256()
+	var cPubArr [33]byte
+
+	// deserialize; IDs always start with 02
+	idPub, err := IdToPub(*id)
+	if err != nil {
+		return cPubArr, err
+	}
+	// deserialize; derivation point starts with 03
+	dPoint, err := btcec.ParsePubKey(append([]byte{0x03}, dp[:]...), btcec.S256())
+	if err != nil {
+		return cPubArr, err
+	}
+
+	// add the two points together
+	cPub.X, cPub.Y = btcec.S256().Add(idPub.X, idPub.Y, dPoint.X, dPoint.Y)
+
+	// return the new point, serialized
+	copy(cPubArr[:], cPub.SerializeCompressed())
+	return cPubArr, nil
+}
+
+// IDPrivAdd returns a channel pubkey from the sum of two scalars
+func IDPrivAdd(idPriv, ds *btcec.PrivateKey) *btcec.PrivateKey {
+	cPriv := new(btcec.PrivateKey)
+	cPriv.Curve = btcec.S256()
+
+	cPriv.D.Add(idPriv.D, ds.D)
+	cPriv.D.Mod(cPriv.D, btcec.S256().N)
+
+	cPriv.X, cPriv.Y = btcec.S256().ScalarBaseMult(cPriv.D.Bytes())
+	return cPriv
+}
+
+func IdToPub(idArr [32]byte) (*btcec.PublicKey, error) {
+	// IDs always start with 02
+	return btcec.ParsePubKey(append([]byte{0x02}, idArr[:]...), btcec.S256())
+}
+
 // GetPrivkey generates and returns a private key derived from the seed.
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.

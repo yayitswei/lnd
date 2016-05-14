@@ -600,9 +600,6 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 		return nil, fmt.Errorf(
 			"BuildStateTx: delta is %d (expect 0)", s.Delta)
 	}
-	//	if q.MyPub == nil || q.TheirPub == nil {
-	//		return nil, fmt.Errorf("BuildStateTx: chan pubkey nil")
-	//	}
 
 	var empty [33]byte
 
@@ -618,16 +615,16 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 		pkhPub = q.MyRefundPub
 		pkhAmt = s.MyAmt - fee
 
-		timePub = q.TheirPub // these are their funds, but they have to wait
-		revPub = s.MyHAKDPub // if they're given me the elkrem, it's mine
+		timePub = q.TheirRefundPub // these are their funds, but they have to wait
+		revPub = s.MyHAKDPub       // if they're given me the elkrem, it's mine
 		fancyAmt = (q.Value - s.MyAmt) - fee
 	} else { // theirHAKDPub is full; build MY tx (to verify) (unless breaking)
 		// My tx that I store.  They get funds unencumbered.
 		pkhPub = q.TheirRefundPub
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
-		timePub = q.MyPub     // these are my funds, but I have to wait
-		revPub = theirHAKDpub // I can revoke by giving them the elkrem
+		timePub = q.MyRefundPub // these are my funds, but I have to wait
+		revPub = theirHAKDpub   // I can revoke by giving them the elkrem
 		fancyAmt = s.MyAmt - fee
 	}
 
