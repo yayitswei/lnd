@@ -554,7 +554,6 @@ func SendREV(qc *uspv.Qchan) error {
 	// get elkrem for revoking *previous* state, so elkrem at index - 1.
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
-
 		return err
 	}
 	// REV is just op (36), elk (32)

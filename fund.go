@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/uspv"
@@ -31,13 +32,20 @@ A creates the output script and script hash.
 A creates the tx, and txid.
 A sends the CKDH over.  From that B can figure out A and B's channel key.
 
-Messages --
+funding --
+A -> B point request
+
+A CDP (32)
+A refund (33)
+
+B replies with CDP and return pubkey
+
+B CDP (32)
+B refund (33)
 
 A -> B Channel Description:
 ---
 outpoint (36)
-channel nonce (20)
-A refund (20)
 capacity (8)
 initial push (8)
 B's HAKD pub #1 (33)
@@ -69,6 +77,31 @@ update the state once the channel is open.  If for whatever reason you want
 an exact timing for the payment.
 
 */
+
+// Do math, see if this curve thing works.
+func Math(args []string) error {
+	priv := SCon.TS.GetFundPrivkey(5, 5)
+	fmt.Printf("initial priv: %x\n", priv.Serialize())
+
+	pubArr := SCon.TS.GetFundPubkey(5, 5)
+	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
+	fmt.Printf("initial  pub: %x\n", pub.SerializeCompressed())
+	//	for i := 0; i < 10000; i++ {
+
+	uspv.PubKeyMult(pub, 212)
+	//	}
+	fmt.Printf("modified pub: %x\n", pub.SerializeCompressed())
+
+	//	for i := 0; i < 10000; i++ {
+	uspv.PrivKeyMult(priv, 212)
+	//	}
+	fmt.Printf("from prv pub: %x\n", priv.PubKey().SerializeCompressed())
+	fmt.Printf("modified priv: %x\n", priv.Serialize())
+	uspv.PrivKeyDiv(priv, 212)
+	fmt.Printf("modifieX priv: %x\n", priv.Serialize())
+
+	return nil
+}
 
 // FundChannel makes a multisig address with the node connected to...
 // first just request one of their pubkeys (1 byte message)
@@ -230,6 +263,12 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("QChanDescHandler err %s", err.Error())
 		return
 	}
+
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	if err != nil {
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
 	// ACK the channel address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), refund pub (33), HAKD (33) and signature (~70)
 	// except you don't need the outpoint if you have the signature...
@@ -237,8 +276,8 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, qc.MyRefundPub[:]...)
 	msg = append(msg, theirHAKDpub[:]...)
+	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig...)
-
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -246,8 +285,8 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func QChanAckHandler(from [16]byte, ackbytes []byte) {
-	if len(ackbytes) < 170 || len(ackbytes) > 175 {
-		fmt.Printf("got %d byte multiAck, expect ~173\n", len(ackbytes))
+	if len(ackbytes) < 200 || len(ackbytes) > 210 {
+		fmt.Printf("got %d byte multiAck, expect ~205\n", len(ackbytes))
 		return
 	}
 	var opArr [36]byte
@@ -258,7 +297,12 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	copy(opArr[:], ackbytes[:36])
 	copy(refund[:], ackbytes[36:69])
 	copy(myFirstHAKD[:], ackbytes[69:102])
-	sig := ackbytes[102:]
+	revElk, err := wire.NewShaHash(ackbytes[102:134])
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+	sig := ackbytes[134:]
 
 	op := uspv.OutPointFromBytes(opArr)
 
@@ -283,6 +327,13 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 	qc.State.MyHAKDPub = myFirstHAKD
+
+	err = qc.IngestElkrem(revElk)
+	if err != nil { // this can't happen because it's the first elk... remove?
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+
 	// verify worked; Save state 1 to DB
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
@@ -310,11 +361,18 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	if err != nil {
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+
 	// sig proof should be sent later once there are confirmations.
 	// it'll have an spv proof of the fund tx.
 	// but for now just send the sig.
 	msg := []byte{uspv.MSGID_SIGPROOF}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
 	return
@@ -323,15 +381,20 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func SigProofHandler(from [16]byte, sigproofbytes []byte) {
-	if len(sigproofbytes) < 100 || len(sigproofbytes) > 110 {
-		fmt.Printf("got %d byte Sigproof, expect ~105\n", len(sigproofbytes))
+	if len(sigproofbytes) < 130 || len(sigproofbytes) > 140 {
+		fmt.Printf("got %d byte Sigproof, expect ~137\n", len(sigproofbytes))
 		return
 	}
 	var peerArr [33]byte
 	var opArr [36]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	copy(opArr[:], sigproofbytes[:36])
-	sig := sigproofbytes[36:]
+	revElk, err := wire.NewShaHash(sigproofbytes[36:68])
+	if err != nil {
+		fmt.Printf("SigProofHandler err %s", err.Error())
+		return
+	}
+	sig := sigproofbytes[68:]
 
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
@@ -344,6 +407,12 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return
 	}
+	err = qc.IngestElkrem(revElk)
+	if err != nil { // this can't happen because it's the first elk... remove?
+		fmt.Printf("SigProofHandler err %s", err.Error())
+		return
+	}
+
 	// sig OK, save
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
