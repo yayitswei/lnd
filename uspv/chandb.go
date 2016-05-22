@@ -417,6 +417,11 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	if err != nil {
 		return nil, err
 	}
+	qcls, err := QCloseFromBytes(bkt.Get(KEYqclose))
+	if err != nil {
+		return nil, err
+	}
+	qc.CloseTXO = qcls
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	copy(qc.PeerId[:], peerPub)
@@ -569,7 +574,7 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 		if err != nil {
 			return err
 		}
-		// save it
+		// save elkrem
 		err = qcBucket.Put(KEYElkRecv, eb)
 		if err != nil {
 			return err
@@ -579,7 +584,7 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 		if err != nil {
 			return err
 		}
-		// save it
+		// save state
 		fmt.Printf("writing %d byte state to bucket\n", len(b))
 		return qcBucket.Put(KEYState, b)
 	})

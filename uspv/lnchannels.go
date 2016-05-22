@@ -89,14 +89,15 @@ type StatCom struct {
 // of the channel.  This happens when either party breaks non-cooperatively.
 // It describes "your" output, either pkh or time-delay script.
 // If you have pkh but can grab the other output, "grabbable" is set to true.
+// This can be serialized in a separate bucket
 
 type Qclosetxo struct {
 	// closed is true if channel closing tx has been seen & stored.
 	// basically true of Op.hash != 0.  not stored.
 	Closed bool
 	// your outpoint, either pkh or script.  If cooperative it's just txid:0
-	Op     wire.OutPoint
-	Height int32 // 0 when unconfirmed; height of closing tx.
+	CloseTxid wire.ShaHash
+	Height    int32 // 0 when unconfirmed; height of closing tx.
 
 	// true means you can spend it!  False means you can't, either because
 	// it's coop, or because you already spent it.
@@ -169,7 +170,7 @@ func (q *Qchan) IngestCloseTx(tx *wire.MsgTx, height int32) error {
 	txid := tx.TxSha()
 	// no matter what we close
 	q.CloseTXO.Closed = true
-	q.CloseTXO.Op.Hash = txid
+	q.CloseTXO.CloseTxid = txid
 	q.CloseTXO.Height = height
 
 	txIdx := GetStateIdxFromTx(tx)
@@ -177,12 +178,20 @@ func (q *Qchan) IngestCloseTx(tx *wire.MsgTx, height int32) error {
 		// leave spendable false, op:0... so we're done
 		return nil
 	}
-	if txIdx == q.State.StateIdx {
+	if txIdx == q.State.StateIdx { // broken at correct height
+
 		// nothing grabbable;
 		//		if bytes.Equal(tx.TxOut[0].PkScript[2:22], q.MyRefundAdr[:]) || bytes.Equal(tx.TxOut[1].PkScript[2:22], q.MyRefundAdr[:]) {
 		//		}
 
 		// I broke; spendable
+	}
+
+	if txIdx < q.State.StateIdx { // invalid previous state, can be grabbed
+
+	}
+
+	if txIdx > q.State.StateIdx { // invalid FUTURE state.  Can't do anything
 
 	}
 
@@ -211,7 +220,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 		return nil
 	}
 	// closed so get the spending tx
-	spendTx, err := t.GetTx(&q.CloseTXO.Op.Hash)
+	spendTx, err := t.GetTx(&q.CloseTXO.CloseTxid)
 	if err != nil {
 		return err
 	}
@@ -253,20 +262,33 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 // keys and scripts it will return an error.
 func (t *TxStore) RemedyTx(q *Qchan) (*wire.MsgTx, error) {
 	// load spending tx
-	spendTx, err := t.GetTx(&q.CloseTXO.Op.Hash)
+	spendTx, err := t.GetTx(&q.CloseTXO.CloseTxid)
 	if err != nil {
 		return nil, err
 	}
-	if len(spendTx.TxOut) != 2 {
+	if len(spendTx.TxOut) != 2 { // (could be more later; onehop is 2)
 		return nil, fmt.Errorf("spend tx has %d outputs, can't sweep",
 			len(spendTx.TxOut))
 	}
+	if len(spendTx.TxOut[0].PkScript) < 22 ||
+		len(spendTx.TxOut[1].PkScript) < 22 {
+		return nil, fmt.Errorf("spend tx has pkscript lengths %d, %d",
+			len(spendTx.TxOut[0].PkScript), len(spendTx.TxOut[1].PkScript))
+	}
+	// find state index based on tx hints (locktime / sequence)
 	txIdx := GetStateIdxFromTx(spendTx)
 	if txIdx == 0 {
 		return nil, fmt.Errorf("no hint, can't recover")
 	}
-
-	shOut := spendTx.TxOut[q.CloseTXO.Op.Index]
+	var grabbableN int
+	// figure out which output is the grabbable one
+	if bytes.Equal(spendTx.TxOut[0].PkScript[2:22],
+		btcutil.Hash160(q.TheirRefundPub[:])) {
+		grabbableN = 0
+	} else {
+		grabbableN = 1
+	}
+	shOut := spendTx.TxOut[grabbableN]
 
 	// if hinted state is greater than elkrem state we can't recover
 	if txIdx > q.ElkRcv.UpTo() {
@@ -319,7 +341,8 @@ func (t *TxStore) RemedyTx(q *Qchan) (*wire.MsgTx, error) {
 	sweepTx.AddTxOut(changeOut)
 
 	// add unsigned input
-	sweepIn := wire.NewTxIn(&q.CloseTXO.Op, nil, nil)
+	grabOp := wire.NewOutPoint(&q.CloseTXO.CloseTxid, uint32(grabbableN))
+	sweepIn := wire.NewTxIn(grabOp, nil, nil)
 	sweepTx.AddTxIn(sweepIn)
 
 	// make hash cache for this tx
@@ -573,10 +596,6 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	// copy signature, overwriting old signature.
 	q.State.sig = sig
 
-	return nil
-}
-
-func (q *Qchan) SignBreak() error {
 	return nil
 }
 
@@ -940,28 +959,62 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 	return q, nil
 }
 
-/*----- serialization for CloseTXOs ------- */
+/*----- serialization for CloseTXOs -------
 
-/*  serialization:
+  serialization:
 bytes   desc   at offset
 
-53	utxo		0
-4	height	53
-1	spendable 57
-length 58
+36		op		0
+4		height	36
+32		spend	40
+4		height	72
+32		grab
+
+
+..... but for now it's just the close TXID
 */
 
+func (q *Qclosetxo) ToBytes() ([]byte, error) {
+	if q == nil {
+		return nil, fmt.Errorf("nil qclose")
+	}
+	return q.CloseTxid.Bytes(), nil
+}
+
+// QCloseFromBytes deserializes a Qclose.  Note that a nil slice
+// gives an empty / non closed qclose.
+func QCloseFromBytes(b []byte) (Qclosetxo, error) {
+	var q Qclosetxo
+	if len(b) == 0 { // empty is OK
+		return q, nil
+
+	}
+	if len(b) < 32 {
+		return q, fmt.Errorf("close data %d bytes, expect 32", len(b))
+	}
+	var empty wire.ShaHash
+	q.CloseTxid.SetBytes(b)
+	if !q.CloseTxid.IsEqual(&empty) {
+		q.Closed = true
+	}
+
+	return q, nil
+}
+
+//type Qclosetxo struct {
 //type Qclosetxo struct {
 //	// closed is true if channel closing tx has been seen & stored.
 //	// basically true of Op.hash != 0.  not stored.
 //	Closed bool
-//	// True if there's nothing spendable here.  Non final means there is a
-//	// delayed output you can spend (either now or eveutally)
-//	Final bool
 //	// your outpoint, either pkh or script.  If cooperative it's just txid:0
 //	Op     wire.OutPoint
 //	Height int32 // 0 when unconfirmed; height of closing tx.
 
-//	// inherits delay of parent Qchan; height + delay and it's spendable.
-//	// the TX itself should be stored in the db; don't need to put it here.
-//}
+//	// true means you can spend it!  False means you can't, either because
+//	// it's coop, or because you already spent it.
+//	Unspent   bool
+//	SpendTxid wire.ShaHash
+
+//	// true means you can grab it and haven't yet!  do it now!
+//	Ungrabbed bool
+//	GrabTxid  wire.ShaHash

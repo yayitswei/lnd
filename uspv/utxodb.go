@@ -513,14 +513,14 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							hitTxs[spentTxIdx[i]] = true
 
 							// set qchan's spending txid
-							hitQChan.CloseTXO.Op.Hash = *cachedShas[spentTxIdx[i]]
-							// re-serialize qchan
-							qcBytes, err := hitQChan.ToBytes()
+							hitQChan.CloseTXO.CloseTxid = *cachedShas[spentTxIdx[i]]
+							// save to close bucket
+							closeBytes, err := hitQChan.CloseTXO.ToBytes()
 							if err != nil {
 								return err
 							}
 							// save qchan back in the bucket
-							return qchanBucket.Put(KEYutxo, qcBytes)
+							return qchanBucket.Put(KEYqclose, closeBytes)
 						}
 					}
 					return nil
