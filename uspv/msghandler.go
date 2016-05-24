@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
 )
 
 func (s *SPVCon) incomingMessageHandler() {
@@ -215,7 +215,10 @@ func (s *SPVCon) GetDataHandler(m *wire.MsgGetData) {
 				log.Printf("error getting tx %s: %s",
 					thing.Hash.String(), err.Error())
 			}
-			tx.DeWitnessify()
+			// Shouldn't connect to non-witness aware nodes anyway so
+			// probably remove this and just return an error?
+			// Right now returns a witness tx even if asked for regular tx.
+			//			tx.DeWitnessify()
 			//			tx.Flags = 0x00 // dewitnessify
 			s.outMsgQueue <- tx
 			sent++

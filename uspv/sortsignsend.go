@@ -7,11 +7,12 @@ import (
 	"log"
 	"sort"
 
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/bloom"
-	"github.com/btcsuite/btcutil/txsort"
+	"github.com/roasbeef/btcd/blockchain"
+	"github.com/roasbeef/btcd/txscript"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
+	"github.com/roasbeef/btcutil/bloom"
+	"github.com/roasbeef/btcutil/txsort"
 )
 
 func (s *SPVCon) PongBack(nonce uint64) {
@@ -527,8 +528,8 @@ func EstFee(otx *wire.MsgTx, spB int64) int64 {
 		}
 	}
 	fmt.Printf(TxToString(tx))
-	size := int64(tx.VirtualSize())
-	tx.SerializeSizeWitness()
+	size := int64(blockchain.GetTxVirtualSize(tx))
+	tx.SerializeSize()
 	fmt.Printf("%d spB, est vsize %d, fee %d\n", spB, size, size*spB)
 	return size * spB
 }

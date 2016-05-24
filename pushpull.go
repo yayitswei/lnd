@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/uspv"
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/wire"
 )
 
 // Grab the coins that are rightfully yours! Plus some more.

@@ -3,7 +3,7 @@ package elkrem
 import (
 	"testing"
 
-	"github.com/btcsuite/btcd/wire"
+	"github.com/roasbeef/btcd/wire"
 )
 
 // TestElkremBig tries 10K hashes

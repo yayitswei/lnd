@@ -8,11 +8,12 @@ import (
 	"sync"
 
 	"github.com/boltdb/bolt"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/bloom"
-	"github.com/btcsuite/btcutil/hdkeychain"
+	"github.com/roasbeef/btcd/blockchain"
+	"github.com/roasbeef/btcd/chaincfg"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
+	"github.com/roasbeef/btcutil/bloom"
+	"github.com/roasbeef/btcutil/hdkeychain"
 )
 
 type TxStore struct {
@@ -159,7 +160,7 @@ func CheckDoubleSpends(
 // TxToString prints out some info about a transaction. for testing / debugging
 func TxToString(tx *wire.MsgTx) string {
 	str := fmt.Sprintf("size %d vsize %d wsize %d locktime %d wit: %t txid %s\n",
-		tx.SerializeSize(), tx.VirtualSize(), tx.SerializeSizeWitness(),
+		tx.SerializeSizeStripped(), blockchain.GetTxVirtualSize(tx), tx.SerializeSize(),
 		tx.LockTime, tx.HasWitness(), tx.TxSha().String())
 	for i, in := range tx.TxIn {
 		str += fmt.Sprintf("Input %d spends %s\n", i, in.PreviousOutPoint.String())

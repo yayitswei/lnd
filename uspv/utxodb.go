@@ -5,10 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/btcsuite/btcd/blockchain"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
+	"github.com/roasbeef/btcd/blockchain"
+	"github.com/roasbeef/btcd/txscript"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
 
 	"github.com/boltdb/bolt"
 )
@@ -253,7 +253,7 @@ func (ts *TxStore) GetTx(txid *wire.ShaHash) (*wire.MsgTx, error) {
 			return fmt.Errorf("tx %s not in db", txid.String())
 		}
 		buf := bytes.NewBuffer(txbytes)
-		return rtx.DeserializeWitness(buf)
+		return rtx.Deserialize(buf)
 	})
 	if err != nil {
 		return nil, err
@@ -274,7 +274,7 @@ func (ts *TxStore) GetAllTxs() ([]*wire.MsgTx, error) {
 		return txns.ForEach(func(k, v []byte) error {
 			tx := wire.NewMsgTx()
 			buf := bytes.NewBuffer(v)
-			err := tx.DeserializeWitness(buf)
+			err := tx.Deserialize(buf)
 			if err != nil {
 				return err
 			}
@@ -582,7 +582,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 			if hitTxs[i] == true {
 				hits++
 				var buf bytes.Buffer
-				tx.SerializeWitness(&buf) // always store witness version
+				tx.Serialize(&buf) // always store witness version
 				err = txns.Put(cachedShas[i].Bytes(), buf.Bytes())
 				if err != nil {
 					return err
