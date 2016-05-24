@@ -8,11 +8,11 @@ import (
 	"github.com/lightningnetwork/lnd/chainntfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/txsort"
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/txscript"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
+	"github.com/roasbeef/btcutil/txsort"
 )
 
 const (
@@ -29,7 +29,7 @@ type PaymentHash [20]byte
 // TODO(roasbeef): future peer struct should embed this struct
 type LightningChannel struct {
 	lnwallet      *LightningWallet
-	channelEvents chainntnfs.ChainNotifier
+	channelEvents chainntfs.ChainNotifier
 
 	// TODO(roasbeef): Stores all previous R values + timeouts for each
 	// commitment update, plus some other meta-data...Or just use OP_RETURN
@@ -61,7 +61,7 @@ type LightningChannel struct {
 }
 
 // newLightningChannel...
-func newLightningChannel(wallet *LightningWallet, events chainntnfs.ChainNotifier,
+func newLightningChannel(wallet *LightningWallet, events chainntfs.ChainNotifier,
 	chanDB *channeldb.DB, state *channeldb.OpenChannel) (*LightningChannel, error) {
 
 	lc := &LightningChannel{
@@ -81,7 +81,7 @@ func newLightningChannel(wallet *LightningWallet, events chainntnfs.ChainNotifie
 	lc.updateTotem <- struct{}{}
 
 	fundingTxId := state.FundingTx.TxSha()
-	fundingPkScript, err := scriptHashPkScript(state.FundingRedeemScript)
+	fundingPkScript, err := witnessScriptHash(state.FundingRedeemScript)
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +181,6 @@ func (c *ChannelUpdate) VerifyNewCommitmentSigs(ourSig, theirSig []byte) error {
 	c.lnChannel.stateMtx.RLock()
 	defer c.lnChannel.stateMtx.RUnlock()
 
-	var err error
-	var scriptSig []byte
 	channelState := c.lnChannel.channelState
 
 	// When initially generating the redeemScript, we sorted the serialized
@@ -192,18 +190,14 @@ func (c *ChannelUpdate) VerifyNewCommitmentSigs(ourSig, theirSig []byte) error {
 	redeemScript := channelState.FundingRedeemScript
 	ourKey := channelState.OurCommitKey.PubKey().SerializeCompressed()
 	theirKey := channelState.TheirCommitKey.SerializeCompressed()
-	scriptSig, err = spendMultiSig(redeemScript, ourKey, ourSig, theirKey, theirSig)
-	if err != nil {
-		return err
-	}
+	witness := spendMultiSig(redeemScript, ourKey, ourSig, theirKey, theirSig)
 
 	// Attach the scriptSig to our commitment transaction's only input,
 	// then validate that the scriptSig executes correctly.
 	commitTx := c.ourPendingCommitTx
-	commitTx.TxIn[0].SignatureScript = scriptSig
-
+	commitTx.TxIn[0].Witness = witness
 	vm, err := txscript.NewEngine(c.lnChannel.fundingP2SH, commitTx, 0,
-		txscript.StandardVerifyFlags, nil, nil, int64(channelState.Capacity))
+		txscript.StandardVerifyFlags, nil, nil, 0)
 	if err != nil {
 		return err
 	}
@@ -388,13 +382,13 @@ func (lc *LightningChannel) addHTLC(ourCommitTx, theirCommitTx *wire.MsgTx,
 		return nil
 	}
 
-	// Now that we have the redeem scripts, create the P2SH public key
+	// Now that we have the redeem scripts, create the P2WSH public key
 	// script for each.
-	senderP2SH, err := scriptHashPkScript(senderPKScript)
+	senderP2SH, err := witnessScriptHash(senderPKScript)
 	if err != nil {
 		return nil
 	}
-	receiverP2SH, err := scriptHashPkScript(receiverPKScript)
+	receiverP2SH, err := witnessScriptHash(receiverPKScript)
 	if err != nil {
 		return nil
 	}
@@ -567,7 +561,7 @@ func createCommitTx(fundingOutput *wire.TxIn, selfKey, theirKey *btcec.PublicKey
 	if err != nil {
 		return nil, err
 	}
-	payToUsScriptHash, err := scriptHashPkScript(ourRedeemScript)
+	payToUsScriptHash, err := witnessScriptHash(ourRedeemScript)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +573,7 @@ func createCommitTx(fundingOutput *wire.TxIn, selfKey, theirKey *btcec.PublicKey
 	if err != nil {
 		return nil, err
 	}
-	payToThemScriptHash, err := scriptHashPkScript(theirRedeemScript)
+	payToThemScriptHash, err := witnessScriptHash(theirRedeemScript)
 	if err != nil {
 		return nil, err
 	}

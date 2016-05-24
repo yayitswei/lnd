@@ -393,7 +393,6 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		return err
 	}
 	tx.AddTxOut(changeOut)
-
 	// get inputs for this tx
 	utxos, overshoot, err := s.PickUtxos(totalSend, false)
 	if err != nil {

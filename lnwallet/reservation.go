@@ -5,9 +5,9 @@ import (
 
 	"github.com/lightningnetwork/lnd/channeldb"
 
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
 )
 
 // ChannelContribution is the primary constituent of the funding workflow within
@@ -48,6 +48,14 @@ type ChannelContribution struct {
 	CsvDelay uint32
 }
 
+// InputScripts represents any script inputs required to redeem a previous
+// output. This struct is used rather than just a witness, or scripSig in
+// order to accomdate nested p2sh which utilizes both types of input scripts.
+type InputScript struct {
+	Witness   [][]byte
+	ScriptSig []byte
+}
+
 // ChannelReservation represents an intent to open a lightning payment channel
 // a counterpaty. The funding proceses from reservation to channel opening is a
 // 3-step process. In order to allow for full concurrency during the reservation
@@ -79,9 +87,6 @@ type ChannelContribution struct {
 //     * We then verify the validity of all signatures before considering the
 //       channel "open".
 type ChannelReservation struct {
-	// TODO(roasbeef): remove this? we're only implementing the golden...
-	fundingType FundingType
-
 	// This mutex MUST be held when either reading or modifying any of the
 	// fields below.
 	sync.RWMutex
@@ -92,8 +97,8 @@ type ChannelReservation struct {
 
 	// In order of sorted inputs. Sorting is done in accordance
 	// to BIP-69: https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki.
-	ourFundingSigs   [][]byte
-	theirFundingSigs [][]byte
+	ourFundingInputScripts   []*InputScript
+	theirFundingInputScripts []*InputScript
 
 	// Our signature for their version of the commitment transaction.
 	ourCommitmentSig   []byte
@@ -120,11 +125,10 @@ type ChannelReservation struct {
 // used only internally by lnwallet. In order to concurrent safety, the creation
 // of all channel reservations should be carried out via the
 // lnwallet.InitChannelReservation interface.
-func newChannelReservation(t FundingType, fundingAmt btcutil.Amount,
-	minFeeRate btcutil.Amount, wallet *LightningWallet, id uint64) *ChannelReservation {
+func newChannelReservation(fundingAmt btcutil.Amount, minFeeRate btcutil.Amount,
+	wallet *LightningWallet, id uint64) *ChannelReservation {
 	// TODO(roasbeef): CSV here, or on delay?
 	return &ChannelReservation{
-		fundingType: t,
 		ourContribution: &ChannelContribution{
 			FundingAmount: fundingAmt,
 		},
@@ -192,10 +196,10 @@ func (r *ChannelReservation) TheirContribution() *ChannelContribution {
 // BIP-69: https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki.
 // NOTE: These signatures will only be populated after a call to
 // .ProcesContribution()
-func (r *ChannelReservation) OurSignatures() ([][]byte, []byte) {
+func (r *ChannelReservation) OurSignatures() ([]*InputScript, []byte) {
 	r.RLock()
 	defer r.RUnlock()
-	return r.ourFundingSigs, r.ourCommitmentSig
+	return r.ourFundingInputScripts, r.ourCommitmentSig
 }
 
 // CompleteFundingReservation finalizes the pending channel reservation,
@@ -210,16 +214,16 @@ func (r *ChannelReservation) OurSignatures() ([][]byte, []byte) {
 // which will block until the funding transaction obtains the configured number
 // of confirmations. Once the method unblocks, a LightningChannel instance is
 // returned, marking the channel available for updates.
-func (r *ChannelReservation) CompleteReservation(fundingSigs [][]byte,
+func (r *ChannelReservation) CompleteReservation(fundingInputScripts []*InputScript,
 	commitmentSig []byte) error {
 
 	errChan := make(chan error, 1)
 
 	r.wallet.msgChan <- &addCounterPartySigsMsg{
-		pendingFundingID:   r.reservationID,
-		theirFundingSigs:   fundingSigs,
-		theirCommitmentSig: commitmentSig,
-		err:                errChan,
+		pendingFundingID:         r.reservationID,
+		theirFundingInputScripts: fundingInputScripts,
+		theirCommitmentSig:       commitmentSig,
+		err:                      errChan,
 	}
 
 	return <-errChan
@@ -231,10 +235,10 @@ func (r *ChannelReservation) CompleteReservation(fundingSigs [][]byte,
 // additional verification, such as needed by tests.
 // NOTE: These attributes will be unpopulated before a call to
 // .CompleteReservation().
-func (r *ChannelReservation) TheirSignatures() ([][]byte, []byte) {
+func (r *ChannelReservation) TheirSignatures() ([]*InputScript, []byte) {
 	r.RLock()
 	defer r.RUnlock()
-	return r.theirFundingSigs, r.theirCommitmentSig
+	return r.theirFundingInputScripts, r.theirCommitmentSig
 }
 
 // FinalFundingTx returns the finalized, fully signed funding transaction for
@@ -271,11 +275,5 @@ func (r *ChannelReservation) WaitForChannelOpen() *LightningChannel {
 }
 
 // * finish reset of tests
-// * comment out stuff that'll need a node.
 // * start on commitment side
-//   * implement rusty's shachain
-//   * set up logic to get notification from node when funding tx gets 6 deep.
-//     * prob spawn into ChainNotifier struct
-//   * create builder for initial funding transaction
-//     * fascade through the wallet, for signing and such.
 //   * channel should have active namespace to it's bucket, query at that point fo past commits etc

@@ -37,6 +37,7 @@ var (
 	SCon           uspv.SPVCon   // global here for now
 	GlobalOmniChan chan []byte   // channel for omnihandler
 	RemoteCon      *lndc.LNDConn // one because simple
+
 )
 
 func shell(deadend string, deadend2 *chaincfg.Params) {

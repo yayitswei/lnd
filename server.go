@@ -7,12 +7,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/roasbeef/btcd/btcec"
 
-	"github.com/btcsuite/btcwallet/waddrmgr"
+	"github.com/roasbeef/btcwallet/waddrmgr"
 )
 
 // server...
@@ -198,13 +198,19 @@ func (s *server) listener(l net.Listener) {
 	for atomic.LoadInt32(&s.shutdown) == 0 {
 		conn, err := l.Accept()
 		if err != nil {
-			srvrLog.Errorf("Can't accept connection: %v", err)
+			// Only log the error message if we aren't currently
+			// shutting down.
+			if atomic.LoadInt32(&s.shutdown) == 0 {
+				srvrLog.Errorf("Can't accept connection: %v", err)
+			}
 			continue
 		}
 
 		srvrLog.Tracef("New inbound connection from %v", conn.RemoteAddr())
 		peer := newPeer(conn, s)
 		peer.Start()
+
+		s.newPeers <- peer
 	}
 
 	s.wg.Done()
@@ -243,7 +249,7 @@ func (s *server) Stop() error {
 	}
 
 	s.rpcServer.Stop()
-	s.lnwallet.Stop()
+	s.lnwallet.Shutdown()
 
 	// Signal all the lingering goroutines to quit.
 	close(s.quit)

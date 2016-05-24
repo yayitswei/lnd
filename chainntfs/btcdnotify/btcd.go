@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/btcsuite/btcd/btcjson"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcrpcclient"
-	"github.com/btcsuite/btcutil"
 	"github.com/lightningnetwork/lnd/chainntfs"
+	"github.com/roasbeef/btcd/btcjson"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcrpcclient"
+	"github.com/roasbeef/btcutil"
 )
 
 // BtcdNotifier implements the ChainNotifier interface using btcd's websockets
@@ -40,7 +40,7 @@ type BtcdNotifier struct {
 }
 
 // Ensure BtcdNotifier implements the ChainNotifier interface at compile time.
-var _ chainntnfs.ChainNotifier = (*BtcdNotifier)(nil)
+var _ chainntfs.ChainNotifier = (*BtcdNotifier)(nil)
 
 // NewBtcdNotifier returns a new BtcdNotifier instance. This function assumes
 // the btcd node detailed in the passed configuration is already running, and
@@ -211,7 +211,7 @@ out:
 				// subscriber.
 				if ntfn, ok := b.spendNotifications[prevOut]; ok {
 					spenderSha := newSpend.Sha()
-					spendDetails := &chainntnfs.SpendDetail{
+					spendDetails := &chainntfs.SpendDetail{
 						SpentOutPoint: ntfn.targetOutpoint,
 						SpenderTxHash: spenderSha,
 						// TODO(roasbeef): copy tx?
@@ -298,26 +298,26 @@ func (b *BtcdNotifier) checkConfirmationTrigger(txSha *wire.ShaHash, blockHeight
 type spendNotification struct {
 	targetOutpoint *wire.OutPoint
 
-	spendChan chan *chainntnfs.SpendDetail
+	spendChan chan *chainntfs.SpendDetail
 }
 
 // RegisterSpendNotification registers an intent to be notified once the target
 // outpoint has been spent by a transaction on-chain. Once a spend of the target
 // outpoint has been detected, the details of the spending event will be sent
 // across the 'Spend' channel.
-func (b *BtcdNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint) (*chainntnfs.SpendEvent, error) {
+func (b *BtcdNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint) (*chainntfs.SpendEvent, error) {
 	if err := b.chainConn.NotifySpent([]*wire.OutPoint{outpoint}); err != nil {
 		return nil, err
 	}
 
 	ntfn := &spendNotification{
 		targetOutpoint: outpoint,
-		spendChan:      make(chan *chainntnfs.SpendDetail, 1),
+		spendChan:      make(chan *chainntfs.SpendDetail, 1),
 	}
 
 	b.notificationRegistry <- ntfn
 
-	return &chainntnfs.SpendEvent{ntfn.spendChan}, nil
+	return &chainntfs.SpendEvent{ntfn.spendChan}, nil
 }
 
 // confirmationNotification represents a client's intent to receive a
@@ -336,7 +336,7 @@ type confirmationsNotification struct {
 // which will be triggered once the txid reaches numConfs number of
 // confirmations.
 func (b *BtcdNotifier) RegisterConfirmationsNtfn(txid *wire.ShaHash,
-	numConfs uint32) (*chainntnfs.ConfirmationEvent, error) {
+	numConfs uint32) (*chainntfs.ConfirmationEvent, error) {
 
 	ntfn := &confirmationsNotification{
 		txid:             txid,
@@ -347,7 +347,7 @@ func (b *BtcdNotifier) RegisterConfirmationsNtfn(txid *wire.ShaHash,
 
 	b.notificationRegistry <- ntfn
 
-	return &chainntnfs.ConfirmationEvent{
+	return &chainntfs.ConfirmationEvent{
 		Confirmed:    ntfn.finConf,
 		NegativeConf: ntfn.negativeConf,
 	}, nil

@@ -2,8 +2,9 @@ package lnwire
 
 import (
 	"fmt"
-	"github.com/btcsuite/btcd/btcec"
 	"io"
+
+	"github.com/roasbeef/btcd/btcec"
 )
 
 type FundingSignAccept struct {

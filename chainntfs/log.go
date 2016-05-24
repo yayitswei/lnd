@@ -1,4 +1,4 @@
-package chainntnfs
+package chainntfs
 
 import (
 	"errors"

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcutil"
+	"github.com/roasbeef/btcd/chaincfg"
+	"github.com/roasbeef/btcutil"
 	flags "github.com/btcsuite/go-flags"
 )
 
@@ -35,8 +35,7 @@ var (
 
 	// activeNetParams is a pointer to the parameters specific to the
 	// currently active bitcoin network.
-	//activeNetParams = &chaincfg.SegNetParams
-	activeNetParams = &chaincfg.TestNet3Params
+	activeNetParams = &chaincfg.SegNet4Params
 
 	btcdHomeDir        = btcutil.AppDataDir("btcd", false)
 	defaultRPCKeyFile  = filepath.Join(btcdHomeDir, "rpc.key")

@@ -3,16 +3,17 @@ package lndc
 import (
 	"bytes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"encoding/binary"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/fastsha256"
 	"github.com/codahale/chacha20poly1305"
+	"github.com/roasbeef/btcutil"
 
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/roasbeef/btcd/btcec"
 )
 
 // Conn...
@@ -184,7 +185,7 @@ func (c *LNDConn) authPubKey(
 
 	// Verify that their proof matches our locally computed version.
 	theirDHproof := btcutil.Hash160(append(localEphPubBytes, idDH[:]...))
-	if bytes.Equal(resp, theirDHproof) == false {
+	if !hmac.Equal(resp, theirDHproof) {
 		return fmt.Errorf("invalid DH proof %x", theirDHproof)
 	}
 
@@ -235,7 +236,7 @@ func (c *LNDConn) authPKH(
 	theirDHproof := btcutil.Hash160(append(localEphPubBytes, idDH[:]...))
 
 	// Verify that their DH proof matches the one we just generated.
-	if bytes.Equal(resp[33:], theirDHproof) == false {
+	if !hmac.Equal(resp[33:], theirDHproof) {
 		return fmt.Errorf("Invalid DH proof %x", theirDHproof)
 	}
 
