@@ -631,7 +631,8 @@ func Fan(args []string) error {
 		adrs[i] = adr
 		amts[i] = valOutputs + i
 	}
-	return SCon.SendCoins(adrs, amts)
+	_, err = SCon.SendCoins(adrs, amts)
+	return err
 }
 
 // Send sends coins.
@@ -679,7 +680,7 @@ func Send(args []string) error {
 
 	adrs = append(adrs, adr)
 	amts = append(amts, amt)
-	err = SCon.SendCoins(adrs, amts)
+	_, err = SCon.SendCoins(adrs, amts)
 	if err != nil {
 		return err
 	}

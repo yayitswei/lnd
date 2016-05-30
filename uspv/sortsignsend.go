@@ -363,9 +363,12 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 
 // SendCoins does send coins, but it's very rudimentary
 // wit makes it into p2wpkh.  Which is not yet spendable.
-func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
+func (s *SPVCon) SendCoins(
+	adrs []btcutil.Address, sendAmts []int64) (*wire.ShaHash, error) {
+
 	if len(adrs) != len(sendAmts) {
-		return fmt.Errorf("%d addresses and %d amounts", len(adrs), len(sendAmts))
+		return nil, fmt.Errorf(
+			"%d addresses and %d amounts", len(adrs), len(sendAmts))
 	}
 	var err error
 	var totalSend int64
@@ -382,7 +385,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		// make address script 76a914...88ac or 0014...
 		outAdrScript, err := txscript.PayToAddrScript(adr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		// make user specified txout and add to tx
 		txout := wire.NewTxOut(sendAmts[i], outAdrScript)
@@ -391,13 +394,13 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 
 	changeOut, err := s.TS.NewChangeOut(0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tx.AddTxOut(changeOut)
 	// get inputs for this tx
 	utxos, overshoot, err := s.PickUtxos(totalSend, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Printf("Overshot by %d, can make change output\n", overshoot)
 	// add inputs into tx
@@ -409,13 +412,13 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
 			prevPKScript, err = txscript.PayToAddrScript(oa)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		} else { // otherwise generate directly
 			prevPKScript, err = txscript.PayToAddrScript(
 				s.TS.Adrs[utxo.KeyIdx].PkhAdr)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 		tx.AddTxIn(wire.NewTxIn(&utxo.Op, prevPKScript, nil))
@@ -446,7 +449,7 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 		// pick key
 		priv := s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
 		if priv == nil {
-			return fmt.Errorf("SendCoins: nil privkey")
+			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
 
 		// This is where witness based sighash types need to happen
@@ -456,14 +459,14 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 				tx, hCache, i, utxos[i].Value, txin.SignatureScript,
 				txscript.SigHashAll, priv, true)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		} else {
 			sigStash[i], err = txscript.SignatureScript(
 				tx, i, txin.SignatureScript,
 				txscript.SigHashAll, priv, true)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -484,11 +487,9 @@ func (s *SPVCon) SendCoins(adrs []btcutil.Address, sendAmts []int64) error {
 
 	// send it out on the wire.  hope it gets there.
 	// we should deal with rejects.  Don't yet.
-	err = s.NewOutgoingTx(tx)
-	if err != nil {
-		return err
-	}
-	return nil
+
+	txid := tx.TxSha()
+	return &txid, s.NewOutgoingTx(tx)
 }
 
 // EstFee gives a fee estimate based on a tx and a sat/Byte target.
