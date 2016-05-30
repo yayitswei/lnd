@@ -288,7 +288,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	return s.NewOutgoingTx(tx2)
 }
 
-func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
+func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	// fixed fee
 	fee := int64(5000)
 
@@ -297,7 +297,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 	// add single output
 	outAdrScript, err := txscript.PayToAddrScript(adr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// make user specified txout and add to tx
 	txout := wire.NewTxOut(sendAmt, outAdrScript)
@@ -310,13 +310,13 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
 		prevPKs, err = txscript.PayToAddrScript(oa)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else { // otherwise generate directly
 		prevPKs, err = txscript.PayToAddrScript(
 			s.TS.Adrs[u.KeyIdx].PkhAdr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -328,7 +328,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 
 	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
 	if priv == nil {
-		return fmt.Errorf("SendOne: nil privkey")
+		return nil, fmt.Errorf("SendOne: nil privkey")
 	}
 	// This is where witness based sighash types need to happen
 	// sign into stash
@@ -337,14 +337,14 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		sig, err = txscript.SignatureScript(
 			tx, 0, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -357,7 +357,8 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) error {
 		tx.TxIn[0].Witness = wit
 		tx.TxIn[0].SignatureScript = nil
 	}
-	return s.NewOutgoingTx(tx)
+	txid := tx.TxSha()
+	return &txid, s.NewOutgoingTx(tx)
 }
 
 // SendCoins does send coins, but it's very rudimentary

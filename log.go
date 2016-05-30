@@ -6,7 +6,7 @@ import (
 
 	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/seelog"
-	"github.com/lightningnetwork/lnd/chainntfs"
+	//	"github.com/lightningnetwork/lnd/chainntfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
 )
@@ -64,7 +64,7 @@ func useLogger(subsystemID string, logger btclog.Logger) {
 
 	case "NTFN":
 		ntfnLog = logger
-		chainntnfs.UseLogger(logger)
+		//		chainntnfs.UseLogger(logger)
 
 	case "CHDB":
 		chdbLog = logger

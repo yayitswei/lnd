@@ -29,7 +29,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "na:28901"
+	SPVHostAdr = "rp2:28901"
 )
 
 var (
@@ -78,6 +78,8 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	rpcShellListen()
 
 	// main shell loop
 	for {
@@ -572,7 +574,7 @@ func Sweep(args []string) error {
 	if len(args) == 2 {
 		for i, u := range allUtxos {
 			if u.AtHeight != 0 && u.Value > 10000 {
-				err = SCon.SendOne(allUtxos[i], adr)
+				_, err = SCon.SendOne(allUtxos[i], adr)
 				if err != nil {
 					return err
 				}
