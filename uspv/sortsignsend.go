@@ -529,7 +529,7 @@ func EstFee(otx *wire.MsgTx, spB int64) int64 {
 		}
 	}
 	fmt.Printf(TxToString(tx))
-	size := int64(blockchain.GetTxVirtualSize(tx))
+	size := int64(blockchain.GetMsgTxVirtualSize(tx))
 	tx.SerializeSize()
 	fmt.Printf("%d spB, est vsize %d, fee %d\n", spB, size, size*spB)
 	return size * spB

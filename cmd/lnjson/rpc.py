@@ -16,18 +16,18 @@ def main():
 	   "Amts": [
 	   #~ 40000000,
 	   #~ 41000000,
-	   42000000,]
+	   44000000,]
 	   }]
     }    
     #~ 
-    rpc_input = {
-           "method": "LNRpc.Sweep",
-           "params": [{
-	   "NumTx": 30,
-	   "DestAdr": "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
-	   "Drop": True,
-	   }]
-    }
+    #~ rpc_input = {
+           #~ "method": "LNRpc.Sweep",
+           #~ "params": [{
+	   #~ "NumTx": 1,
+	   #~ "DestAdr": "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
+	   #~ "Drop": True,
+	   #~ }]
+    #~ }
     
     #~ rpc_input = {
            #~ "method": "LNRpc.Fanout",

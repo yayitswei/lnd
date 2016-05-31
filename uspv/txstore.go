@@ -160,8 +160,8 @@ func CheckDoubleSpends(
 // TxToString prints out some info about a transaction. for testing / debugging
 func TxToString(tx *wire.MsgTx) string {
 	str := fmt.Sprintf("size %d vsize %d wsize %d locktime %d wit: %t txid %s\n",
-		tx.SerializeSizeStripped(), blockchain.GetTxVirtualSize(tx), tx.SerializeSize(),
-		tx.LockTime, tx.HasWitness(), tx.TxSha().String())
+		tx.SerializeSizeStripped(), blockchain.GetMsgTxVirtualSize(tx),
+		tx.SerializeSize(), tx.LockTime, tx.HasWitness(), tx.TxSha().String())
 	for i, in := range tx.TxIn {
 		str += fmt.Sprintf("Input %d spends %s\n", i, in.PreviousOutPoint.String())
 		str += fmt.Sprintf("\tSigScript: %x\n", in.SignatureScript)

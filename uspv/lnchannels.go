@@ -560,17 +560,14 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	if err != nil {
 		return err
 	}
-	// parse out opcodes... I don't think this does anything but this is what
-	// calc witness sighash wants.
-	opcodes, err := txscript.ParseScript(pre)
-	if err != nil {
-		return err
-	}
 
 	hCache := txscript.NewTxSigHashes(tx)
 	// always sighash all
-	hash := txscript.CalcWitnessSignatureHash(
-		opcodes, hCache, txscript.SigHashAll, tx, 0, q.Value)
+	hash, err := txscript.CalcWitnessSigHash(
+		pre, hCache, txscript.SigHashAll, tx, 0, q.Value)
+	if err != nil {
+		return err
+	}
 
 	// sig is pre-truncated; last byte for sighashtype is always sighashAll
 	pSig, err := btcec.ParseDERSignature(sig, btcec.S256())
