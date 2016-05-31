@@ -16,7 +16,11 @@ import (
 type LNRpc struct {
 	// nothing...?
 }
+type TxidsReply struct {
+	Txids []string
+}
 
+// ------------------------- address
 type AdrArgs struct {
 	NumToMake uint32
 }
@@ -46,6 +50,7 @@ func (r *LNRpc) Address(args *AdrArgs, reply *AdrReply) error {
 	return nil
 }
 
+// ------------------------- balance
 type BalReply struct {
 	TotalScore int64
 	Txos       []BalTxo
@@ -98,14 +103,45 @@ func (r *LNRpc) Bal(args *BalArgs, reply *BalReply) error {
 	return nil
 }
 
+// ------------------------- send
+type SendArgs struct {
+	DestAddrs []string
+	Amts      []int64
+}
+
+func (r *LNRpc) Send(args SendArgs, reply *TxidsReply) error {
+	var err error
+
+	nOutputs := len(args.DestAddrs)
+	if nOutputs < 1 {
+		return fmt.Errorf("No destination address specified")
+	}
+	if nOutputs != len(args.Amts) {
+		return fmt.Errorf("%d addresses but %d amounts specified",
+			nOutputs, len(args.Amts))
+	}
+
+	adrs := make([]btcutil.Address, nOutputs)
+
+	for i, s := range args.DestAddrs {
+		adrs[i], err = btcutil.DecodeAddress(s, SCon.TS.Param)
+		if err != nil {
+			return err
+		}
+	}
+	txid, err := SCon.SendCoins(adrs, args.Amts)
+	if err != nil {
+		return err
+	}
+	reply.Txids = append(reply.Txids, txid.String())
+	return nil
+}
+
+// ------------------------- sweep
 type SweepArgs struct {
 	DestAdr string
 	NumTx   int
 	Drop    bool
-}
-
-type TxidsReply struct {
-	Txids []string
 }
 
 func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
@@ -149,8 +185,7 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 	return nil
 }
 
-//return fmt.Errorf("fan syntax: fan adr numOutputs valOutputs")
-
+// ------------------------- fanout
 type FanArgs struct {
 	DestAdr      string
 	NumOutputs   uint32
@@ -184,13 +219,58 @@ func (r *LNRpc) Fanout(args FanArgs, reply *TxidsReply) error {
 	return nil
 }
 
+// ------------------------- listen
 type LisReply struct {
 	Status string
 }
 
 func (r *LNRpc) Lis(args BalArgs, reply *LisReply) error {
 	go TCPListener()
+	// todo: say what port and what pubkey in status message
 	reply.Status = "listening"
+	return nil
+}
+
+// ------------------------- push
+type PushArgs struct {
+	PeerIdx, QChanIdx uint32
+	Amt               int64
+}
+type PushReply struct {
+	MyAmt      int64
+	StateIndex uint64
+}
+
+func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
+	if RemoteCon == nil {
+		return fmt.Errorf("Not connected to anyone, can't push\n")
+	}
+	if args.Amt > 100000000 || args.Amt < 1 {
+		return fmt.Errorf("push %d, max push is 1 coin / 100000000", args.Amt)
+	}
+
+	// find the peer index of who we're connected to
+	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+	if uint32(args.PeerIdx) != currentPeerIdx {
+		return fmt.Errorf("Want to close with peer %d but connected to %d",
+			args.PeerIdx, currentPeerIdx)
+	}
+	fmt.Printf("push %d to (%d,%d) %d times\n",
+		args.Amt, args.PeerIdx, args.QChanIdx)
+
+	qc, err := SCon.TS.GetQchanByIdx(args.PeerIdx, args.QChanIdx)
+	if err != nil {
+		return err
+	}
+	err = PushChannel(qc, uint32(args.Amt))
+	if err != nil {
+		return err
+	}
+	reply.MyAmt = qc.State.MyAmt
+	reply.StateIndex = qc.State.StateIdx
 	return nil
 }
 
