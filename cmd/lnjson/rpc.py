@@ -1,22 +1,25 @@
 import socket
 import json
+import random
 
 def main():
 
     s = socket.create_connection(("127.0.0.1", 1234))
     
+    amt1 = random.randint(100000, 200000000)
+    amt2 = random.randint(100000, 289900000)
     
     rpc_input = {
            "method": "LNRpc.Send",
            "params": [{
 	   "DestAddrs": [
 	   #~ "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
-	   #~ "GgKsNWh62xHcqGibWNArMDwLeW8uhur2uNrc",
-	   "GgKqCtLtgjH9LEkUJX2hewqiSpten9xczQbL",],
+	   "GgKqx2qXZw7UGSSNNMMi5GR6LQzWeAFajoPa",
+	   "GgKjr6Aj8d2aT5gZyGC2LpejBqadCZ5RvsmK",],
 	   "Amts": [
 	   #~ 40000000,
-	   #~ 41000000,
-	   44000000,]
+	   amt1,
+	   amt2,]
 	   }]
     }    
     #~ 
@@ -24,7 +27,7 @@ def main():
            #~ "method": "LNRpc.Sweep",
            #~ "params": [{
 	   #~ "NumTx": 1,
-	   #~ "DestAdr": "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
+	   #~ "DestAdr": "GgL26pL4qPKJBrk2ZFy97bNU6do26FKWoMyt",
 	   #~ "Drop": True,
 	   #~ }]
     #~ }
@@ -55,7 +58,7 @@ def main():
     rpc_input.update({"jsonrpc": "2.0", "id": "99"})
     print(json.dumps(rpc_input))
     
-    s.sendall(bytes(json.dumps(rpc_input), "utf-8"))
+    s.sendall(json.dumps(rpc_input))
     print(s.recv(8000000).decode("utf-8"))
    
     # pretty print json output

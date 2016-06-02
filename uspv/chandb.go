@@ -669,6 +669,17 @@ func (ts *TxStore) GetQchan(
 	if err != nil {
 		return nil, err
 	}
+	// decode close tx, if channel is closed
+	if qc.CloseTXO.Closed {
+		clTx, err := ts.GetTx(&qc.CloseTXO.CloseTxid)
+		if err != nil {
+			return nil, err
+		}
+		err = qc.DecodeCloseTx(clTx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return qc, nil
 }
 

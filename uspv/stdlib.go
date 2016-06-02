@@ -27,6 +27,25 @@ func BtU32(b []byte) uint32 {
 	return i
 }
 
+// int32 to 4 bytes.  Always works.
+func I32tB(i int32) []byte {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, i)
+	return buf.Bytes()
+}
+
+// 4 byte slice to uin32.  Returns 7fffffff if something doesn't work.
+func BtI32(b []byte) int32 {
+	if len(b) != 4 {
+		fmt.Printf("Got %x to BtI32\n", b)
+		return 0x7fffffff
+	}
+	var i int32
+	buf := bytes.NewBuffer(b)
+	binary.Read(buf, binary.BigEndian, &i)
+	return i
+}
+
 // int64 to 8 bytes.  Always works.
 func I64tB(i int64) []byte {
 	var buf bytes.Buffer

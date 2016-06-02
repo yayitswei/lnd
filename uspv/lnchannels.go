@@ -43,8 +43,8 @@ const (
 type Qchan struct {
 	// S for stored (on disk), D for derived
 
-	Utxo               // S underlying utxo data
-	CloseTXO Qclosetxo // S closing outpoint
+	Utxo                // S underlying utxo data
+	CloseTXO QCloseData // S closing outpoint
 
 	ChannelNonce [20]byte // S made by funder; stored by both
 	MyPub        [33]byte // D my channel specific pubkey
@@ -60,7 +60,8 @@ type Qchan struct {
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
 	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
-	State *StatCom // S state of channel
+	TimeOut uint16   // blocks for timeout (default 5 for testing)
+	State   *StatCom // S state of channel
 }
 
 // StatComs are State Commitments.
@@ -85,42 +86,41 @@ type StatCom struct {
 	// could add a mutex here... maybe will later.
 }
 
-// Qclosetxo is the output resulting from an un-cooperative close
+// QCloseData is the output resulting from an un-cooperative close
 // of the channel.  This happens when either party breaks non-cooperatively.
 // It describes "your" output, either pkh or time-delay script.
 // If you have pkh but can grab the other output, "grabbable" is set to true.
 // This can be serialized in a separate bucket
 
-type Qclosetxo struct {
-	// closed is true if channel closing tx has been seen & stored.
-	// basically true of Op.hash != 0.  not stored.
-	Closed bool
-	// your outpoint, either pkh or script.  If cooperative it's just txid:0
-	CloseTxid wire.ShaHash
-	Height    int32 // 0 when unconfirmed; height of closing tx.
+type QCloseData struct {
+	// 3 txid / height pairs are stored.  All 3 only are used in the
+	// case where you grab their invalid close.
+	CloseTxid, SHTxid, PKHTxid       wire.ShaHash
+	CloseHeight, SHHeight, PKHHeight int32
 
-	// true means you can spend it!  False means you can't, either because
-	// it's coop, or because you already spent it.
-	Unspent   bool
-	SpendTxid wire.ShaHash
+	// the rest is filled in from the tx data
+	Closed            bool   // if channel is closed; if CloseTxid != 0
+	PKHIdx            uint32 // uint8 would be enough.  Actually 1 bit is enough..
+	SHIdx             uint32
+	PKHamt            int64 // how much is at each output, for convenience
+	SHamt             int64
+	MyPKH             bool  // PKH is mine to spend
+	MySH              bool  // SH is mine to spend
+	SHSpendableHeight int32 // SH output can be spent at this height
+	// -1 means never as it's not mine.
+	// -1 and SHTxid != 0 mean you grabbed it.
 
-	// true means you can grab it and haven't yet!  do it now!
-	Ungrabbed bool
-	GrabTxid  wire.ShaHash
-
-	// inherits delay of parent Qchan; height + delay and it's spendable.
-	// the TX itself should be stored in the db; don't need to put it here.
 }
 
 // GetStateIdxFromTx returns the state index from a commitment transaction.
 // No errors; returns 0 if there is no retrievable index.
 func GetStateIdxFromTx(tx *wire.MsgTx) uint64 {
+	// no tx, so no index
 	if tx == nil {
-		//		fmt.Printf("nil tx\n")
 		return 0
 	}
+	// more than 1 input, so not a close tx
 	if len(tx.TxIn) != 1 {
-		//		fmt.Printf("%d txins\n", len(tx.TxIn))
 		return 0
 	}
 	// check that indicating high bytes are correct
@@ -163,37 +163,71 @@ func SetStateIdxBits(tx *wire.MsgTx, idx uint64) error {
 // IngestCloseTx takes in a tx and sets the QcloseTXO feilds based on the tx.
 // we assume this actually spends the channel outpoint, and DON'T double check that
 // here.  If you give it any random tx it'll think there was a cooperative close.
-func (q *Qchan) IngestCloseTx(tx *wire.MsgTx, height int32) error {
+func (q *Qchan) DecodeCloseTx(tx *wire.MsgTx) error {
 	if tx == nil {
 		return fmt.Errorf("IngestCloseTx: nil tx")
 	}
 	txid := tx.TxSha()
-	// no matter what we close
+	// double check -- does this tx actually close the channel?
+	if !(len(tx.TxIn) == 1 && OutPointsEqual(tx.TxIn[0].PreviousOutPoint, q.Op)) {
+		return fmt.Errorf("tx %s doesn't spend channel outpoint %s",
+			txid.String(), q.Op.String())
+	}
+	// hardcode here now... need to save to qchan struct I guess
+	q.TimeOut = 5
+	// no matter what we close.  this is redundant now? remove...
 	q.CloseTXO.Closed = true
 	q.CloseTXO.CloseTxid = txid
-	q.CloseTXO.Height = height
+	// height should already be set here.
+	q.CloseTXO.CloseHeight = 0
 
+	// first, check if cooperative
 	txIdx := GetStateIdxFromTx(tx)
-	if txIdx == 0 || len(tx.TxOut) != 2 { // must have been cooperative
-		// leave spendable false, op:0... so we're done
+	if txIdx == 0 || len(tx.TxOut) != 2 {
+		// must have been cooperative, or something else we don't recognize
+		// nothing spendable, so we're done
 		return nil
 	}
-	if txIdx == q.State.StateIdx { // broken at correct height
-
-		// nothing grabbable;
-		//		if bytes.Equal(tx.TxOut[0].PkScript[2:22], q.MyRefundAdr[:]) || bytes.Equal(tx.TxOut[1].PkScript[2:22], q.MyRefundAdr[:]) {
-		//		}
-
-		// I broke; spendable
+	// not cooperative, sort outputs into PKH and SH
+	if len(tx.TxOut[0].PkScript) == 34 {
+		q.CloseTXO.SHIdx = 0 // redundant because starts as 0
+		q.CloseTXO.SHamt = tx.TxOut[0].Value
+		q.CloseTXO.PKHIdx = 1
+		q.CloseTXO.PKHamt = tx.TxOut[1].Value
+	} else {
+		q.CloseTXO.PKHIdx = 0 // redundant...
+		q.CloseTXO.PKHamt = tx.TxOut[0].Value
+		q.CloseTXO.SHIdx = 1
+		q.CloseTXO.SHamt = tx.TxOut[1].Value
+	}
+	// make sure PKH output is actually PKH
+	if len(tx.TxOut[q.CloseTXO.PKHIdx].PkScript) != 22 {
+		return fmt.Errorf("non-p2wsh output is length %d, expect 22",
+			len(tx.TxOut[q.CloseTXO.PKHIdx].PkScript))
 	}
 
-	if txIdx < q.State.StateIdx { // invalid previous state, can be grabbed
-
+	// next, check if PKH is mine
+	if bytes.Equal(tx.TxOut[q.CloseTXO.PKHIdx].PkScript[2:22],
+		btcutil.Hash160(q.MyRefundPub[:])) {
+		q.CloseTXO.MyPKH = true
+	} else {
+		// not my PKH, so must be my SH.  Set spendable height.
+		q.CloseTXO.SHSpendableHeight = int32(q.TimeOut) + q.CloseTXO.CloseHeight
+		q.CloseTXO.MySH = true
+		// PKH and SH dealt with; done.
+		return nil
+	}
+	// OK, it's my PKH, but can I grab?
+	if txIdx < q.State.StateIdx {
+		// invalid previous state, can be grabbed!
+		q.CloseTXO.SHSpendableHeight = -1 // -1 means grabbable!
+		q.CloseTXO.MySH = true
 	}
 
-	if txIdx > q.State.StateIdx { // invalid FUTURE state.  Can't do anything
-
-	}
+	//	if txIdx > q.State.StateIdx {
+	// invalid FUTURE state.  Is this even an error..?
+	// don't error for now.  can't do anything anyway.
+	//	}
 
 	return nil
 }
@@ -219,40 +253,45 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	if !q.CloseTXO.Closed { // still open, finish here
 		return nil
 	}
-	// closed so get the spending tx
-	spendTx, err := t.GetTx(&q.CloseTXO.CloseTxid)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("\tCLOSED. Spent by: %s", spendTx.TxSha().String())
-	// if nlocktime is outside this range, we assume it was cooperatively
-	// closed, so no further action is needed.
-	txIdx := GetStateIdxFromTx(spendTx)
 
-	if txIdx == 0 {
-		fmt.Printf(" COOP\n")
+	fmt.Printf("\tCLOSED at height %d by tx: %s\n",
+		q.CloseTXO.CloseHeight, q.CloseTXO.CloseTxid.String())
+	if !q.CloseTXO.MyPKH && !q.CloseTXO.MySH {
+		fmt.Printf("\tcooperative close.\n")
 		return nil
 	}
 
-	// figure out who broke it
-	if len(spendTx.TxOut) != 2 {
-		return fmt.Errorf("break TX has %d outputs?!?", len(spendTx.TxOut))
-	}
-
-	if bytes.Equal(spendTx.TxOut[0].PkScript[2:22], btcutil.Hash160(q.TheirRefundPub[:])) ||
-		bytes.Equal(spendTx.TxOut[1].PkScript[2:22], btcutil.Hash160(q.TheirRefundPub[:])) {
-		fmt.Printf(" non-coop by me.\n")
-	} else {
-		fmt.Printf(" non-coop by them\n")
-		// detect bad state
-		if txIdx != q.State.StateIdx {
-			fmt.Printf("\tINVALID CHANNEL BREAK! State %d but tx state %d\n",
-				q.State.StateIdx, txIdx)
-		} else {
-			fmt.Printf("\tchannel close OK, state %d, tx state %d\n",
-				q.State.StateIdx, txIdx)
+	// display PKH output if mine
+	if q.CloseTXO.MyPKH {
+		fmt.Printf("\tPKH output is mine, amt: %d\n", q.CloseTXO.PKHamt)
+		// height -1 means invalid; 0 means unconfirmed.
+		if q.CloseTXO.PKHHeight > -1 {
+			fmt.Printf("\t\tspent at height %d by tx %s\n",
+				q.CloseTXO.PKHHeight, q.CloseTXO.PKHTxid.String())
 		}
 	}
+
+	// for SHspendable, -1 means grabbable, positive means wait & spend
+	if q.CloseTXO.SHSpendableHeight == -1 {
+		fmt.Printf("\tSH output is grabbable, amt: %d\n", q.CloseTXO.SHamt)
+		fmt.Printf("\t\t I grabbed it at height %d with tx %s\n",
+			q.CloseTXO.SHHeight, q.CloseTXO.SHTxid.String())
+		return nil
+	}
+
+	// wait & spend
+	if q.CloseTXO.MySH {
+		fmt.Printf("\tSH output is mine, amt: %d\n", q.CloseTXO.SHamt)
+		// -1 means invalid; 0 means unconfirmed
+		if q.CloseTXO.SHHeight > -1 {
+			fmt.Printf("\t\tspent at height %d by tx %s\n",
+				q.CloseTXO.SHHeight, q.CloseTXO.SHTxid)
+		} else {
+			fmt.Printf("\t\tspendable at height %d\n",
+				q.CloseTXO.SHSpendableHeight)
+		}
+	}
+
 	return nil
 }
 
@@ -959,43 +998,66 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 /*----- serialization for CloseTXOs -------
 
   serialization:
-bytes   desc   at offset
+closetxid	32
+PKHtxid		32
+SHtxid		32
+closeheight	4
+pkhheight	4
+shheight		4
 
-36		op		0
-4		height	36
-32		spend	40
-4		height	72
-32		grab
+right now, only saves closetxid
 
-
-..... but for now it's just the close TXID
 */
 
-func (q *Qclosetxo) ToBytes() ([]byte, error) {
-	if q == nil {
+func (c *QCloseData) ToBytes() ([]byte, error) {
+	if c == nil {
 		return nil, fmt.Errorf("nil qclose")
 	}
-	return q.CloseTxid.Bytes(), nil
+	b := make([]byte, 108)
+	copy(b[:32], c.CloseTxid.Bytes())
+	copy(b[32:64], c.PKHTxid.Bytes())
+	copy(b[64:96], c.SHTxid.Bytes())
+	copy(b[96:100], I32tB(c.CloseHeight))
+	copy(b[100:104], I32tB(c.PKHHeight))
+	copy(b[96:100], I32tB(c.SHHeight))
+	return b, nil
 }
 
 // QCloseFromBytes deserializes a Qclose.  Note that a nil slice
 // gives an empty / non closed qclose.
-func QCloseFromBytes(b []byte) (Qclosetxo, error) {
-	var q Qclosetxo
+func QCloseFromBytes(b []byte) (QCloseData, error) {
+	var c QCloseData
+	var err error
 	if len(b) == 0 { // empty is OK
-		return q, nil
+		return c, nil
 
 	}
-	if len(b) < 32 {
-		return q, fmt.Errorf("close data %d bytes, expect 32", len(b))
+	if len(b) < 108 {
+		return c, fmt.Errorf("close data %d bytes, expect 108", len(b))
 	}
 	var empty wire.ShaHash
-	q.CloseTxid.SetBytes(b)
-	if !q.CloseTxid.IsEqual(&empty) {
-		q.Closed = true
+	c.CloseTxid.SetBytes(b[:32])
+	if !c.CloseTxid.IsEqual(&empty) {
+		c.Closed = true
 	}
+	c.CloseHeight = BtI32(b[96:100])
 
-	return q, nil
+	err = c.PKHTxid.SetBytes(b[32:64])
+	if err != nil {
+		return c, err
+	}
+	err = c.SHTxid.SetBytes(b[64:96])
+	if err != nil {
+		return c, err
+	}
+	// check for zero txids, set heights to -1 if zero
+	if c.PKHTxid.IsEqual(&empty) {
+		c.PKHHeight = -1
+	}
+	if c.SHTxid.IsEqual(&empty) {
+		c.SHHeight = -1
+	}
+	return c, nil
 }
 
 //type Qclosetxo struct {
