@@ -79,7 +79,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 
-	//rpcShellListen()
+	//	rpcShellListen()
 
 	// main shell loop
 	for {
@@ -434,6 +434,23 @@ func Bal(args []string) error {
 	}
 
 	fmt.Printf(" ----- Account Balance ----- \n")
+	fmt.Printf(" ----- Channels ----- \n")
+	qcs, err := SCon.TS.GetAllQchans()
+	if err != nil {
+		return err
+	}
+
+	for _, q := range qcs {
+		if q.CloseData.Closed {
+			fmt.Printf("CLOSED ")
+
+		} else {
+			fmt.Printf("CHANNEL")
+		}
+		fmt.Printf(" %s h:%d (%d,%d) cap: %d\n",
+			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
+	}
+	fmt.Printf(" ----- utxos ----- \n")
 	rawUtxos, err := SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
@@ -449,7 +466,7 @@ func Bal(args []string) error {
 	for i, u := range allUtxos {
 		fmt.Printf("utxo %d %s h:%d k:%d a %d",
 			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
-		if u.IsWit {
+		if u.SpendableBy > 0 {
 			fmt.Printf(" WIT")
 		}
 		fmt.Printf("\n")
@@ -459,21 +476,7 @@ func Bal(args []string) error {
 		}
 	}
 
-	qcs, err := SCon.TS.GetAllQchans()
-	if err != nil {
-		return err
-	}
-	for _, q := range qcs {
-		if q.CloseTXO.Closed {
-			fmt.Printf("CLOSED ")
-		} else {
-			fmt.Printf("CHANNEL")
-		}
-		fmt.Printf(" %s h:%d (%d,%d) cap: %d\n",
-			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-	}
-
-	height, _ := SCon.TS.GetDBSyncHeight()
+	height, err := SCon.TS.GetDBSyncHeight()
 	if err != nil {
 		return err
 	}
@@ -590,7 +593,7 @@ func Sweep(args []string) error {
 	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 {
-			err = SCon.SendDrop(allUtxos[i], adr)
+			_, err = SCon.SendDrop(allUtxos[i], adr)
 			if err != nil {
 				return err
 			}

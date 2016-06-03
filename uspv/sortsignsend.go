@@ -115,6 +115,11 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	var score int64
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
+	curHeight, err := s.TS.GetDBSyncHeight()
+	if err != nil {
+		return nil, 0, err
+	}
+
 	rawUtxos, err := s.TS.GetAllUtxos()
 	if err != nil {
 		return nil, 0, err
@@ -124,8 +129,10 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	// start with utxos sorted by value.
 
 	for _, utxo := range rawUtxos {
-		score += utxo.Value
-		allUtxos = append(allUtxos, *utxo)
+		if utxo.SpendableBy <= curHeight {
+			score += utxo.Value
+			allUtxos = append(allUtxos, *utxo)
+		}
 	}
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
@@ -145,7 +152,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 		//			continue
 		//		}
 
-		if ow && !utxo.IsWit {
+		if ow && utxo.SpendableBy != 1 {
 			continue // skip non-witness
 		}
 		// why are 0-value outputs a thing..?
@@ -159,7 +166,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 		if nokori < 0 {
 			var byteSize int64
 			for _, txo := range rSlice {
-				if txo.IsWit {
+				if txo.SpendableBy > 0 {
 					byteSize += 70 // vsize of wit inputs is ~68ish
 				} else {
 					byteSize += 130 // vsize of non-wit input is ~130
@@ -175,7 +182,12 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	return rSlice, -nokori, nil
 }
 
-func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
+// SendDrop sends 2 chained transactions; one to a 2drop script, and then
+// one spending that to an address.
+// Note that this is completely insecure for any purpose, and
+// all it does is waste space.
+// Returns the 2nd, large tx's txid.
+func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	var err error
 	// fixed fee
 	fee := int64(5000)
@@ -201,19 +213,19 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 
 	// build input
 	var prevPKs []byte
-	if u.IsWit {
+	if u.SpendableBy > 0 {
 		//		tx.Flags = 0x01
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
 			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
 		prevPKs, err = txscript.PayToAddrScript(wa)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else { // otherwise generate directly
 		prevPKs, err = txscript.PayToAddrScript(
 			s.TS.Adrs[u.KeyIdx].PkhAdr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	tx.AddTxIn(wire.NewTxIn(&u.Op, prevPKs, nil))
@@ -224,24 +236,24 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 
 	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
 	if priv == nil {
-		return fmt.Errorf("SendDrop: nil privkey")
+		return nil, fmt.Errorf("SendDrop: nil privkey")
 	}
 
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.IsWit {
+	if u.SpendableBy > 0 {
 		wit, err = txscript.WitnessScript(
 			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		sig, err = txscript.SignatureScript(
 			tx, 0, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -255,7 +267,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	}
 	err = s.NewOutgoingTx(tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tx1id := tx.TxSha()
 	sendAmt2 := sendAmt - fee
@@ -265,7 +277,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	// add single output
 	outAdrScript, err := txscript.PayToAddrScript(adr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	txout2 := wire.NewTxOut(sendAmt2, outAdrScript)
@@ -275,17 +287,18 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) error {
 	dropIn.Witness = make([][]byte, 17)
 
 	for i, _ := range dropIn.Witness {
-		dropIn.Witness[i] = make([]byte, 256)
+		dropIn.Witness[i] = make([]byte, 512)
 		_, err := rand.Read(dropIn.Witness[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	dropIn.Witness[16] = outpre
 	tx2.AddTxIn(dropIn)
+	txid := tx2.TxSha()
 	//	fmt.Printf("droptx: %s", TxToString(tx2))
 
-	return s.NewOutgoingTx(tx2)
+	return &txid, s.NewOutgoingTx(tx2)
 }
 
 func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
@@ -304,7 +317,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	tx.AddTxOut(txout)
 
 	var prevPKs []byte
-	if !u.IsWit {
+	if u.SpendableBy == 0 {
 		//		tx.Flags = 0x01
 		oa, err := btcutil.NewAddressPubKeyHash(
 			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
@@ -332,16 +345,16 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	}
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.IsWit {
-		wit, err = txscript.WitnessScript(
-			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
+	if u.SpendableBy == 0 {
+		sig, err = txscript.SignatureScript(
+			tx, 0, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		sig, err = txscript.SignatureScript(
-			tx, 0, tx.TxIn[0].SignatureScript,
+		wit, err = txscript.WitnessScript(
+			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
 			return nil, err
@@ -361,8 +374,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	return &txid, s.NewOutgoingTx(tx)
 }
 
-// SendCoins does send coins, but it's very rudimentary
-// wit makes it into p2wpkh.  Which is not yet spendable.
+// SendCoins sends coins.
 func (s *SPVCon) SendCoins(
 	adrs []btcutil.Address, sendAmts []int64) (*wire.ShaHash, error) {
 
@@ -406,8 +418,7 @@ func (s *SPVCon) SendCoins(
 	// add inputs into tx
 	for _, utxo := range utxos {
 		var prevPKScript []byte
-		if !utxo.IsWit {
-			//			tx.Flags = 0x01
+		if utxo.SpendableBy == 0 {
 			oa, err := btcutil.NewAddressPubKeyHash(
 				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
 			prevPKScript, err = txscript.PayToAddrScript(oa)
@@ -454,7 +465,7 @@ func (s *SPVCon) SendCoins(
 
 		// This is where witness based sighash types need to happen
 		// sign into stash
-		if utxos[i].IsWit {
+		if utxos[i].SpendableBy > 0 {
 			witStash[i], err = txscript.WitnessScript(
 				tx, hCache, i, utxos[i].Value, txin.SignatureScript,
 				txscript.SigHashAll, priv, true)

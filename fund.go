@@ -218,7 +218,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// but we can't actually check that.
 	qc, err := SCon.TS.SaveFundTx(op, amt, peerArr, theirRefundPub, cNonce)
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
 		return
 	}
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
@@ -226,7 +226,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// it doesn't involve our utxos / adrs.
 	err = SCon.TS.RefilterLocal()
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
 		return
 	}
 
@@ -244,29 +244,29 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler SaveQchanState err %s", err.Error())
 		return
 	}
 	// load ... the thing I just saved.  ugly.
 	qc, err = SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler GetQchan err %s", err.Error())
 		return
 	}
 	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler MakeTheirHAKDPubkey err %s", err.Error())
 		return
 	}
 	sig, err := SCon.TS.SignState(qc)
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler SignState err %s", err.Error())
 		return
 	}
 
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
-		fmt.Printf("QChanDescHandler err %s", err.Error())
+		fmt.Printf("QChanDescHandler ElkSnd err %s", err.Error())
 		return
 	}
 	// ACK the channel address, which causes the funder to sign / broadcast

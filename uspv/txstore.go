@@ -36,12 +36,25 @@ type Utxo struct { // cash money.
 	Op wire.OutPoint // where
 
 	// all the info needed to spend
-	AtHeight int32  // block height where this tx was confirmed, 0 for unconf
-	KeyIdx   uint32 // index for private key needed to sign / spend
-	Value    int64  // higher is better
+	KeyIdx uint32 // index for private key needed to sign / spend
+	Value  int64  // higher is better
 
-	//		IsCoinbase bool          // can't spend for a while
-	IsWit bool // true if p2wpkh output
+	// not actually needed but nice to know
+	AtHeight int32 // block height where this tx was confirmed, 0 for unconf
+
+	// SpendableAt indicates the height at which the utxo can be spent.
+	// for most utxos, they can be spent whenever.  3 values have other meanings:
+	// -1 means grabbable invalid channel close.
+	// 0 means normal PKH, non-witness
+	// 1 means normal WPKH, witnessy
+	// > 1 means time-locked channel close
+	SpendableBy int32 // if a SH channel close output (or coinbase!)
+
+	// if a channel close tx output, fromPeer will be non-zero
+	// in that case, KeyIdx is the PeerIdx for key derivation
+	FromPeer uint32
+
+	//	IsWit bool // true if p2wpkh output
 }
 
 // Stxo is a utxo that has moved on.
@@ -224,9 +237,10 @@ byte length   desc   at offset
 4	height	36
 4	keyidx	40
 8	amt		44
-1	flag		52
+4	spndble 52
+4	frmpeer 56
 
-end len 	53
+end len 	60
 */
 
 // ToBytes turns a Utxo into some bytes.
@@ -259,13 +273,13 @@ func (u *Utxo) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// last byte indicates tx witness flags ( tx[5] from serialized tx)
-	// write a 1 at the end for p2wpkh (same as flags byte)
-	witByte := byte(0x00)
-	if u.IsWit {
-		witByte = 0x01
+	// write 4 byte spendable height value
+	err = binary.Write(&buf, binary.BigEndian, u.SpendableBy)
+	if err != nil {
+		return nil, err
 	}
-	err = buf.WriteByte(witByte)
+	// write 4 byte from peer value
+	err = binary.Write(&buf, binary.BigEndian, u.FromPeer)
 	if err != nil {
 		return nil, err
 	}
@@ -282,8 +296,8 @@ func UtxoFromBytes(b []byte) (Utxo, error) {
 		return u, fmt.Errorf("nil input slice")
 	}
 	buf := bytes.NewBuffer(b)
-	if buf.Len() < 53 { // utxos are 53 bytes
-		return u, fmt.Errorf("Got %d bytes for utxo, expect 53", buf.Len())
+	if buf.Len() < 60 { // utxos are 53 bytes
+		return u, fmt.Errorf("Got %d bytes for utxo, expect 60", buf.Len())
 	}
 	// read 32 byte txid
 	err := u.Op.Hash.SetBytes(buf.Next(32))
@@ -310,13 +324,15 @@ func UtxoFromBytes(b []byte) (Utxo, error) {
 	if err != nil {
 		return u, err
 	}
-	// read 1 byte witness flags
-	witByte, err := buf.ReadByte()
+	// read 4 byte spendable height value
+	err = binary.Read(buf, binary.BigEndian, &u.SpendableBy)
 	if err != nil {
 		return u, err
 	}
-	if witByte != 0x00 {
-		u.IsWit = true
+	// read 4 byte from peer value
+	err = binary.Read(buf, binary.BigEndian, &u.FromPeer)
+	if err != nil {
+		return u, err
 	}
 
 	return u, nil
@@ -362,20 +378,20 @@ func (s *Stxo) ToBytes() ([]byte, error) {
 }
 
 // StxoFromBytes turns bytes into a Stxo.
-// first take the first 53 bytes as a utxo, then the next 36 for how it's spent.
+// first take the first 60 bytes as a utxo, then the next 36 for how it's spent.
 func StxoFromBytes(b []byte) (Stxo, error) {
 	var s Stxo
-	if len(b) < 89 {
+	if len(b) < 96 {
 		return s, fmt.Errorf("Got %d bytes for stxo, expect 89", len(b))
 	}
 
-	u, err := UtxoFromBytes(b[:53])
+	u, err := UtxoFromBytes(b[:60])
 	if err != nil {
 		return s, err
 	}
 	s.Utxo = u // assign the utxo
 
-	buf := bytes.NewBuffer(b[53:]) // make buffer for spend data
+	buf := bytes.NewBuffer(b[60:]) // make buffer for spend data
 
 	// read 4 byte spend height
 	err = binary.Read(buf, binary.BigEndian, &s.SpendHeight)

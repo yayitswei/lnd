@@ -347,6 +347,11 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	return ts.IngestMany([]*wire.MsgTx{tx}, height)
 }
 
+//TODO !!!!!!!!!!!!!!!111
+// IngestMany() is way too long and complicated and ugly.  It's like almost
+// 300 lines.  Need to refactor and clean it up / break it up in to little
+// pieces
+
 // IngestMany puts txs into the DB atomically.  This can result in a
 // gain, a loss, or no result.  Gain or loss in satoshis is returned.
 // This function seems too big and complicated.  Maybe can split it up
@@ -423,16 +428,16 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		for j, out := range tx.TxOut {
 			for k, ascr := range aPKscripts {
 				// detect p2wpkh
-				witBool := false
+				spendableBy := int32(0)
 				if bytes.Equal(out.PkScript, wPKscripts[k]) {
-					witBool = true
+					spendableBy = 1
 				}
-				if bytes.Equal(out.PkScript, ascr) || witBool { // new utxo found
+				if bytes.Equal(out.PkScript, ascr) || spendableBy == 1 { // found one
 					var newu Utxo // create new utxo and copy into it
 					newu.AtHeight = height
 					newu.KeyIdx = ts.Adrs[k].KeyIdx
 					newu.Value = out.Value
-					newu.IsWit = witBool // copy witness version from pkscript
+					newu.SpendableBy = spendableBy // 1 for witness
 					var newop wire.OutPoint
 					newop.Hash = *cachedShas[i]
 					newop.Index = uint32(j)
@@ -470,6 +475,11 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					return nil // non-bucket
 				}
 				pr := prs.Bucket(idPub) // go into this peer's bucket
+
+				//TODO optimization: could only check 0conf channels,
+				// or ignore 0conf and only accept spv proofs.
+				// Then we could only look for the spentOP hash, so that
+				// Ingest() only detects channel closes.
 				return pr.ForEach(func(opBytes, nthin []byte) error {
 					if nthin != nil {
 						//	fmt.Printf("val %x\n", nthin)
@@ -509,18 +519,34 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					for i, spentOP := range spentOPs {
 						if bytes.Equal(spentOP, opBytes) {
 							// this multixo is now spent.
-							// CHANGE THIS!  can't actually delete.
 							hitTxs[spentTxIdx[i]] = true
-
-							// set qchan's spending txid
-							hitQChan.CloseTXO.CloseTxid = *cachedShas[spentTxIdx[i]]
-							// save to close bucket
-							closeBytes, err := hitQChan.CloseTXO.ToBytes()
+							// set qchan's spending txid and height
+							hitQChan.CloseData.CloseTxid = *cachedShas[spentTxIdx[i]]
+							hitQChan.CloseData.CloseHeight = height
+							hitQChan.CloseData.Closed = true
+							// serialize
+							closeBytes, err := hitQChan.CloseData.ToBytes()
 							if err != nil {
 								return err
 							}
-							// save qchan back in the bucket
-							return qchanBucket.Put(KEYqclose, closeBytes)
+							// save to close bucket
+							err = qchanBucket.Put(KEYqclose, closeBytes)
+							if err != nil {
+								return err
+							}
+							// generate utxos from the close tx, if any.
+							ctxos, err := hitQChan.GetCloseTxos(txs[spentTxIdx[i]])
+							if err != nil {
+								return err
+							}
+							// serialize utxos to save later
+							for _, ctxo := range ctxos {
+								b, err := ctxo.ToBytes()
+								if err != nil {
+									return err
+								}
+								nUtxoBytes = append(nUtxoBytes, b)
+							}
 						}
 					}
 					return nil

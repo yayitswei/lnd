@@ -196,7 +196,7 @@ func (ts *TxStore) MakeFundTx(
 		mUtxo.AtHeight = -1 // not even broadcast yet
 		mUtxo.KeyIdx = cIdx
 		mUtxo.Value = amt
-		mUtxo.IsWit = true // multi/chan always wit
+		mUtxo.SpendableBy = 1 // multi/chan always wit
 		mUtxo.Op = *op
 		var qc Qchan
 		qc.Utxo = mUtxo
@@ -276,7 +276,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		cUtxo.AtHeight = -1 // not even broadcast yet
 		cUtxo.KeyIdx = cIdx
 		cUtxo.Value = amt
-		cUtxo.IsWit = true // multi/chan always wit
+		cUtxo.SpendableBy = 1 // multi/chan always wit
 		cUtxo.Op = *op
 
 		qc.Utxo = cUtxo
@@ -421,7 +421,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	if err != nil {
 		return nil, err
 	}
-	qc.CloseTXO = qcls
+	qc.CloseData = qcls
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	copy(qc.PeerId[:], peerPub)
@@ -627,6 +627,18 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 			})
 			return nil
 		})
+		for _, qc := range qChans {
+			if qc.CloseData.Closed {
+				clTx, err := ts.GetTx(&qc.CloseData.CloseTxid)
+				if err != nil {
+					return err
+				}
+				_, err = qc.GetCloseTxos(clTx)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -670,12 +682,12 @@ func (ts *TxStore) GetQchan(
 		return nil, err
 	}
 	// decode close tx, if channel is closed
-	if qc.CloseTXO.Closed {
-		clTx, err := ts.GetTx(&qc.CloseTXO.CloseTxid)
+	if qc.CloseData.Closed {
+		clTx, err := ts.GetTx(&qc.CloseData.CloseTxid)
 		if err != nil {
 			return nil, err
 		}
-		err = qc.DecodeCloseTx(clTx)
+		_, err = qc.GetCloseTxos(clTx)
 		if err != nil {
 			return nil, err
 		}

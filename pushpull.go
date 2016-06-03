@@ -11,10 +11,11 @@ import (
 )
 
 // Grab the coins that are rightfully yours! Plus some more.
+// For right now, spend all outputs from channel close.
 func Grab(args []string) error {
 	// need args, fail
 	if len(args) < 2 {
-		return fmt.Errorf("need args: recov peerIdx chanIdx")
+		return fmt.Errorf("need args: grab peerIdx chanIdx")
 	}
 
 	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
@@ -31,15 +32,44 @@ func Grab(args []string) error {
 		return err
 	}
 
-	fmt.Printf("try to recover (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
+	if !qc.CloseData.Closed {
+		return fmt.Errorf("channel (%d,%d) not closed", peerIdx, cIdx)
+	}
+	fmt.Printf("try to spend from closed (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
 
-	rtx, err := SCon.TS.RemedyTx(qc)
+	clTx, err := SCon.TS.GetTx(&qc.CloseData.CloseTxid)
+	if err != nil {
+		return err
+	}
+	ctxos, err := qc.GetCloseTxos(clTx)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf(uspv.TxToString(rtx))
-	return SCon.NewOutgoingTx(rtx)
+	if len(ctxos) < 2 {
+		return fmt.Errorf("\tcooperative close.\n")
+	}
+
+	fmt.Printf("\t\tINVALID CLOSE!!!11\n")
+
+	fmt.Printf("\t\twill figure out later.\n")
+	// desination output
+	//	DestTxOut, err := SCon.TS.NewChangeOut(0)
+	//	if err != nil {
+	//		return err
+	//	}
+
+	//	rtx, err := SCon.TS.RemedyTx(qc, DestTxOut)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	fmt.Printf(uspv.TxToString(rtx))
+	//	err = SCon.NewOutgoingTx(rtx)
+	//	if err != nil {
+	//		return err
+	//	}
+
+	return nil
 }
 
 // BreakChannel closes the channel without the other party's involvement.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/uspv"
 
+	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 )
 
@@ -169,7 +170,12 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 && u.Value > 10000 {
-			txid, err := SCon.SendOne(allUtxos[i], adr)
+			var txid *wire.ShaHash
+			if args.Drop {
+				txid, err = SCon.SendDrop(allUtxos[i], adr)
+			} else {
+				txid, err = SCon.SendOne(allUtxos[i], adr)
+			}
 			if err != nil {
 				return err
 			}
