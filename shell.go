@@ -466,8 +466,11 @@ func Bal(args []string) error {
 	for i, u := range allUtxos {
 		fmt.Printf("utxo %d %s h:%d k:%d a %d",
 			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
-		if u.SpendableBy > 0 {
-			fmt.Printf(" WIT")
+		if u.SpendLag > 0 {
+			fmt.Printf(" s:%d", u.SpendLag)
+		}
+		if u.FromPeer != 0 {
+			fmt.Printf(" p:%d", u.FromPeer)
 		}
 		fmt.Printf("\n")
 		score += u.Value

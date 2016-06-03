@@ -196,7 +196,7 @@ func (ts *TxStore) MakeFundTx(
 		mUtxo.AtHeight = -1 // not even broadcast yet
 		mUtxo.KeyIdx = cIdx
 		mUtxo.Value = amt
-		mUtxo.SpendableBy = 1 // multi/chan always wit
+		mUtxo.SpendLag = 1 // multi/chan always wit
 		mUtxo.Op = *op
 		var qc Qchan
 		qc.Utxo = mUtxo
@@ -276,7 +276,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		cUtxo.AtHeight = -1 // not even broadcast yet
 		cUtxo.KeyIdx = cIdx
 		cUtxo.Value = amt
-		cUtxo.SpendableBy = 1 // multi/chan always wit
+		cUtxo.SpendLag = 1 // multi/chan always wit
 		cUtxo.Op = *op
 
 		qc.Utxo = cUtxo
@@ -417,11 +417,10 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	if err != nil {
 		return nil, err
 	}
-	qcls, err := QCloseFromBytes(bkt.Get(KEYqclose))
+	qc.CloseData, err = QCloseFromBytes(bkt.Get(KEYqclose))
 	if err != nil {
 		return nil, err
 	}
-	qc.CloseData = qcls
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	copy(qc.PeerId[:], peerPub)

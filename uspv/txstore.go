@@ -44,11 +44,11 @@ type Utxo struct { // cash money.
 
 	// SpendableAt indicates the height at which the utxo can be spent.
 	// for most utxos, they can be spent whenever.  3 values have other meanings:
-	// -1 means grabbable invalid channel close.
+	// -1 means immediately grabbable invalid channel close.
 	// 0 means normal PKH, non-witness
 	// 1 means normal WPKH, witnessy
-	// > 1 means time-locked channel close
-	SpendableBy int32 // if a SH channel close output (or coinbase!)
+	// > 1 means time-locked channel close. (so min supported delay is 2 blocks)
+	SpendLag int32 // if a SH channel close output (or coinbase!)
 
 	// if a channel close tx output, fromPeer will be non-zero
 	// in that case, KeyIdx is the PeerIdx for key derivation
@@ -274,7 +274,7 @@ func (u *Utxo) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 	// write 4 byte spendable height value
-	err = binary.Write(&buf, binary.BigEndian, u.SpendableBy)
+	err = binary.Write(&buf, binary.BigEndian, u.SpendLag)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func UtxoFromBytes(b []byte) (Utxo, error) {
 		return u, err
 	}
 	// read 4 byte spendable height value
-	err = binary.Read(buf, binary.BigEndian, &u.SpendableBy)
+	err = binary.Read(buf, binary.BigEndian, &u.SpendLag)
 	if err != nil {
 		return u, err
 	}

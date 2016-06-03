@@ -186,7 +186,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			len(tx.TxOut[pkhIdx].PkScript))
 	}
 
-	// next, check if PKH is mine
+	// next, check if SH is mine (implied by PKH is not mine)
 	if !bytes.Equal(
 		tx.TxOut[pkhIdx].PkScript[2:22], btcutil.Hash160(q.MyRefundPub[:])) {
 		// ------------pkh not mine; sh is mine
@@ -200,7 +200,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		shTxo.KeyIdx = q.KeyIdx
 		shTxo.FromPeer = q.PeerIdx
 		shTxo.Value = tx.TxOut[shIdx].Value
-		shTxo.SpendableBy = q.CloseData.CloseHeight + int32(q.TimeOut)
+		shTxo.SpendLag = int32(q.TimeOut)
 		cTxos[0] = shTxo
 		// if SH is mine we're done
 		return cTxos, nil
@@ -213,7 +213,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 	pkhTxo.KeyIdx = q.KeyIdx
 	pkhTxo.FromPeer = q.PeerIdx
 	pkhTxo.Value = tx.TxOut[pkhIdx].Value
-	pkhTxo.SpendableBy = 1 // 1 for witness, non time locked
+	pkhTxo.SpendLag = 1 // 1 for witness, non time locked
 	cTxos[0] = pkhTxo
 
 	// OK, it's my PKH, but can I grab the SH???
@@ -229,7 +229,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		shTxo.KeyIdx = q.KeyIdx
 		shTxo.FromPeer = q.PeerIdx
 		shTxo.Value = tx.TxOut[shIdx].Value
-		shTxo.SpendableBy = -1
+		shTxo.SpendLag = -1
 		cTxos = append(cTxos, shTxo)
 	}
 
@@ -284,7 +284,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 		fmt.Printf("\t\tINVALID CLOSE!!!11\n")
 	}
 	for i, u := range ctxos {
-		fmt.Printf("\t\t%d) amt: %d spendable: %d\n", i, u.Value, u.SpendableBy)
+		fmt.Printf("\t\t%d) amt: %d spendable: %d\n", i, u.Value, u.SpendLag)
 	}
 	return nil
 }

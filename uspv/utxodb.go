@@ -437,7 +437,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					newu.AtHeight = height
 					newu.KeyIdx = ts.Adrs[k].KeyIdx
 					newu.Value = out.Value
-					newu.SpendableBy = spendableBy // 1 for witness
+					newu.SpendLag = spendableBy // 1 for witness
 					var newop wire.OutPoint
 					newop.Hash = *cachedShas[i]
 					newop.Index = uint32(j)
@@ -475,25 +475,38 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					return nil // non-bucket
 				}
 				pr := prs.Bucket(idPub) // go into this peer's bucket
-
+				pIdx := BtU32(pr.Get(KEYIdx))
+				if pIdx == 0 {
+					return fmt.Errorf("Peer %x has no index", idPub)
+				}
 				//TODO optimization: could only check 0conf channels,
 				// or ignore 0conf and only accept spv proofs.
 				// Then we could only look for the spentOP hash, so that
 				// Ingest() only detects channel closes.
-				return pr.ForEach(func(opBytes, nthin []byte) error {
+				return pr.ForEach(func(qcOpBytes, nthin []byte) error {
 					if nthin != nil {
 						//	fmt.Printf("val %x\n", nthin)
 						return nil // non-bucket / outpoint
 					}
-					qchanBucket := pr.Bucket(opBytes)
+					qchanBucket := pr.Bucket(qcOpBytes)
 					if qchanBucket == nil {
 						return nil // nothing stored / not a bucket
 					}
-					// found a channel, deserialize
+					// found a channel, deserialize part of it.
+					// this is not the full channel data; only using the
+					// outpoint.  full data will be loaded if we need it
+					// (when the channel is getting closed.)
 					hitQChan, err := QchanFromBytes(qchanBucket.Get(KEYutxo))
 					if err != nil {
 						return err
 					}
+					hitQChan.PeerIdx = pIdx
+					// will need state to see if grabbable
+					hitQChan.State, err = StatComFromBytes(qchanBucket.Get(KEYState))
+					if err != nil {
+						return err
+					}
+
 					// check if we gain a known txid but unknown tx
 					for i, txid := range cachedShas {
 						if txid.IsEqual(&hitQChan.Op.Hash) {
@@ -515,9 +528,9 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					}
 					// check if it's spending the multiout
 					// there's some problem here as it doesn't always detect it
-					// properly...
+					// properly...? still has this problem....
 					for i, spentOP := range spentOPs {
-						if bytes.Equal(spentOP, opBytes) {
+						if bytes.Equal(spentOP, qcOpBytes) {
 							// this multixo is now spent.
 							hitTxs[spentTxIdx[i]] = true
 							// set qchan's spending txid and height
@@ -529,6 +542,11 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							if err != nil {
 								return err
 							}
+
+							// need my pubkey too
+							hitQChan.MyRefundPub = ts.GetRefundPubkeyBytes(
+								pIdx, hitQChan.KeyIdx)
+
 							// save to close bucket
 							err = qchanBucket.Put(KEYqclose, closeBytes)
 							if err != nil {

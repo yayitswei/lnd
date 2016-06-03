@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/roasbeef/btcd/blockchain"
+	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -129,7 +130,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	// start with utxos sorted by value.
 
 	for _, utxo := range rawUtxos {
-		if utxo.SpendableBy <= curHeight {
+		if utxo.SpendLag <= curHeight {
 			score += utxo.Value
 			allUtxos = append(allUtxos, *utxo)
 		}
@@ -152,7 +153,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 		//			continue
 		//		}
 
-		if ow && utxo.SpendableBy != 1 {
+		if ow && utxo.SpendLag != 1 {
 			continue // skip non-witness
 		}
 		// why are 0-value outputs a thing..?
@@ -166,7 +167,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 		if nokori < 0 {
 			var byteSize int64
 			for _, txo := range rSlice {
-				if txo.SpendableBy > 0 {
+				if txo.SpendLag > 0 {
 					byteSize += 70 // vsize of wit inputs is ~68ish
 				} else {
 					byteSize += 130 // vsize of non-wit input is ~130
@@ -213,7 +214,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 
 	// build input
 	var prevPKs []byte
-	if u.SpendableBy > 0 {
+	if u.SpendLag > 0 {
 		//		tx.Flags = 0x01
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
 			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
@@ -241,7 +242,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.SpendableBy > 0 {
+	if u.SpendLag > 0 {
 		wit, err = txscript.WitnessScript(
 			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
@@ -301,7 +302,12 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	return &txid, s.NewOutgoingTx(tx2)
 }
 
+// SendOne is for the sweep function, and doesn't do change.
+// Probably can get rid of this for real txs.
 func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
+	if u.SpendLag > 1 {
+		return nil, fmt.Errorf("can't sweep timelocked")
+	}
 	// fixed fee
 	fee := int64(5000)
 
@@ -315,47 +321,67 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	// make user specified txout and add to tx
 	txout := wire.NewTxOut(sendAmt, outAdrScript)
 	tx.AddTxOut(txout)
+	tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
 
-	var prevPKs []byte
-	if u.SpendableBy == 0 {
-		//		tx.Flags = 0x01
-		oa, err := btcutil.NewAddressPubKeyHash(
-			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
-		prevPKs, err = txscript.PayToAddrScript(oa)
-		if err != nil {
-			return nil, err
-		}
-	} else { // otherwise generate directly
-		prevPKs, err = txscript.PayToAddrScript(
-			s.TS.Adrs[u.KeyIdx].PkhAdr)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	tx.AddTxIn(wire.NewTxIn(&u.Op, prevPKs, nil))
+	//	if u.SpendLag == 0 {
+	//		oa, err := btcutil.NewAddressPubKeyHash(
+	//			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
+	//		prevPKs, err = txscript.PayToAddrScript(oa)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//	} else { // otherwise generate directly
+	//		prevPKs, err = txscript.PayToAddrScript(
+	//			s.TS.Adrs[u.KeyIdx].PkhAdr)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//	}
 
 	var sig []byte
 	var wit [][]byte
 	hCache := txscript.NewTxSigHashes(tx)
+	priv := new(btcec.PrivateKey)
 
-	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
+	// check if channel close PKH
+	if u.FromPeer == 0 {
+		priv = s.TS.GetWalletPrivkey(u.KeyIdx)
+	} else {
+		priv = s.TS.GetRefundPrivkey(u.FromPeer, u.KeyIdx)
+	}
 	if priv == nil {
 		return nil, fmt.Errorf("SendOne: nil privkey")
 	}
+
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.SpendableBy == 0 {
-		sig, err = txscript.SignatureScript(
-			tx, 0, tx.TxIn[0].SignatureScript,
-			txscript.SigHashAll, priv, true)
+	if u.SpendLag == 0 { // non-witness
+		prevAdr, err := btcutil.NewAddressPubKeyHash(
+			btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
 		if err != nil {
 			return nil, err
 		}
-	} else {
+		prevScript, err := txscript.PayToAddrScript(prevAdr)
+		if err != nil {
+			return nil, err
+		}
+		sig, err = txscript.SignatureScript(
+			tx, 0, prevScript, txscript.SigHashAll, priv, true)
+		if err != nil {
+			return nil, err
+		}
+	} else { // witness
+		prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+			btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+		if err != nil {
+			return nil, err
+		}
+		prevScript, err := txscript.PayToAddrScript(prevAdr)
+		if err != nil {
+			return nil, err
+		}
 		wit, err = txscript.WitnessScript(
-			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
-			txscript.SigHashAll, priv, true)
+			tx, hCache, 0, u.Value, prevScript, txscript.SigHashAll, priv, true)
 		if err != nil {
 			return nil, err
 		}
@@ -417,22 +443,7 @@ func (s *SPVCon) SendCoins(
 	fmt.Printf("Overshot by %d, can make change output\n", overshoot)
 	// add inputs into tx
 	for _, utxo := range utxos {
-		var prevPKScript []byte
-		if utxo.SpendableBy == 0 {
-			oa, err := btcutil.NewAddressPubKeyHash(
-				s.TS.Adrs[utxo.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
-			prevPKScript, err = txscript.PayToAddrScript(oa)
-			if err != nil {
-				return nil, err
-			}
-		} else { // otherwise generate directly
-			prevPKScript, err = txscript.PayToAddrScript(
-				s.TS.Adrs[utxo.KeyIdx].PkhAdr)
-			if err != nil {
-				return nil, err
-			}
-		}
-		tx.AddTxIn(wire.NewTxIn(&utxo.Op, prevPKScript, nil))
+		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
 	}
 
 	// estimate fee with outputs, see if change should be truncated
@@ -456,26 +467,48 @@ func (s *SPVCon) SendCoins(
 	// generate tx-wide hashCache for segwit stuff
 	hCache := txscript.NewTxSigHashes(tx)
 
-	for i, txin := range tx.TxIn {
+	for i, _ := range tx.TxIn {
 		// pick key
-		priv := s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
+		priv := new(btcec.PrivateKey)
+		if utxos[i].FromPeer == 0 {
+			priv = s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
+		} else {
+			priv = s.TS.GetRefundPrivkey(utxos[i].FromPeer, utxos[i].KeyIdx)
+			fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
+		}
 		if priv == nil {
 			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
 
 		// This is where witness based sighash types need to happen
 		// sign into stash
-		if utxos[i].SpendableBy > 0 {
-			witStash[i], err = txscript.WitnessScript(
-				tx, hCache, i, utxos[i].Value, txin.SignatureScript,
-				txscript.SigHashAll, priv, true)
+		if utxos[i].SpendLag > 0 {
+			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+			if err != nil {
+				return nil, err
+			}
+			prevScript, err := txscript.PayToAddrScript(prevAdr)
+			if err != nil {
+				return nil, err
+			}
+			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
+				utxos[i].Value, prevScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			sigStash[i], err = txscript.SignatureScript(
-				tx, i, txin.SignatureScript,
-				txscript.SigHashAll, priv, true)
+			prevAdr, err := btcutil.NewAddressPubKeyHash(
+				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+			if err != nil {
+				return nil, err
+			}
+			prevScript, err := txscript.PayToAddrScript(prevAdr)
+			if err != nil {
+				return nil, err
+			}
+			sigStash[i], err = txscript.SignatureScript(tx, i,
+				prevScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
