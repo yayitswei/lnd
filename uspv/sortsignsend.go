@@ -70,7 +70,7 @@ func (s utxoSlice) Less(i, j int) bool {
 	return bytes.Compare(ihash[:], jhash[:]) == -1
 }
 
-type SortableUtxoSlice []Utxo
+type SortableUtxoSlice []*Utxo
 
 // utxoByAmts get sorted by utxo value. also put unconfirmed last
 func (s SortableUtxoSlice) Len() int      { return len(s) }
@@ -114,46 +114,35 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 // It returns a tx-sortable utxoslice, and the overshoot amount.  Also errors.
 // if "ow" is true, only gives witness utxos (for channel funding)
 func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
-	var score int64
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
-	//	curHeight, err := s.TS.GetDBSyncHeight()
-	//	if err != nil {
-	//		return nil, 0, err
-	//	}
-
-	rawUtxos, err := s.TS.GetAllUtxos()
+	curHeight, err := s.TS.GetDBSyncHeight()
 	if err != nil {
 		return nil, 0, err
 	}
 
 	var allUtxos SortableUtxoSlice
-	// start with utxos sorted by value.
-
-	for _, utxo := range rawUtxos {
-		if utxo.SpendLag < 2 { // 0 or 1 means pkh
-			score += utxo.Value
-			allUtxos = append(allUtxos, *utxo)
-		}
+	allUtxos, err = s.TS.GetAllUtxos()
+	if err != nil {
+		return nil, 0, err
 	}
+
+	// start with utxos sorted by value.
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
-
-	// important rule in bitcoin: output total > input total is invalid.
-	if amtWanted > score {
-		return nil, 0, fmt.Errorf("wanted %d but %d available.",
-			amtWanted, score)
-	}
 
 	var rSlice utxoSlice
 	// add utxos until we've had enough
 	nokori := amtWanted // nokori is how much is needed on input side
 	for _, utxo := range allUtxos {
-		// skip unconfirmed.  Or de-prioritize?
+		// skip unconfirmed.  Or de-prioritize? Some option for this...
 		//		if utxo.AtHeight == 0 {
 		//			continue
 		//		}
-
-		if ow && utxo.SpendLag != 1 {
+		if utxo.SpendLag > 1 &&
+			(utxo.AtHeight < 100 || utxo.AtHeight+utxo.SpendLag > curHeight) {
+			continue // skip immature or unconfirmed time-locked sh outputs
+		}
+		if ow && utxo.SpendLag == 0 {
 			continue // skip non-witness
 		}
 		// why are 0-value outputs a thing..?
@@ -161,7 +150,7 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 			continue
 		}
 		// yeah, lets add this utxo!
-		rSlice = append(rSlice, utxo)
+		rSlice = append(rSlice, *utxo)
 		nokori -= utxo.Value
 		// if nokori is positive, don't bother checking fee yet.
 		if nokori < 0 {
@@ -179,15 +168,21 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 			}
 		}
 	}
-	sort.Sort(rSlice) // send sorted
+	if nokori > 0 {
+		return nil, 0, fmt.Errorf("wanted %d but %d available.",
+			amtWanted, amtWanted-nokori)
+	}
+
+	sort.Sort(rSlice) // send sorted.  This is probably redundant?
 	return rSlice, -nokori, nil
 }
 
 // SendDrop sends 2 chained transactions; one to a 2drop script, and then
 // one spending that to an address.
 // Note that this is completely insecure for any purpose, and
-// all it does is waste space.
+// all it does is waste space.  Kindof useless.
 // Returns the 2nd, large tx's txid.
+// Probably doesn't work with time-locked.  Doesn't really matter.
 func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	var err error
 	// fixed fee
@@ -324,7 +319,6 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 
 	var sig []byte
 	var wit [][]byte
-	hCache := txscript.NewTxSigHashes(tx)
 	priv := new(btcec.PrivateKey)
 
 	// check if channel close PKH
@@ -336,7 +330,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	if priv == nil {
 		return nil, fmt.Errorf("SendOne: nil privkey")
 	}
-
+	hCache := txscript.NewTxSigHashes(tx)
 	if u.SpendLag > 1 { // time-delay p2wsh
 		if u.AtHeight < 100 {
 			return nil, fmt.Errorf("Can't spend %s, timelocked and unconfirmed",
@@ -373,8 +367,8 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
 		// set the sequence field so the OP_CSV works
 		tx.TxIn[0].Sequence = uint32(u.SpendLag)
-		// make hash cache for this tx
-		hCache := txscript.NewTxSigHashes(tx)
+		// make new hash cache for this tx with sequence
+		hCache = txscript.NewTxSigHashes(tx)
 		// sign with channel refund key and prevScript
 		tsig, err := txscript.RawTxInWitnessSignature(
 			tx, hCache, 0, u.Value, prevScript, txscript.SigHashAll, priv)
@@ -478,8 +472,8 @@ func (s *SPVCon) SendCoins(
 	}
 	fmt.Printf("Overshot by %d, can make change output\n", overshoot)
 	// add inputs into tx
-	for _, utxo := range utxos {
-		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
+	for _, u := range utxos {
+		tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
 	}
 
 	// estimate fee with outputs, see if change should be truncated
@@ -500,43 +494,36 @@ func (s *SPVCon) SendCoins(
 	sigStash := make([][]byte, len(utxos))
 	witStash := make([][][]byte, len(utxos))
 
+	// if any of the utxos we're speding have time-locks, the txin sequence
+	// has to be set before the hCache is generated.
+
+	// set the txin sequence field so the OP_CSV works. (always in blocks)
+	for i, u := range utxos {
+		if u.SpendLag > 1 {
+			tx.TxIn[i].Sequence = uint32(u.SpendLag)
+		}
+	}
+
 	// generate tx-wide hashCache for segwit stuff
 	hCache := txscript.NewTxSigHashes(tx)
 
 	for i, _ := range tx.TxIn {
-		if utxos[i].SpendLag > 1 {
-			return nil, fmt.Errorf("can't spend timelocked (yet!)")
-		}
 		// pick key
 		priv := new(btcec.PrivateKey)
 		if utxos[i].FromPeer == 0 {
 			priv = s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
 		} else {
 			priv = s.TS.GetRefundPrivkey(utxos[i].FromPeer, utxos[i].KeyIdx)
-			fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
+			// fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
 		}
 		if priv == nil {
 			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
 
-		// This is where witness based sighash types need to happen
-		// sign into stash
-		if utxos[i].SpendLag > 0 {
-			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
-			if err != nil {
-				return nil, err
-			}
-			prevScript, err := txscript.PayToAddrScript(prevAdr)
-			if err != nil {
-				return nil, err
-			}
-			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
-				utxos[i].Value, prevScript, txscript.SigHashAll, priv, true)
-			if err != nil {
-				return nil, err
-			}
-		} else {
+		// sign into stash.  3 possibilities:  PKH, WPKH, timelock WSH
+		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
+		// (maybe too risky to allow those to be normal txins...)
+		if utxos[i].SpendLag == 0 { // non-witness PKH
 			prevAdr, err := btcutil.NewAddressPubKeyHash(
 				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
 			if err != nil {
@@ -551,6 +538,48 @@ func (s *SPVCon) SendCoins(
 			if err != nil {
 				return nil, err
 			}
+		}
+		if utxos[i].SpendLag == 1 { // witness PKH
+			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+			if err != nil {
+				return nil, err
+			}
+			prevScript, err := txscript.PayToAddrScript(prevAdr)
+			if err != nil {
+				return nil, err
+			}
+			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
+				utxos[i].Value, prevScript, txscript.SigHashAll, priv, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if utxos[i].SpendLag > 1 { // witness, time-locked SH
+			// this utxo is returned by PickUtxos() so should be ready to spend
+			// first get the channel data
+			qc, err := s.TS.GetQchanByIdx(utxos[i].FromPeer, utxos[i].KeyIdx)
+			if err != nil {
+				return nil, err
+			}
+			// Need their HAKD pubkey to build script.  States should line up OK.
+			theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+			if err != nil {
+				return nil, err
+			}
+			prevScript, _ := CommitScript2(
+				theirHAKDpub, qc.MyRefundPub, uint16(utxos[i].SpendLag))
+			// sign with channel refund key and prevScript
+			tsig, err := txscript.RawTxInWitnessSignature(
+				tx, hCache, i, utxos[i].Value, prevScript, txscript.SigHashAll, priv)
+			if err != nil {
+				return nil, err
+			}
+			// witness stack is sig, prevScript
+			witStash[i] = make([][]byte, 2)
+			witStash[i][0] = tsig
+			witStash[i][1] = prevScript
+			// all set
 		}
 	}
 	// swap sigs into sigScripts in txins
@@ -570,7 +599,6 @@ func (s *SPVCon) SendCoins(
 
 	// send it out on the wire.  hope it gets there.
 	// we should deal with rejects.  Don't yet.
-
 	txid := tx.TxSha()
 	return &txid, s.NewOutgoingTx(tx)
 }

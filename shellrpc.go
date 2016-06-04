@@ -157,14 +157,12 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 	}
 	nokori := args.NumTx
 
-	rawUtxos, err := SCon.TS.GetAllUtxos()
+	var allUtxos uspv.SortableUtxoSlice
+	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
 	}
-	var allUtxos uspv.SortableUtxoSlice
-	for _, utxo := range rawUtxos {
-		allUtxos = append(allUtxos, *utxo)
-	}
+
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
 
@@ -172,9 +170,9 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 		if u.AtHeight != 0 && u.Value > 10000 {
 			var txid *wire.ShaHash
 			if args.Drop {
-				txid, err = SCon.SendDrop(allUtxos[i], adr)
+				txid, err = SCon.SendDrop(*allUtxos[i], adr)
 			} else {
-				txid, err = SCon.SendOne(allUtxos[i], adr)
+				txid, err = SCon.SendOne(*allUtxos[i], adr)
 			}
 			if err != nil {
 				return err

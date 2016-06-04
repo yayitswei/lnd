@@ -29,7 +29,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "na:28900"
+	SPVHostAdr = "rp2:28901"
 )
 
 var (
@@ -66,7 +66,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 33222 // hardcoded; later base on keyfile date?
+		tip = 33500 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -451,13 +451,10 @@ func Bal(args []string) error {
 			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
 	}
 	fmt.Printf(" ----- utxos ----- \n")
-	rawUtxos, err := SCon.TS.GetAllUtxos()
+	var allUtxos uspv.SortableUtxoSlice
+	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
-	}
-	var allUtxos uspv.SortableUtxoSlice
-	for _, utxo := range rawUtxos {
-		allUtxos = append(allUtxos, *utxo)
 	}
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
@@ -566,13 +563,10 @@ func Sweep(args []string) error {
 		return fmt.Errorf("can't send %d txs", numTxs)
 	}
 
-	rawUtxos, err := SCon.TS.GetAllUtxos()
+	var allUtxos uspv.SortableUtxoSlice
+	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
-	}
-	var allUtxos uspv.SortableUtxoSlice
-	for _, utxo := range rawUtxos {
-		allUtxos = append(allUtxos, *utxo)
 	}
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
@@ -580,7 +574,7 @@ func Sweep(args []string) error {
 	if len(args) == 2 {
 		for i, u := range allUtxos {
 			if u.AtHeight != 0 && u.Value > 10000 {
-				_, err = SCon.SendOne(allUtxos[i], adr)
+				_, err = SCon.SendOne(*allUtxos[i], adr)
 				if err != nil {
 					return err
 				}
@@ -596,7 +590,7 @@ func Sweep(args []string) error {
 	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 {
-			_, err = SCon.SendDrop(allUtxos[i], adr)
+			_, err = SCon.SendDrop(*allUtxos[i], adr)
 			if err != nil {
 				return err
 			}
