@@ -330,7 +330,7 @@ func (t *TxStore) RemedyTx(q *Qchan, destTxOut *wire.TxOut) (*wire.MsgTx, error)
 	}
 
 	// delay will be a channel-wide variable later.
-	delay := uint32(5)
+	delay := uint16(5)
 	var preScript []byte
 	// build shOut script
 
@@ -630,10 +630,11 @@ func (q *Qchan) VerifySig(sig []byte) error {
 // Delta should always be 0 when making this tx.
 // It decides whether to make THEIR tx or YOUR tx based on the HAKD pubkey given --
 // if it's zero, then it makes their transaction (for signing onlu)
-// If it's zero, it makes your transaction (for verification in most cases,
+// If it's full, it makes your transaction (for verification in most cases,
 // but also for signing when breaking the channel)
 // Index is used to set nlocktime for state hints.
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
+// also returns the script preimage for later spending.
 func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	// sanity checks
 	s := q.State // use it a lot, make shorthand variable
@@ -652,7 +653,7 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	var revPub, timePub [33]byte // pubkeys
 	var pkhPub [33]byte          // the simple output's pub key hash
 	fee := int64(5000)           // fixed fee for now
-	delay := uint32(5)           // fixed CSV delay for now
+	delay := uint16(5)           // fixed CSV delay for now
 	// delay is super short for testing.
 
 	if theirHAKDpub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
@@ -704,35 +705,10 @@ func DirectWPKHScript(pub [33]byte) []byte {
 	return b
 }
 
-/* old script2, need to push a 1 or 0 to select
-builder.AddOp(txscript.OP_IF)
-builder.AddInt64(int64(delay))
-builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
-builder.AddOp(txscript.OP_DROP)
-builder.AddData(TKey[:])
-builder.AddOp(txscript.OP_ELSE)
-builder.AddData(RKey[:])
-builder.AddOp(txscript.OP_ENDIF)
-builder.AddOp(txscript.OP_CHECKSIG)
-*/
-/* uglier, need dup and drop...
-builder.AddOp(txscript.OP_DUP)
-builder.AddData(TKey[:])
-builder.AddOp(txscript.OP_CHECKSIG)
-builder.AddOp(txscript.OP_IF)
-builder.AddOp(txscript.OP_DROP)
-builder.AddInt64(int64(delay))
-builder.AddOp(txscript.OP_CHECKSEQUENCEVERIFY)
-builder.AddOp(txscript.OP_ELSE)
-builder.AddData(RKey[:])
-builder.AddOp(txscript.OP_CHECKSIG)
-builder.AddOp(txscript.OP_ENDIF)
-*/
-
 // CommitScript2 doesn't use hashes, but a modified pubkey.
 // To spend from it, push your sig.  If it's time-based,
 // you have to set the txin's sequence.
-func CommitScript2(RKey, TKey [33]byte, delay uint32) ([]byte, error) {
+func CommitScript2(RKey, TKey [33]byte, delay uint16) ([]byte, error) {
 	builder := txscript.NewScriptBuilder()
 
 	builder.AddOp(txscript.OP_DUP)

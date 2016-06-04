@@ -42,12 +42,13 @@ type Utxo struct { // cash money.
 	// not actually needed but nice to know
 	AtHeight int32 // block height where this tx was confirmed, 0 for unconf
 
-	// SpendableAt indicates the height at which the utxo can be spent.
+	// SpendLag indicates the delay after which the utxo can be spent.
 	// for most utxos, they can be spent whenever.  3 values have other meanings:
 	// -1 means immediately grabbable invalid channel close.
 	// 0 means normal PKH, non-witness
 	// 1 means normal WPKH, witnessy
 	// > 1 means time-locked channel close. (so min supported delay is 2 blocks)
+	// actually restricted to uint16 from channel; maybe change to that...
 	SpendLag int32 // if a SH channel close output (or coinbase!)
 
 	// if a channel close tx output, fromPeer will be non-zero
