@@ -29,7 +29,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "rp2:28901"
+	SPVHostAdr = "na:28901"
 )
 
 var (
@@ -79,8 +79,10 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 
-	//	rpcShellListen()
-
+	err = rpcShellListen()
+	if err != nil {
+		log.Printf(err.Error())
+	}
 	// main shell loop
 	for {
 		// setup reader with max 4K input chars
@@ -463,7 +465,7 @@ func Bal(args []string) error {
 	for i, u := range allUtxos {
 		fmt.Printf("utxo %d %s h:%d k:%d a %d",
 			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
-		if u.SpendLag > 0 {
+		if u.SpendLag != 0 {
 			fmt.Printf(" s:%d", u.SpendLag)
 		}
 		if u.FromPeer != 0 {

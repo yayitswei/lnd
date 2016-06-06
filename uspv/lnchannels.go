@@ -289,13 +289,23 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	return nil
 }
 
-// RemedyTx produces the "remedy" transaction to get all the money if they
+// GrabTx produces the "remedy" transaction to get all the money if they
 // broadcast an old state which they invalidated.
 // This function assumes a recovery is possible; if it can't construct the right
 // keys and scripts it will return an error.
-func (t *TxStore) RemedyTx(q *Qchan, destTxOut *wire.TxOut) (*wire.MsgTx, error) {
+func (t *TxStore) GrabTx(u *Utxo) (*wire.MsgTx, error) {
+	if u == nil {
+		return nil, fmt.Errorf("Grab error: nil utxo")
+	}
+	// this utxo is returned by PickUtxos() so should be ready to spend
+	// first get the channel data
+	qc, err := t.GetQchanByIdx(u.FromPeer, u.KeyIdx)
+	if err != nil {
+		return nil, err
+	}
+
 	// load spending tx
-	spendTx, err := t.GetTx(&q.CloseData.CloseTxid)
+	spendTx, err := t.GetTx(&qc.CloseData.CloseTxid)
 	if err != nil {
 		return nil, err
 	}
@@ -303,60 +313,47 @@ func (t *TxStore) RemedyTx(q *Qchan, destTxOut *wire.TxOut) (*wire.MsgTx, error)
 		return nil, fmt.Errorf("spend tx has %d outputs, can't sweep",
 			len(spendTx.TxOut))
 	}
-	if len(spendTx.TxOut[0].PkScript) < 22 ||
-		len(spendTx.TxOut[1].PkScript) < 22 {
-		return nil, fmt.Errorf("spend tx has pkscript lengths %d, %d",
-			len(spendTx.TxOut[0].PkScript), len(spendTx.TxOut[1].PkScript))
+	if len(spendTx.TxOut[u.Op.Index].PkScript) != 34 {
+		return nil, fmt.Errorf("grab txout pkscript length %d, expect 34",
+			len(spendTx.TxOut[u.Op.Index].PkScript))
 	}
 	// find state index based on tx hints (locktime / sequence)
 	txIdx := GetStateIdxFromTx(spendTx)
 	if txIdx == 0 {
 		return nil, fmt.Errorf("no hint, can't recover")
 	}
-	var grabbableN int
-	// figure out which output is the grabbable one
-	if bytes.Equal(spendTx.TxOut[0].PkScript[2:22],
-		btcutil.Hash160(q.TheirRefundPub[:])) {
-		grabbableN = 0
-	} else {
-		grabbableN = 1
-	}
-	shOut := spendTx.TxOut[grabbableN]
+	shOut := spendTx.TxOut[u.Op.Index]
 
 	// if hinted state is greater than elkrem state we can't recover
-	if txIdx > q.ElkRcv.UpTo() {
+	if txIdx > qc.ElkRcv.UpTo() {
 		return nil, fmt.Errorf("tx at state %d but elkrem only goes to %d",
-			txIdx, q.ElkRcv.UpTo())
+			txIdx, qc.ElkRcv.UpTo())
 	}
 
-	// delay will be a channel-wide variable later.
-	delay := uint16(5)
-	var preScript []byte
-	// build shOut script
-
-	elk, err := q.ElkRcv.AtIndex(txIdx)
+	elk, err := qc.ElkRcv.AtIndex(txIdx)
 	if err != nil {
 		return nil, err
 	}
-
+	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
 	// get private signing key
 	priv := new(btcec.PrivateKey)
 	// get private signing key
-	if q.KeyIdx&1 == 0 { //local, use ckdn
-		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
+	if qc.KeyIdx&1 == 0 { //local, use ckdn
+		priv = t.GetChanPrivkey(t.IdPub(), qc.PeerId, qc.ChannelNonce)
 	} else { // remote
-		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
+		priv = t.GetChanPrivkey(qc.PeerId, t.IdPub(), qc.ChannelNonce)
 	}
-
+	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
 	// modify private key
 	PrivKeyAddBytes(priv, elk.Bytes())
 
 	// serialize pubkey part for script generation
 	var HAKDpubArr [33]byte
 	copy(HAKDpubArr[:], priv.PubKey().SerializeCompressed())
+	fmt.Printf("made HAKD to recover from %x\n", HAKDpubArr)
 
 	// now that everything is chosen, build fancy script and pkh script
-	preScript, _ = CommitScript2(HAKDpubArr, q.TheirPub, delay)
+	preScript, _ := CommitScript2(HAKDpubArr, qc.TheirRefundPub, qc.TimeOut)
 	fancyScript := P2WSHify(preScript) // p2wsh-ify
 	fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
 	if !bytes.Equal(fancyScript, shOut.PkScript) {
@@ -366,12 +363,14 @@ func (t *TxStore) RemedyTx(q *Qchan, destTxOut *wire.TxOut) (*wire.MsgTx, error)
 
 	// build tx and sign.
 	sweepTx := wire.NewMsgTx()
-	destTxOut.Value = shOut.Value - 5000 // fixed fee for now
+	destTxOut, err := t.NewChangeOut(shOut.Value - 5000) // fixed fee for now
+	if err != nil {
+		return nil, err
+	}
 	sweepTx.AddTxOut(destTxOut)
 
 	// add unsigned input
-	grabOp := wire.NewOutPoint(&q.CloseData.CloseTxid, uint32(grabbableN))
-	sweepIn := wire.NewTxIn(grabOp, nil, nil)
+	sweepIn := wire.NewTxIn(&u.Op, nil, nil)
 	sweepTx.AddTxIn(sweepIn)
 
 	// make hash cache for this tx
@@ -924,12 +923,6 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// closing txid goes in a different bucket.
-	// (this is mostly 00 so kindof a waste to serialize here...
-	//	_, err = buf.Write(q.CloseTXO.)
-	//	if err != nil {
-	//		return nil, err
-	//	}
 
 	// done
 	return buf.Bytes(), nil
@@ -1001,21 +994,3 @@ func QCloseFromBytes(b []byte) (QCloseData, error) {
 
 	return c, nil
 }
-
-//type Qclosetxo struct {
-//type Qclosetxo struct {
-//	// closed is true if channel closing tx has been seen & stored.
-//	// basically true of Op.hash != 0.  not stored.
-//	Closed bool
-//	// your outpoint, either pkh or script.  If cooperative it's just txid:0
-//	Op     wire.OutPoint
-//	Height int32 // 0 when unconfirmed; height of closing tx.
-
-//	// true means you can spend it!  False means you can't, either because
-//	// it's coop, or because you already spent it.
-//	Unspent   bool
-//	SpendTxid wire.ShaHash
-
-//	// true means you can grab it and haven't yet!  do it now!
-//	Ungrabbed bool
-//	GrabTxid  wire.ShaHash

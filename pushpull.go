@@ -13,63 +13,7 @@ import (
 // Grab the coins that are rightfully yours! Plus some more.
 // For right now, spend all outputs from channel close.
 func Grab(args []string) error {
-	// need args, fail
-	if len(args) < 2 {
-		return fmt.Errorf("need args: grab peerIdx chanIdx")
-	}
-
-	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil {
-		return err
-	}
-	cIdx, err := strconv.ParseInt(args[1], 10, 32)
-	if err != nil {
-		return err
-	}
-
-	qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
-	if err != nil {
-		return err
-	}
-
-	if !qc.CloseData.Closed {
-		return fmt.Errorf("channel (%d,%d) not closed", peerIdx, cIdx)
-	}
-	fmt.Printf("try to spend from closed (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
-
-	clTx, err := SCon.TS.GetTx(&qc.CloseData.CloseTxid)
-	if err != nil {
-		return err
-	}
-	ctxos, err := qc.GetCloseTxos(clTx)
-	if err != nil {
-		return err
-	}
-
-	if len(ctxos) < 2 {
-		return fmt.Errorf("\tcooperative close.\n")
-	}
-
-	fmt.Printf("\t\tINVALID CLOSE!!!11\n")
-
-	fmt.Printf("\t\twill figure out later.\n")
-	// desination output
-	//	DestTxOut, err := SCon.TS.NewChangeOut(0)
-	//	if err != nil {
-	//		return err
-	//	}
-
-	//	rtx, err := SCon.TS.RemedyTx(qc, DestTxOut)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	fmt.Printf(uspv.TxToString(rtx))
-	//	err = SCon.NewOutgoingTx(rtx)
-	//	if err != nil {
-	//		return err
-	//	}
-
-	return nil
+	return SCon.GrabAll()
 }
 
 // BreakChannel closes the channel without the other party's involvement.
@@ -289,7 +233,9 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 	if qc.State.Delta != 0 || qc.State.MyPrevHAKDPub != empty {
 		return fmt.Errorf("channel update in progress, cannot push")
 	}
-
+	if int64(amt) > qc.State.MyAmt { //TODO add the "can't go below" line
+		return fmt.Errorf("want to push %d but %d available", amt, qc.State.MyAmt)
+	}
 	qc.State.Delta = int32(-amt)
 	// save to db with ONLY delta changed
 	err := SCon.TS.SaveQchanState(qc)

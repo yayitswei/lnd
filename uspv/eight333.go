@@ -350,6 +350,11 @@ func (s *SPVCon) AskForBlocks() error {
 		fmt.Printf("no blocks to request, entering wait state\n")
 		fmt.Printf("%d bytes received\n", s.RBytes)
 		s.inWaitState <- true
+		// check if we can grab outputs
+		err = s.GrabAll()
+		if err != nil {
+			return err
+		}
 		// also advertise any unconfirmed txs here
 		s.Rebroadcast()
 		// ask for mempool each time...?  put something in to only ask the

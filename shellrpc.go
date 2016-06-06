@@ -285,13 +285,13 @@ func rpcShellListen() error {
 	server.HandleHTTP("/jsonrpc", "/debug/jsonrpc")
 	listener, e := net.Listen("tcp", ":1234")
 	if e != nil {
-		log.Fatal("listen error:", e)
+		return e
 	}
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				log.Fatal("accept error: " + err.Error())
+				log.Printf("accept error: " + err.Error())
 			} else {
 				log.Printf("new connection from %s\n", conn.RemoteAddr().String())
 				go server.ServeCodec(jsonrpc.NewServerCodec(conn))

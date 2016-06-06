@@ -460,7 +460,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 		return nil, err
 	}
 	if qc.ElkRcv != nil {
-		fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
+		// fmt.Printf("loaded elkrem receiver at state %d\n", qc.ElkRcv.UpTo())
 	}
 
 	// derive elkrem sender root from HD keychain

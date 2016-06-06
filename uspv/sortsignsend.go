@@ -45,6 +45,34 @@ func (s *SPVCon) Rebroadcast() {
 	return
 }
 
+func (s *SPVCon) GrabAll() error {
+	// no args, look through all utxos
+	utxos, err := s.TS.GetAllUtxos()
+	if err != nil {
+		return err
+	}
+
+	// currently grabs only confirmed txs.
+	nothin := true
+	for _, u := range utxos {
+		if u.SpendLag == -1 && u.AtHeight > 0 { // grabbable
+			tx, err := s.TS.GrabTx(u)
+			if err != nil {
+				return err
+			}
+			err = s.NewOutgoingTx(tx)
+			if err != nil {
+				return err
+			}
+			nothin = false
+		}
+	}
+	if nothin {
+		fmt.Printf("Nothing to grab\n")
+	}
+	return nil
+}
+
 // make utxo slices sortable -- same as txsort
 type utxoSlice []Utxo
 
