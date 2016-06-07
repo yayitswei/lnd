@@ -14,8 +14,8 @@ def main():
            "params": [{
 	   "DestAddrs": [
 	   #~ "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
-	   "GgKqx2qXZw7UGSSNNMMi5GR6LQzWeAFajoPa",
-	   "GgKjr6Aj8d2aT5gZyGC2LpejBqadCZ5RvsmK",],
+	   "GgKiMfQCEud9SSLAyk67NhPxmJ2jT85m87td",
+	   "GgKvQDhUbuLzpvjpxcmqXXHLZzDWxDBnFgJG",],
 	   "Amts": [
 	   #~ 40000000,
 	   amt1,

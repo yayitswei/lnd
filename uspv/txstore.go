@@ -92,6 +92,17 @@ func (t *TxStore) AddTxid(txid *wire.ShaHash, height int32) error {
 	return nil
 }
 
+// add txid of interest
+func (t *TxStore) TxidExists(txid *wire.ShaHash) bool {
+	if txid == nil {
+		return false
+	}
+	t.OKMutex.Lock()
+	_, ok := t.OKTxids[*txid]
+	t.OKMutex.Unlock()
+	return ok
+}
+
 // GimmeFilter ... or I'm gonna fade away
 func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	if len(t.Adrs) == 0 {

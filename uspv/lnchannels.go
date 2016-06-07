@@ -293,7 +293,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 // broadcast an old state which they invalidated.
 // This function assumes a recovery is possible; if it can't construct the right
 // keys and scripts it will return an error.
-func (t *TxStore) GrabTx(u *Utxo) (*wire.MsgTx, error) {
+func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	if u == nil {
 		return nil, fmt.Errorf("Grab error: nil utxo")
 	}
@@ -322,8 +322,9 @@ func (t *TxStore) GrabTx(u *Utxo) (*wire.MsgTx, error) {
 	if txIdx == 0 {
 		return nil, fmt.Errorf("no hint, can't recover")
 	}
-	shOut := spendTx.TxOut[u.Op.Index]
 
+	//	t.GrabTx(qc, txIdx)
+	shOut := spendTx.TxOut[u.Op.Index]
 	// if hinted state is greater than elkrem state we can't recover
 	if txIdx > qc.ElkRcv.UpTo() {
 		return nil, fmt.Errorf("tx at state %d but elkrem only goes to %d",

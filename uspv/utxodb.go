@@ -261,7 +261,7 @@ func (ts *TxStore) GetTx(txid *wire.ShaHash) (*wire.MsgTx, error) {
 	return rtx, nil
 }
 
-// GetTx takes a txid and returns the transaction.  If we have it.
+// GetAllTxs returns all the stored txs
 func (ts *TxStore) GetAllTxs() ([]*wire.MsgTx, error) {
 	var rtxs []*wire.MsgTx
 
@@ -286,6 +286,32 @@ func (ts *TxStore) GetAllTxs() ([]*wire.MsgTx, error) {
 		return nil, err
 	}
 	return rtxs, nil
+}
+
+// GetAllTxids returns all the stored txids. Note that we don't remember
+// what height they were at.
+func (ts *TxStore) GetAllTxids() ([]*wire.ShaHash, error) {
+	var txids []*wire.ShaHash
+
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		txns := btx.Bucket(BKTTxns)
+		if txns == nil {
+			return fmt.Errorf("no transactions in db")
+		}
+
+		return txns.ForEach(func(k, v []byte) error {
+			txid, err := wire.NewShaHash(k)
+			if err != nil {
+				return err
+			}
+			txids = append(txids, txid)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return txids, nil
 }
 
 // GetPendingInv returns an inv message containing all txs known to the

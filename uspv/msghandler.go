@@ -236,7 +236,8 @@ func (s *SPVCon) InvHandler(m *wire.MsgInv) {
 		log.Printf("\t%d)%s : %s",
 			i, thing.Type.String(), thing.Hash.String())
 		if thing.Type == wire.InvTypeTx {
-			if !s.Ironman { // ignore tx invs in ironman mode
+			// ignore tx invs in ironman mode, or if we already have it
+			if !s.Ironman && !s.TS.TxidExists(&thing.Hash) {
 				// new tx, OK it at 0 and request
 				s.TS.AddTxid(&thing.Hash, 0) // unconfirmed
 				s.AskForTx(thing.Hash)

@@ -32,6 +32,15 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	if err != nil {
 		return s, err
 	}
+	// load known txids into ram
+	txids, err := inTs.GetAllTxids()
+	if err != nil {
+		return s, err
+	}
+	for _, txid := range txids {
+		inTs.OKTxids[*txid] = 0
+	}
+
 	// open TCP connection
 	s.con, err = net.Dial("tcp", remoteNode)
 	if err != nil {

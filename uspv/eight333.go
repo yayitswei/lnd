@@ -60,8 +60,11 @@ type SPVCon struct {
 // I don't like this function because SPV shouldn't even ask...
 func (s *SPVCon) AskForTx(txid wire.ShaHash) {
 	gdata := wire.NewMsgGetData()
-	// should get & save wit TXs.  Check that handling works...
-	inv := wire.NewInvVect(wire.InvTypeWitnessTx, &txid)
+	inv := wire.NewInvVect(wire.InvTypeTx, &txid)
+	// get wit txs if in hardmode
+	if s.HardMode {
+		inv.Type = wire.InvTypeWitnessTx
+	}
 	gdata.AddInvVect(inv)
 	s.outMsgQueue <- gdata
 }
@@ -401,7 +404,7 @@ func (s *SPVCon) AskForBlocks() error {
 		if s.HardMode {
 			iv1 = wire.NewInvVect(wire.InvTypeWitnessBlock, &bHash)
 		} else { // ah well
-			iv1 = wire.NewInvVect(wire.InvTypeFilteredWitnessBlock, &bHash)
+			iv1 = wire.NewInvVect(wire.InvTypeFilteredBlock, &bHash)
 		}
 		gdataMsg := wire.NewMsgGetData()
 		// add inventory

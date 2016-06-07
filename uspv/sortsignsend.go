@@ -56,7 +56,7 @@ func (s *SPVCon) GrabAll() error {
 	nothin := true
 	for _, u := range utxos {
 		if u.SpendLag == -1 && u.AtHeight > 0 { // grabbable
-			tx, err := s.TS.GrabTx(u)
+			tx, err := s.TS.GrabUtxo(u)
 			if err != nil {
 				return err
 			}
@@ -203,6 +203,14 @@ func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 
 	sort.Sort(rSlice) // send sorted.  This is probably redundant?
 	return rSlice, -nokori, nil
+}
+
+func (t *TxStore) GrabTx(qc *Qchan, idx uint64) (*wire.MsgTx, error) {
+	if qc == nil {
+		return nil, fmt.Errorf("nil channel")
+	}
+
+	return nil, nil
 }
 
 // SendDrop sends 2 chained transactions; one to a 2drop script, and then
