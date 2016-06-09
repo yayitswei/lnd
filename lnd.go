@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/grpclog"
+	//	"google.golang.org/grpc"
+	//	"google.golang.org/grpc/grpclog"
 
 	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/lnrpc"
+	//8	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 )
 
@@ -120,20 +120,20 @@ func main() {
 	})
 
 	// Initialize, and register our implementation of the gRPC server.
-	var opts []grpc.ServerOption
-	grpcServer := grpc.NewServer(opts...)
-	lnrpc.RegisterLightningServer(grpcServer, server.rpcServer)
+	//	var opts []grpc.ServerOption
+	//	grpcServer := grpc.NewServer(opts...)
+	//	lnrpc.RegisterLightningServer(grpcServer, server.rpcServer)
 
 	// Finally, start the grpc server listening for HTTP/2 connections.
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", loadedConfig.RPCPort))
 	if err != nil {
-		grpclog.Fatalf("failed to listen: %v", err)
+		//		grpclog.Fatalf("failed to listen: %v", err)
 		fmt.Printf("failed to listen: %v", err)
 		os.Exit(1)
 	}
 	go func() {
 		rpcsLog.Infof("RPC server listening on %s", lis.Addr())
-		grpcServer.Serve(lis)
+		//		grpcServer.Serve(lis)
 	}()
 
 	// Wait for shutdown signal from either a graceful server stop or from

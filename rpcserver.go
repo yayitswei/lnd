@@ -1,18 +1,11 @@
 package main
 
 import (
-	"fmt"
-
 	"sync"
 	"sync/atomic"
 
-	"github.com/lightningnetwork/lnd/lndc"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/roasbeef/btcd/txscript"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
+	//	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/roasbeef/btcwallet/waddrmgr"
-	"golang.org/x/net/context"
 )
 
 var (
@@ -31,7 +24,7 @@ type rpcServer struct {
 	quit chan struct{}
 }
 
-var _ lnrpc.LightningServer = (*rpcServer)(nil)
+//var _ lnrpc.LightningServer = (*rpcServer)(nil)
 
 // newRpcServer...
 func newRpcServer(s *server) *rpcServer {
@@ -59,6 +52,7 @@ func (r *rpcServer) Stop() error {
 }
 
 // SendMany...
+/*
 func (r *rpcServer) SendMany(ctx context.Context, in *lnrpc.SendManyRequest) (*lnrpc.SendManyResponse, error) {
 
 	outputs := make([]*wire.TxOut, 0, len(in.AddrToAmount))
@@ -85,8 +79,10 @@ func (r *rpcServer) SendMany(ctx context.Context, in *lnrpc.SendManyRequest) (*l
 
 	return &lnrpc.SendManyResponse{Txid: txid.String()}, nil
 }
+*/
 
 // NewAddress...
+/*
 func (r *rpcServer) NewAddress(ctx context.Context,
 	in *lnrpc.NewAddressRequest) (*lnrpc.NewAddressResponse, error) {
 
@@ -113,9 +109,10 @@ func (r *rpcServer) NewAddress(ctx context.Context,
 
 	rpcsLog.Infof("Generated new address: %v", addr.String())
 	return &lnrpc.NewAddressResponse{Address: addr.String()}, nil
-}
+}*/
 
 // LNConnect...
+/*
 func (r *rpcServer) ConnectPeer(ctx context.Context,
 	in *lnrpc.ConnectPeerRequest) (*lnrpc.ConnectPeerResponse, error) {
 
@@ -135,3 +132,4 @@ func (r *rpcServer) ConnectPeer(ctx context.Context,
 	rpcsLog.Infof("Connected to peer: %v", peerAddr.String())
 	return &lnrpc.ConnectPeerResponse{[]byte(peerAddr.String())}, nil
 }
+*/

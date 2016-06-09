@@ -53,7 +53,7 @@ func PubKeyAddBytes(k *btcec.PublicKey, b []byte) {
 }
 
 // multiplies a pubkey point by a scalar
-func PubKeyMult(k *btcec.PublicKey, n uint32) {
+func PubKeyMultBytes(k *btcec.PublicKey, n uint32) {
 	b := U32tB(n)
 	k.X, k.Y = btcec.S256().ScalarMult(k.X, k.Y, b)
 }
@@ -63,25 +63,6 @@ func PrivKeyMult(k *btcec.PrivateKey, n uint32) {
 	bigN := new(big.Int).SetUint64(uint64(n))
 	k.D.Mul(k.D, bigN)
 	k.D.Mod(k.D, btcec.S256().N)
-	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
-}
-
-// multiply the private key by a coefficient
-func PrivKeyDiv(k *btcec.PrivateKey, x uint32) {
-	bigX := new(big.Int).SetUint64(uint64(x))
-	big2 := new(big.Int).SetUint64(uint64(2))
-	n2 := btcec.S256().N.Sub(btcec.S256().N, big2)
-	bigX.Exp(bigX, n2, btcec.S256().N)
-	k.D.Mul(k.D, bigX)
-
-	k.D.Mod(k.D, btcec.S256().N)
-	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
-}
-
-// takes the private key up to an exponent
-func PrivKeyExp(k *btcec.PrivateKey, n uint32) {
-	exp := new(big.Int).SetUint64(uint64(n))
-	k.D.Exp(k.D, exp, btcec.S256().N)
 	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
 }
 

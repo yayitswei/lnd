@@ -24,23 +24,40 @@ elkrem 2 is the parent of elkrems 0 and 1, so that checks 0.
 
 /*
 New funding process.
-A opens channel with B:
-A creates their channel key derivation hash (CKDH), and computes their
-channel keypair from this. (A's channel key = A's ID key + CKDH).
-A also computes B's channel key, which is sha2(A's channel key) + B's ID key.
-A creates the output script and script hash.
-A creates the tx, and txid.
-A sends the CKDH over.  From that B can figure out A and B's channel key.
+No fancy curve stuff.  Just ask the other node for a point on a curve, which
+will be their channel pubkey.
+There are 2 ways to then change to a channel-proof-y method later.
+One way is to construct the channel pubkey FROM that point, by having
+ID:A
+Random point:B
+Channel point:C
+and set C = hash(A, B)*(A + B)
+or you could do it 4-way so that
+C = hash(A1, B1, A2, B2)*(A + B)
+to commit to both sides' creation process.  This is a little more complex,
+but the proof of ownership for the channel just consists of the point B so
+it's compact.
 
+Another way to do it, after the fact with arbitrary points.
+ID:A, Channel pub:C
+B = A + C
+sign B with b.  That signature is proof that someone / something knew
+a and c at the same time.
+
+Either of these can be added later without changing much.  The messages
+don't have to change at all, and in the first case you'd change the channel
+pubkey calculation.  In the second it's independant of the fund process.
+
+For now though:
 funding --
 A -> B point request
 
-A CDP (32)
+A channel point (33) (channel pubkey for now)
 A refund (33)
 
-B replies with CDP and return pubkey
+B replies with channel point and refund pubkey
 
-B CDP (32)
+B channel point (32) (channel pubkey for now)
 B refund (33)
 
 A -> B Channel Description:
@@ -116,7 +133,6 @@ func FundChannel(args []string) error {
 	capBytes := uspv.I64tB(qChanCapacity)
 
 	tx := wire.NewMsgTx() // make new tx
-	//	tx.Flags = 0x01       // tx will be witty
 
 	// first get inputs. comes sorted from PickUtxos.
 	utxos, overshoot, err := SCon.PickUtxos(qChanCapacity, true)
