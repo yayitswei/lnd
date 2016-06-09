@@ -211,13 +211,13 @@ func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash
 // GetFundPrivkey generates and returns the private key for a given peer, index.
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.
-func (t *TxStore) GetFundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
+func (t *TxStore) GetChanPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 	return t.GetPrivkey(UseChannelFund, peerIdx, cIdx)
 }
 
 // GetFundPubkey generates and returns the fund tx pubkey for a given index.
 // It will return nil if there's an error / problem
-func (t *TxStore) GetFundPubkey(peerIdx, cIdx uint32) [33]byte {
+func (t *TxStore) GetChanPubkey(peerIdx, cIdx uint32) [33]byte {
 	var b [33]byte
 	k := t.GetPubkey(UseChannelFund, peerIdx, cIdx)
 	if k != nil {
@@ -258,15 +258,6 @@ func CalcChanPubs(f, r [33]byte, cn [20]byte) ([33]byte, [33]byte, error) {
 	}
 	err = PubKeyArrAddBytes(&r, ckdh.Bytes())
 	return f, r, err
-}
-
-// GetChannelPrivkey gets your private key for the channel.  Call CalcCKDH
-// first and feed that in.
-func (t *TxStore) GetChanPrivkey(f, r [33]byte, cn [20]byte) *btcec.PrivateKey {
-	ckdh := CalcCKDH(f, r, cn)
-	k := t.IdKey()
-	PrivKeyAddBytes(k, ckdh.Bytes())
-	return k
 }
 
 // GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?

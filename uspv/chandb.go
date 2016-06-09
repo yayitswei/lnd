@@ -103,6 +103,44 @@ func (ts *TxStore) NewPeer(pub *btcec.PublicKey) (bool, error) {
 	return itsnew, err
 }
 
+// NextPubForPeer returns the next pubkey to use with the peer.
+// It first checks that the peer exists, next pubkey.  Read only.
+func (ts *TxStore) NextPubForPeer(peerBytes [33]byte) ([33]byte, [33]byte, error) {
+	var peerIdx, cIdx uint32
+	var empty [33]byte
+	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+		prs := btx.Bucket(BKTPeers)
+		if prs == nil {
+			return fmt.Errorf("NextPubForPeer: no peers")
+		}
+		pr := prs.Bucket(peerBytes[:])
+		if pr == nil {
+			return fmt.Errorf("NextPubForPeer: peer %x not found", peerBytes)
+		}
+		peerIdxBytes := pr.Get(KEYIdx)
+		if peerIdxBytes == nil {
+			return fmt.Errorf("NextPubForPeer: peer %x has no index? db bad", peerBytes)
+		}
+		peerIdx = BtU32(peerIdxBytes) // store for key creation
+		// can't use keyN.  Use BucketN.  So we start at 1.  Also this means
+		// NO SUB-BUCKETS in peers.  If we want to add sub buckets we'll need
+		// to count or track a different way.
+		// nah we can't use this.  Gotta count each time.  Lame.
+		cIdx = CountKeysInBucket(pr) + 1
+		return nil
+	})
+	if err != nil {
+		return empty, empty, err
+	}
+
+	pub := ts.GetChanPubkey(peerIdx, cIdx)
+	refundPub := ts.GetRefundPubkeyBytes(peerIdx, cIdx)
+	//	if pub == nil || adr == nil {
+	//		return nil, nil, fmt.Errorf("NextPubForPeer: nil key")
+	//	}
+	return pub, refundPub, nil
+}
+
 // GetPeerIdx returns the peer index given a pubkey.
 func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	var idx uint32
@@ -134,40 +172,33 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 // which figures out the inputs and outputs.  So basically move
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
-func (ts *TxStore) MakeFundTx(
-	tx *wire.MsgTx, amt int64, peerIdPub [33]byte) (*wire.OutPoint, error) {
+func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64,
+	peerId, theirPub, theirRefund [33]byte) (*wire.OutPoint, error) {
 
 	var err error
 	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
-	var cn [20]byte // channel nonce (I create it)
 
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
 			return fmt.Errorf("MakeMultiTx: no peers")
 		}
-		pr := prs.Bucket(peerIdPub[:]) // go into this peers bucket
+		pr := prs.Bucket(peerId[:]) // go into this peers bucket
 		if pr == nil {
-			return fmt.Errorf("MakeMultiTx: peer %x not found", peerIdPub)
+			return fmt.Errorf("MakeMultiTx: peer %x not found", peerId)
 		}
 		peerIdxBytes := pr.Get(KEYIdx) // find peer index
 		if peerIdxBytes == nil {
-			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerIdPub)
+			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerId)
 		}
 		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
 		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
-		// make channel nonce, pubkeys
-		cn = ts.CreateChanNonce(peerIdx, cIdx)
-
-		myChanPub, theirChanPub, err := CalcChanPubs(ts.IdPub(), peerIdPub, cn)
-		if err != nil {
-			return err
-		}
+		myChanPub := ts.GetChanPubkey(peerIdx, cIdx)
 
 		// generate multisig output from two pubkeys
-		multiTxOut, err := FundTxOut(theirChanPub[:], myChanPub[:], amt)
+		multiTxOut, err := FundTxOut(theirPub[:], myChanPub[:], amt)
 		if err != nil {
 			return err
 		}
@@ -200,9 +231,8 @@ func (ts *TxStore) MakeFundTx(
 		mUtxo.Op = *op
 		var qc Qchan
 		qc.Utxo = mUtxo
-		qc.ChannelNonce = cn
-		// qc.TheirPub = theirPub // leave; don't need
-		// qc.TheirRefundAdr = theirRefund // don't know yet; leave blank
+		qc.TheirPub = theirPub
+		qc.TheirRefundPub = theirRefund
 		// serialize multiOut
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -238,7 +268,7 @@ func (ts *TxStore) MakeFundTx(
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerArr, theirRefund [33]byte, cNonce [20]byte) (*Qchan, error) {
+	peerArr, theirChanPub, theirRefund [33]byte) (*Qchan, error) {
 
 	var cIdx uint32
 	qc := new(Qchan)
@@ -257,14 +287,9 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		if peerIdxBytes == nil {
 			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerArr)
 		}
+		pIdx := BtU32(peerIdxBytes)
 		// use key counter here?
-		cIdx = (CountKeysInBucket(pr) << 1) | 1 // new remote, lsb 1
-
-		// not used yet; needed for signing in chanACK
-		theirChanPub, myChanPub, err := CalcChanPubs(peerArr, ts.IdPub(), cNonce)
-		if err != nil {
-			return err
-		}
+		cIdx = CountKeysInBucket(pr) + 1
 
 		// make new bucket for this mutliout
 		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
@@ -275,15 +300,14 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		var cUtxo Utxo      // create new utxo and copy into it
 		cUtxo.AtHeight = -1 // not even broadcast yet
 		cUtxo.KeyIdx = cIdx
+		cUtxo.PeerIdx = BtU32(peerIdxBytes)
 		cUtxo.Value = amt
 		cUtxo.SpendLag = 1 // multi/chan always wit
 		cUtxo.Op = *op
 
 		qc.Utxo = cUtxo
-		qc.ChannelNonce = cNonce
-		qc.MyPub = myChanPub
+		qc.MyPub = ts.GetChanPubkey(pIdx, cIdx)
 		qc.TheirPub = theirChanPub
-		qc.PeerIdx = BtU32(peerIdxBytes)
 		qc.PeerId = peerArr
 		qc.TheirRefundPub = theirRefund
 		qc.MyRefundPub = ts.GetRefundPubkeyBytes(qc.PeerIdx, cIdx)
@@ -424,20 +448,9 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	// note that peerIndex is not set from deserialization!  set it here!
 	qc.PeerIdx = peerIdx
 	copy(qc.PeerId[:], peerPub)
-	// derive my channel pubkey; if remote use CKDN
-	if qc.KeyIdx&1 == 0 { // local
-		qc.MyPub, qc.TheirPub, err = CalcChanPubs(
-			ts.IdPub(), qc.PeerId, qc.ChannelNonce)
-		if err != nil {
-			return nil, err
-		}
-	} else { // order switched; they created / funded
-		qc.TheirPub, qc.MyPub, err = CalcChanPubs(
-			qc.PeerId, ts.IdPub(), qc.ChannelNonce)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// get my channel pubkey
+	qc.MyPub = ts.GetChanPubkey(qc.PeerIdx, qc.KeyIdx)
+
 	// derive my refund from index
 	qc.MyRefundPub = ts.GetRefundPubkeyBytes(peerIdx, qc.KeyIdx)
 	qc.State = new(StatCom)

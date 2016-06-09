@@ -53,7 +53,7 @@ type Utxo struct { // cash money.
 
 	// if a channel close tx output, fromPeer will be non-zero
 	// in that case, KeyIdx is the PeerIdx for key derivation
-	FromPeer uint32
+	PeerIdx uint32
 
 	//	IsWit bool // true if p2wpkh output
 }
@@ -291,7 +291,7 @@ func (u *Utxo) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 	// write 4 byte from peer value
-	err = binary.Write(&buf, binary.BigEndian, u.FromPeer)
+	err = binary.Write(&buf, binary.BigEndian, u.PeerIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +342,7 @@ func UtxoFromBytes(b []byte) (Utxo, error) {
 		return u, err
 	}
 	// read 4 byte from peer value
-	err = binary.Read(buf, binary.BigEndian, &u.FromPeer)
+	err = binary.Read(buf, binary.BigEndian, &u.PeerIdx)
 	if err != nil {
 		return u, err
 	}

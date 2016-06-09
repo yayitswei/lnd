@@ -25,7 +25,18 @@ func OmniHandler(OmniChan chan []byte) {
 			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
 		}
-
+		// POINT REQUEST
+		if msgid == uspv.MSGID_POINTREQ {
+			fmt.Printf("Got point request from %x\n", from)
+			PointReqHandler(from, msg[1:])
+			continue
+		}
+		// POINT RESPONSE
+		if msgid == uspv.MSGID_POINTRESP {
+			fmt.Printf("Got point response from %x\n", from)
+			PointRespHandler(from, msg[1:])
+			continue
+		}
 		// CHANNEL DESCRIPTION
 		if msgid == uspv.MSGID_CHANDESC {
 			fmt.Printf("Got channel description from %x\n", from)

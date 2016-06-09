@@ -468,8 +468,8 @@ func Bal(args []string) error {
 		if u.SpendLag != 0 {
 			fmt.Printf(" s:%d", u.SpendLag)
 		}
-		if u.FromPeer != 0 {
-			fmt.Printf(" p:%d", u.FromPeer)
+		if u.PeerIdx != 0 {
+			fmt.Printf(" p:%d", u.PeerIdx)
 		}
 		fmt.Printf("\n")
 		score += u.Value

@@ -358,10 +358,10 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	priv := new(btcec.PrivateKey)
 
 	// check if channel close PKH
-	if u.FromPeer == 0 {
+	if u.PeerIdx == 0 {
 		priv = s.TS.GetWalletPrivkey(u.KeyIdx)
 	} else {
-		priv = s.TS.GetRefundPrivkey(u.FromPeer, u.KeyIdx)
+		priv = s.TS.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
 	}
 	if priv == nil {
 		return nil, fmt.Errorf("SendOne: nil privkey")
@@ -384,7 +384,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		}
 		// got here; possible to spend.  But need the previous script
 		// first get the channel data
-		qc, err := s.TS.GetQchanByIdx(u.FromPeer, u.KeyIdx)
+		qc, err := s.TS.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
 		if err != nil {
 			return nil, err
 		}
@@ -546,10 +546,10 @@ func (s *SPVCon) SendCoins(
 	for i, _ := range tx.TxIn {
 		// pick key
 		priv := new(btcec.PrivateKey)
-		if utxos[i].FromPeer == 0 {
+		if utxos[i].PeerIdx == 0 {
 			priv = s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
 		} else {
-			priv = s.TS.GetRefundPrivkey(utxos[i].FromPeer, utxos[i].KeyIdx)
+			priv = s.TS.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			// fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
 		}
 		if priv == nil {
@@ -594,7 +594,7 @@ func (s *SPVCon) SendCoins(
 		if utxos[i].SpendLag > 1 { // witness, time-locked SH
 			// this utxo is returned by PickUtxos() so should be ready to spend
 			// first get the channel data
-			qc, err := s.TS.GetQchanByIdx(utxos[i].FromPeer, utxos[i].KeyIdx)
+			qc, err := s.TS.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			if err != nil {
 				return nil, err
 			}

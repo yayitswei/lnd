@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	"github.com/lightningnetwork/lnd/uspv"
-	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -106,14 +105,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	tx := wire.NewMsgTx() // make new tx
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := new(btcec.PrivateKey)
-
-	if qc.KeyIdx&1 == 0 { //local, use ckdn
-		fmt.Printf("local\n")
-		priv = SCon.TS.GetChanPrivkey(SCon.TS.IdPub(), qc.PeerId, qc.ChannelNonce)
-	} else { // remote
-		priv = SCon.TS.GetChanPrivkey(qc.PeerId, SCon.TS.IdPub(), qc.ChannelNonce)
-	}
+	priv := SCon.TS.GetChanPrivkey(qc.PeerIdx, qc.KeyIdx)
 
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
@@ -208,14 +200,7 @@ func CloseRespHandler(from [16]byte, respbytes []byte) {
 	//	tx.Flags = 0x01       // tx will be witty
 
 	// get private key for this (need pubkey now but will need priv soon)
-	priv := new(btcec.PrivateKey)
-
-	if qc.KeyIdx&1 == 0 { //local, use ckdn
-		fmt.Printf("local\n")
-		priv = SCon.TS.GetChanPrivkey(SCon.TS.IdPub(), qc.PeerId, qc.ChannelNonce)
-	} else { // remote
-		priv = SCon.TS.GetChanPrivkey(qc.PeerId, SCon.TS.IdPub(), qc.ChannelNonce)
-	}
+	priv := SCon.TS.GetChanPrivkey(qc.PeerIdx, qc.KeyIdx)
 	// get pubkey for prev script (preimage)
 	myPubBytes := priv.PubKey().SerializeCompressed()
 

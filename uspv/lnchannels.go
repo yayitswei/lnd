@@ -20,9 +20,11 @@ const (
 	seqMask  = 0xff000000 // assert high byte
 	timeMask = 0x21000000 // 1987 to 1988
 
-	MSGID_CHANDESC = 0x32
-	MSGID_CHANACK  = 0x33
-	MSGID_SIGPROOF = 0x34
+	MSGID_POINTREQ  = 0x30
+	MSGID_POINTRESP = 0x31
+	MSGID_CHANDESC  = 0x32
+	MSGID_CHANACK   = 0x33
+	MSGID_SIGPROOF  = 0x34
 
 	MSGID_CLOSEREQ  = 0x40
 	MSGID_CLOSERESP = 0x41
@@ -46,12 +48,10 @@ type Qchan struct {
 	Utxo                 // S underlying utxo data
 	CloseData QCloseData // S closing outpoint
 
-	ChannelNonce [20]byte // S made by funder; stored by both
-	MyPub        [33]byte // D my channel specific pubkey
-	TheirPub     [33]byte // D their channel specific pubkey
+	MyPub    [33]byte // D my channel specific pubkey
+	TheirPub [33]byte // S their channel specific pubkey
 
-	PeerIdx uint32   // D local unique index of peer.  derived from place in db.
-	PeerId  [33]byte // D useful for quick traverse of db
+	PeerId [33]byte // D useful for quick traverse of db
 
 	TheirRefundPub [33]byte // S their pubkey for channel break
 	MyRefundPub    [33]byte // D my refund pubkey for channel break
@@ -198,7 +198,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		shTxo.Op.Index = shIdx
 		shTxo.AtHeight = q.CloseData.CloseHeight
 		shTxo.KeyIdx = q.KeyIdx
-		shTxo.FromPeer = q.PeerIdx
+		shTxo.PeerIdx = q.PeerIdx
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.SpendLag = int32(q.TimeOut)
 		cTxos[0] = shTxo
@@ -211,7 +211,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 	pkhTxo.Op.Index = pkhIdx
 	pkhTxo.AtHeight = q.CloseData.CloseHeight
 	pkhTxo.KeyIdx = q.KeyIdx
-	pkhTxo.FromPeer = q.PeerIdx
+	pkhTxo.PeerIdx = q.PeerIdx
 	pkhTxo.Value = tx.TxOut[pkhIdx].Value
 	pkhTxo.SpendLag = 1 // 1 for witness, non time locked
 	cTxos[0] = pkhTxo
@@ -227,7 +227,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		// the grabbable utxo is more of an indicator; the HAKD will need
 		// to be loaded from the DB to grab.
 		shTxo.KeyIdx = q.KeyIdx
-		shTxo.FromPeer = q.PeerIdx
+		shTxo.PeerIdx = q.PeerIdx
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.SpendLag = -1
 		cTxos = append(cTxos, shTxo)
@@ -299,7 +299,7 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	}
 	// this utxo is returned by PickUtxos() so should be ready to spend
 	// first get the channel data
-	qc, err := t.GetQchanByIdx(u.FromPeer, u.KeyIdx)
+	qc, err := t.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -336,14 +336,9 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, err
 	}
 	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
+
 	// get private signing key
-	priv := new(btcec.PrivateKey)
-	// get private signing key
-	if qc.KeyIdx&1 == 0 { //local, use ckdn
-		priv = t.GetChanPrivkey(t.IdPub(), qc.PeerId, qc.ChannelNonce)
-	} else { // remote
-		priv = t.GetChanPrivkey(qc.PeerId, t.IdPub(), qc.ChannelNonce)
-	}
+	priv := t.GetChanPrivkey(qc.PeerIdx, qc.KeyIdx)
 	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
 	// modify private key
 	PrivKeyAddBytes(priv, elk.Bytes())
@@ -496,14 +491,7 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	}
 
 	// get private signing key
-	priv := new(btcec.PrivateKey)
-	// get private signing key
-	if q.KeyIdx&1 == 0 { //local, use ckdn
-		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
-	} else { // remote
-		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
-	}
-
+	priv := t.GetChanPrivkey(q.PeerIdx, q.KeyIdx)
 	// generate sig.
 	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
@@ -542,13 +530,8 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 		return nil, err
 	}
 
-	priv := new(btcec.PrivateKey)
 	// get private signing key
-	if q.KeyIdx&1 == 0 { //local, use ckdn
-		priv = t.GetChanPrivkey(t.IdPub(), q.PeerId, q.ChannelNonce)
-	} else { // remote
-		priv = t.GetChanPrivkey(q.PeerId, t.IdPub(), q.ChannelNonce)
-	}
+	priv := t.GetChanPrivkey(q.PeerIdx, q.KeyIdx)
 
 	// generate sig.
 	sig, err := txscript.RawTxInWitnessSignature(
@@ -891,10 +874,10 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 bytes   desc   at offset
 
 60	utxo		0
-20	nonce	60
-33	thrref	80
+33	nonce	60
+33	thrref	93
 
-length 113
+length 126
 
 peeridx is inferred from position in db.
 */
@@ -913,8 +896,8 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// write 20 byte channel nonce
-	_, err = buf.Write(q.ChannelNonce[:])
+	// write their channel pubkey
+	_, err = buf.Write(q.TheirPub[:])
 	if err != nil {
 		return nil, err
 	}
@@ -935,8 +918,8 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 113 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 105", len(b))
+	if len(b) < 126 {
+		return q, fmt.Errorf("Got %d bytes for qchan, expect 126", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:60])
@@ -946,11 +929,11 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 
 	q.Utxo = u // assign the utxo
 
-	copy(q.ChannelNonce[:], b[60:80])
+	copy(q.TheirPub[:], b[60:93])
 	if err != nil {
 		return q, err
 	}
-	copy(q.TheirRefundPub[:], b[80:])
+	copy(q.TheirRefundPub[:], b[93:])
 
 	return q, nil
 }
