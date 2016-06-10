@@ -40,14 +40,22 @@ func (l *LNAdr) String() string {
 
 // newLnAddr...
 func LnAddrFromString(encodedAddr string) (*LNAdr, error) {
-	// The format of an lnaddr is "<pubkey or pkh>@host"
-	idHost := strings.Split(encodedAddr, "@")
-	if len(idHost) < 2 {
-		// no @mark, assume 127.0.0.1:2448 for easy testing
-		idHost = append(idHost, "127.0.0.1:2448")
-		//		return nil, fmt.Errorf("invalid format for lnaddr string: %v", encodedAddr)
+	// The format of an lnaddr is "<pubkey or pkh>@host:port"
+
+	if !strings.ContainsRune(encodedAddr, '@') {
+		encodedAddr += "@127.0.0.1:2448"
+	}
+	if !strings.ContainsRune(encodedAddr, ':') {
+		encodedAddr += ":2448"
 	}
 
+	//	if len(idHost) < 2 {
+	//		// no @mark, assume 127.0.0.1:2448 for easy testing
+	//		idHost = append(idHost, "127.0.0.1")
+	//		//		return nil, fmt.Errorf("invalid format for lnaddr string: %v", encodedAddr)
+	//	}
+
+	idHost := strings.Split(encodedAddr, "@")
 	// Attempt to resolve the IP address, this handles parsing IPv6 zones,
 	// and such.
 	fmt.Println("host: ", idHost[1])

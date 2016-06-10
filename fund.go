@@ -111,10 +111,29 @@ func Math(args []string) error {
 
 func FundChannel(args []string) error {
 	if RemoteCon == nil {
-		return fmt.Errorf("Not connected to anyone\n")
+		return fmt.Errorf("Not connected to anyone")
 	}
+	if len(FundChanStash) > 0 {
+		return fmt.Errorf("Other channel creation not done yet")
+	}
+	var peerArr [33]byte
+	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	peerIdx, cIdx, err := SCon.TS.NextIdxForPeer(peerArr)
+	if err != nil {
+		return err
+	}
+
+	fr := new(FundReserve)
+	fr.PeerIdx = peerIdx
+	fr.ChanIdx = cIdx
+	fr.Cap = 2000000
+	fr.InitSend = 500000
+	//TODO freeze utxos here
+	//	SCon.PickUtxos(qChanCapacity, true)
+
+	FundChanStash = append(FundChanStash, fr)
 	msg := []byte{uspv.MSGID_POINTREQ}
-	_, err := RemoteCon.Write(msg)
+	_, err = RemoteCon.Write(msg)
 	return err
 }
 
@@ -127,26 +146,32 @@ func PointReqHandler(from [16]byte, pointReqBytes []byte) {
 	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	pub, refundpub, err := SCon.TS.NextPubForPeer(peerArr)
+	peerIdx, cIdx, err := SCon.TS.NextIdxForPeer(peerArr)
 	if err != nil {
 		fmt.Printf("PointReqHandler err %s", err.Error())
 		return
 	}
-	fmt.Printf("Generated pubkey %x\n", pub)
+	myChanPub := SCon.TS.GetChanPubkey(peerIdx, cIdx)
+	myRefundPub := SCon.TS.GetRefundPubkey(peerIdx, cIdx)
+	fmt.Printf("Generated pubkey %x\n", myChanPub)
 
 	msg := []byte{uspv.MSGID_POINTRESP}
-	msg = append(msg, pub[:]...)
-	msg = append(msg, refundpub[:]...)
+	msg = append(msg, myChanPub[:]...)
+	msg = append(msg, myRefundPub[:]...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
 
 // FundChannel makes a multisig address with the node connected to...
 func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
-	qChanCapacity := int64(2000000) // this will be an arg. soon.
+	if len(FundChanStash) == 0 {
+		return fmt.Errorf("Got point response but no channel creation in progress")
+	}
+	fr := FundChanStash[0]
+	//TODO : check that pointResp is from the same peer as the FundReserve peer
+
 	satPerByte := int64(80)
-	initPay := int64(1000000) // also an arg. real soon.
-	capBytes := uspv.I64tB(qChanCapacity)
+	capBytes := uspv.I64tB(fr.Cap)
 
 	if len(pointRespBytes) != 66 {
 		return fmt.Errorf("PointRespHandler err: pointRespBytes %d bytes, expect 66\n",
@@ -166,13 +191,14 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	tx := wire.NewMsgTx() // make new tx
 
 	// first get inputs. comes sorted from PickUtxos.
-	utxos, overshoot, err := SCon.PickUtxos(qChanCapacity, true)
+	utxos, overshoot, err := SCon.PickUtxos(fr.Cap, true)
 	if err != nil {
 		return err
 	}
 	if overshoot < 0 {
 		return fmt.Errorf("witness utxos undershoot by %d", -overshoot)
 	}
+	//TODO use frozen utxos
 	// add all the inputs to the tx
 	for _, utxo := range utxos {
 		tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
@@ -191,7 +217,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
 	// save partial tx to db; populate output, get their channel pubkey
-	op, err := SCon.TS.MakeFundTx(tx, qChanCapacity, peerArr, theirPub, theirRefundPub)
+	op, err := SCon.TS.MakeFundTx(tx, fr.Cap, peerArr, theirPub, theirRefundPub)
 	if err != nil {
 		return err
 	}
@@ -211,7 +237,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 
 	// create initial state
 	qc.State.StateIdx = 1
-	qc.State.MyAmt = qc.Value - initPay
+	qc.State.MyAmt = qc.Value - fr.InitSend
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
@@ -223,7 +249,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 		return err
 	}
 
-	initPayBytes := uspv.I64tB(qc.State.MyAmt) // also will be an arg
+	initPayBytes := uspv.I64tB(fr.InitSend) // also will be an arg
 	// description is outpoint (36), mypub(33), myrefund(33), capacity (8),
 	// initial payment (8), HAKD (33)
 	// total length 138

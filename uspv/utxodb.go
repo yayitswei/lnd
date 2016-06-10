@@ -570,7 +570,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							}
 
 							// need my pubkey too
-							hitQChan.MyRefundPub = ts.GetRefundPubkeyBytes(
+							hitQChan.MyRefundPub = ts.GetRefundPubkey(
 								pIdx, hitQChan.KeyIdx)
 
 							// save to close bucket

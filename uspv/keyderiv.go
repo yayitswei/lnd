@@ -281,7 +281,7 @@ func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 //	return ts.GetPubkey(UseChannelRefund, peerIdx, cIdx)
 //}
 
-func (t *TxStore) GetRefundPubkeyBytes(peerIdx, cIdx uint32) [33]byte {
+func (t *TxStore) GetRefundPubkey(peerIdx, cIdx uint32) [33]byte {
 	var b [33]byte
 	k := t.GetPubkey(UseChannelRefund, peerIdx, cIdx)
 	if k != nil {

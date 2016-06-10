@@ -38,7 +38,16 @@ var (
 	GlobalOmniChan chan []byte   // channel for omnihandler
 	RemoteCon      *lndc.LNDConn // one because simple
 
+	FundChanStash []*FundReserve // should move this or add a mutex
 )
+
+type FundReserve struct {
+	PeerIdx       uint32
+	ChanIdx       uint32
+	Cap, InitSend int64
+	Roundup       int64
+	FrozenTxos    []*wire.OutPoint
+}
 
 func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
@@ -259,17 +268,16 @@ func Shellparse(cmdslice []string) error {
 
 // Lis starts listening.  Takes no args for now.
 func Lis(args []string) error {
-	go TCPListener()
+	go TCPListener(":2448")
 	return nil
 }
 
-func TCPListener() {
+func TCPListener(lisIpPort string) error {
 	idPriv := SCon.TS.IdKey()
 
-	listener, err := lndc.NewListener(idPriv, ":2448")
+	listener, err := lndc.NewListener(idPriv, lisIpPort)
 	if err != nil {
-		log.Printf(err.Error())
-		return
+		return err
 	}
 
 	myId := btcutil.Hash160(idPriv.PubKey().SerializeCompressed())
@@ -278,27 +286,30 @@ func TCPListener() {
 	fmt.Printf("Listening with base58 address: %s lnid: %x\n",
 		lisAdr.String(), myId[:16])
 
-	for {
-		netConn, err := listener.Accept() // this blocks
-		if err != nil {
-			log.Printf("Listener error: %s\n", err.Error())
-			continue
-		}
-		newConn, ok := netConn.(*lndc.LNDConn)
-		if !ok {
-			fmt.Printf("Got something that wasn't a LNDC")
-			continue
-		}
+	go func() {
+		for {
+			netConn, err := listener.Accept() // this blocks
+			if err != nil {
+				log.Printf("Listener error: %s\n", err.Error())
+				continue
+			}
+			newConn, ok := netConn.(*lndc.LNDConn)
+			if !ok {
+				fmt.Printf("Got something that wasn't a LNDC")
+				continue
+			}
 
-		idslice := btcutil.Hash160(newConn.RemotePub.SerializeCompressed())
-		var newId [16]byte
-		copy(newId[:], idslice[:16])
-		fmt.Printf("Authed incoming connection from remote %s lnid %x OK\n",
-			newConn.RemoteAddr().String(), newId)
+			idslice := btcutil.Hash160(newConn.RemotePub.SerializeCompressed())
+			var newId [16]byte
+			copy(newId[:], idslice[:16])
+			fmt.Printf("Authed incoming connection from remote %s lnid %x OK\n",
+				newConn.RemoteAddr().String(), newId)
 
-		go LNDCReceiver(newConn, newId, GlobalOmniChan)
-		RemoteCon = newConn
-	}
+			go LNDCReceiver(newConn, newId, GlobalOmniChan)
+			RemoteCon = newConn
+		}
+	}()
+	return nil
 }
 
 func Con(args []string) error {

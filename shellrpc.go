@@ -8,17 +8,27 @@ import (
 	"net/rpc/jsonrpc"
 	"sort"
 
+	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/uspv"
 
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 )
 
+// multi-use structs
+
 type LNRpc struct {
 	// nothing...?
 }
 type TxidsReply struct {
 	Txids []string
+}
+type StatusReply struct {
+	Status string
+}
+
+type NoArgs struct {
+	// nothin
 }
 
 // ------------------------- address
@@ -52,55 +62,104 @@ func (r *LNRpc) Address(args *AdrArgs, reply *AdrReply) error {
 }
 
 // ------------------------- balance
+// BalReply is the reply when the user asks about their balance.
+// This is a Non-Channel
 type BalReply struct {
-	TotalScore int64
-	Txos       []BalTxo
-	Qchans     []string
+	ChanTotal         int64
+	TxoTotal          int64
+	SpendableNow      int64
+	SpendableNowWitty int64
 }
-
-type BalTxo struct {
+type TxoListReply struct {
+	Txos []TxoInfo
+}
+type ChannelListReply struct {
+	Channels []ChannelInfo
+}
+type TxoInfo struct {
 	OutPoint string
-	Height   int32
 	Amt      int64
+	Height   int32
+
+	PeerNum uint32
+	KeyNum  uint32
+}
+type ChannelInfo struct {
+	OutPoint  string
+	Capacity  int64
+	MyBalance int64
+	PeerID    string
 }
 
-type BalQchan struct {
-	OutPoint   string
-	Capacity   int64
-	MyBalance  int64
-	StateIndex uint64
+func (r *LNRpc) Bal(args *NoArgs, reply *BalReply) error {
+	// check current chain height; needed for time-locked outputs
+	curHeight, err := SCon.TS.GetDBSyncHeight()
+	if err != nil {
+		return err
+	}
+	allTxos, err := SCon.TS.GetAllUtxos()
+	if err != nil {
+		return err
+	}
+	// iterate through utxos to figure out how much we have
+	for _, u := range allTxos {
+		reply.TxoTotal += u.Value
+		if u.SpendLag == 0 {
+			reply.SpendableNow += u.Value
+		} else {
+			if u.SpendLag == 1 || u.AtHeight+u.SpendLag > curHeight {
+				reply.SpendableNow += u.Value
+				reply.SpendableNowWitty += u.Value
+			}
+		}
+	}
+
+	// get all channel states
+	qcs, err := SCon.TS.GetAllQchans()
+	if err != nil {
+		return err
+	}
+	// iterate through channels to figure out how much we have
+	for _, q := range qcs {
+		reply.ChanTotal += q.State.MyAmt
+	}
+
+	return nil
 }
 
-type BalArgs struct {
-	// nothin
-}
-
-func (r *LNRpc) Bal(args *BalArgs, reply *BalReply) error {
-	var err error
-
+// TxoList sends back a list of all non-channel utxos
+func (r *LNRpc) TxoList(args *NoArgs, reply *TxoListReply) error {
 	allTxos, err := SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
 	}
 
-	reply.Txos = make([]BalTxo, len(allTxos))
-
+	reply.Txos = make([]TxoInfo, len(allTxos))
 	for i, u := range allTxos {
 		reply.Txos[i].Amt = u.Value
 		reply.Txos[i].Height = u.AtHeight
+		reply.Txos[i].KeyNum = u.KeyIdx
 		reply.Txos[i].OutPoint = u.Op.String()
-		reply.TotalScore += u.Value
+		reply.Txos[i].PeerNum = u.PeerIdx
 	}
+	return nil
+}
 
+// ChannelList sends back a list of every (open?) channel with some
+// info for each.
+func (r *LNRpc) ChannelList(args *NoArgs, reply *ChannelListReply) error {
 	qcs, err := SCon.TS.GetAllQchans()
 	if err != nil {
 		return err
 	}
-	for _, q := range qcs {
-		reply.Qchans = append(reply.Qchans, q.Op.String())
-	}
+	reply.Channels = make([]ChannelInfo, len(qcs))
 
-	//	*reply = fmt.Sprintf("you have %d utxos", len(rawUtxos))
+	for i, q := range qcs {
+		reply.Channels[i].OutPoint = q.Op.String()
+		reply.Channels[i].Capacity = q.Value
+		reply.Channels[i].MyBalance = q.State.MyAmt
+		reply.Channels[i].PeerID = fmt.Sprintf("%x", q.PeerId)
+	}
 	return nil
 }
 
@@ -224,14 +283,67 @@ func (r *LNRpc) Fanout(args FanArgs, reply *TxidsReply) error {
 }
 
 // ------------------------- listen
-type LisReply struct {
-	Status string
+func (r *LNRpc) Listen(args NoArgs, reply *StatusReply) error {
+	err := TCPListener(":2448")
+	if err != nil {
+		return err
+	}
+	// todo: say what port and what pubkey in status message
+	reply.Status = fmt.Sprintf("listening on %s", RemoteCon.LocalAddr().String())
+	return nil
 }
 
-func (r *LNRpc) Lis(args BalArgs, reply *LisReply) error {
-	go TCPListener()
-	// todo: say what port and what pubkey in status message
-	reply.Status = "listening"
+// ------------------------- connect
+type ConnectArgs struct {
+	LNAddr string
+}
+
+func (r *LNRpc) Connect(args ConnectArgs, reply *StatusReply) error {
+
+	connectNode, err := lndc.LnAddrFromString(args.LNAddr)
+	if err != nil {
+		return err
+	}
+
+	// get my private ID key
+	idPriv := SCon.TS.IdKey()
+
+	// Assign remote connection
+	RemoteCon = new(lndc.LNDConn)
+
+	err = RemoteCon.Dial(idPriv,
+		connectNode.NetAddr.String(), connectNode.Base58Adr.ScriptAddress())
+	if err != nil {
+		return err
+	}
+
+	// store this peer in the db
+	_, err = SCon.TS.NewPeer(RemoteCon.RemotePub)
+	if err != nil {
+		return err
+	}
+
+	idslice := btcutil.Hash160(RemoteCon.RemotePub.SerializeCompressed())
+	var newId [16]byte
+	copy(newId[:], idslice[:16])
+	go LNDCReceiver(RemoteCon, newId, GlobalOmniChan)
+
+	return nil
+}
+
+// ------------------------- fund
+type FundArgs struct {
+	LNAddr      string
+	Capacity    int64 // later can be minimum capacity
+	Roundup     int64 // ignore for now; can be used to round-up capacity
+	InitialSend int64 // Initial send of -1 means "ALL"
+}
+
+func (r *LNRpc) Fund(args FundArgs, reply *StatusReply) error {
+	if args.InitialSend > args.Capacity {
+		return fmt.Errorf("Initial send more than capacity")
+	}
+
 	return nil
 }
 

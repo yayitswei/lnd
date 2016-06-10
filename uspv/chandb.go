@@ -103,11 +103,11 @@ func (ts *TxStore) NewPeer(pub *btcec.PublicKey) (bool, error) {
 	return itsnew, err
 }
 
-// NextPubForPeer returns the next pubkey to use with the peer.
-// It first checks that the peer exists, next pubkey.  Read only.
-func (ts *TxStore) NextPubForPeer(peerBytes [33]byte) ([33]byte, [33]byte, error) {
+// NextPubForPeer returns the next pubkey index to use with the peer.
+// It first checks that the peer exists. Read only.
+// Feed the indexes into GetFundPUbkey.
+func (ts *TxStore) NextIdxForPeer(peerBytes [33]byte) (uint32, uint32, error) {
 	var peerIdx, cIdx uint32
-	var empty [33]byte
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -130,15 +130,10 @@ func (ts *TxStore) NextPubForPeer(peerBytes [33]byte) ([33]byte, [33]byte, error
 		return nil
 	})
 	if err != nil {
-		return empty, empty, err
+		return 0, 0, err
 	}
 
-	pub := ts.GetChanPubkey(peerIdx, cIdx)
-	refundPub := ts.GetRefundPubkeyBytes(peerIdx, cIdx)
-	//	if pub == nil || adr == nil {
-	//		return nil, nil, fmt.Errorf("NextPubForPeer: nil key")
-	//	}
-	return pub, refundPub, nil
+	return peerIdx, cIdx, nil
 }
 
 // GetPeerIdx returns the peer index given a pubkey.
@@ -310,7 +305,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.TheirPub = theirChanPub
 		qc.PeerId = peerArr
 		qc.TheirRefundPub = theirRefund
-		qc.MyRefundPub = ts.GetRefundPubkeyBytes(qc.PeerIdx, cIdx)
+		qc.MyRefundPub = ts.GetRefundPubkey(qc.PeerIdx, cIdx)
 
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
@@ -452,7 +447,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	qc.MyPub = ts.GetChanPubkey(qc.PeerIdx, qc.KeyIdx)
 
 	// derive my refund from index
-	qc.MyRefundPub = ts.GetRefundPubkeyBytes(peerIdx, qc.KeyIdx)
+	qc.MyRefundPub = ts.GetRefundPubkey(peerIdx, qc.KeyIdx)
 	qc.State = new(StatCom)
 
 	// load state.  If it exists.
