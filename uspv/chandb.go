@@ -38,10 +38,6 @@ at a time, which for super high thoughput could be too slow.
 Later on we can chop it up so that each channel gets it's own db file.
 
 */
-const (
-	// when pubkeys are made for a locally funded channel, add / and this
-	localIdx = 1 << 30
-)
 
 var (
 	BKTPeers   = []byte("pir") // all peer data is in this bucket.
@@ -193,7 +189,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64,
 		myChanPub := ts.GetChanPubkey(peerIdx, cIdx)
 
 		// generate multisig output from two pubkeys
-		multiTxOut, err := FundTxOut(theirPub[:], myChanPub[:], amt)
+		multiTxOut, err := FundTxOut(theirPub, myChanPub, amt)
 		if err != nil {
 			return err
 		}
@@ -844,4 +840,207 @@ func (ts *TxStore) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error
 		return nil, err
 	}
 	return adrBytes, nil
+}
+
+/*----- serialization for StatCom ------- */
+/*
+bytes   desc   ends at
+1	len			1
+8	StateIdx		9
+8	MyAmt		17
+4	Delta		21
+33	MyRev		54
+33	MyPrevRev	87
+70?	Sig			157
+... to 131 bytes, ish.
+
+note that sigs are truncated and don't have the sighash type byte at the end.
+
+their rev hash can be derived from the elkrem sender
+and the stateidx.  hash160(elkremsend(sIdx)[:16])
+
+*/
+
+// ToBytes turns a StatCom into 106ish bytes
+func (s *StatCom) ToBytes() ([]byte, error) {
+	var buf bytes.Buffer
+	var err error
+
+	// write 8 byte state index
+	err = binary.Write(&buf, binary.BigEndian, s.StateIdx)
+	if err != nil {
+		return nil, err
+	}
+	// write 8 byte amount of my allocation in the channel
+	err = binary.Write(&buf, binary.BigEndian, s.MyAmt)
+	if err != nil {
+		return nil, err
+	}
+	// write 4 byte delta.  At steady state it's 0.
+	err = binary.Write(&buf, binary.BigEndian, s.Delta)
+	if err != nil {
+		return nil, err
+	}
+	// write 33 byte my revocation pubkey
+	_, err = buf.Write(s.MyHAKDPub[:])
+	if err != nil {
+		return nil, err
+	}
+	// write 33 byte my previous revocation hash
+	// at steady state it's 0s.
+	_, err = buf.Write(s.MyPrevHAKDPub[:])
+	if err != nil {
+		return nil, err
+	}
+	// write their sig
+	_, err = buf.Write(s.sig)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// StatComFromBytes turns 160 ish bytes into a StatCom
+// it might be only 86 bytes because there is no sig (first save)
+func StatComFromBytes(b []byte) (*StatCom, error) {
+	var s StatCom
+	if len(b) < 80 || len(b) > 170 {
+		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
+			len(b))
+	}
+	buf := bytes.NewBuffer(b)
+	// read 8 byte state index
+	err := binary.Read(buf, binary.BigEndian, &s.StateIdx)
+	if err != nil {
+		return nil, err
+	}
+	// read 8 byte amount of my allocation in the channel
+	err = binary.Read(buf, binary.BigEndian, &s.MyAmt)
+	if err != nil {
+		return nil, err
+	}
+	// read 4 byte delta.
+	err = binary.Read(buf, binary.BigEndian, &s.Delta)
+	if err != nil {
+		return nil, err
+	}
+	// read 33 byte HAKD pubkey
+	copy(s.MyHAKDPub[:], buf.Next(33))
+	// read 33 byte previous HAKD pubkey
+	copy(s.MyPrevHAKDPub[:], buf.Next(33))
+	// the rest is their sig
+	s.sig = buf.Bytes()
+
+	return &s, nil
+}
+
+/*----- serialization for QChannels ------- */
+
+/* Qchan serialization:
+bytes   desc   at offset
+
+60	utxo		0
+33	nonce	60
+33	thrref	93
+
+length 126
+
+peeridx is inferred from position in db.
+*/
+//TODO !!! don't store the outpoint!  it's redundant!!!!!
+// it's just a nonce and a refund, that's it! 40 bytes!
+
+func (q *Qchan) ToBytes() ([]byte, error) {
+	var buf bytes.Buffer
+	// first serialize the utxo part
+	uBytes, err := q.Utxo.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+	// write that into the buffer first
+	_, err = buf.Write(uBytes)
+	if err != nil {
+		return nil, err
+	}
+	// write their channel pubkey
+	_, err = buf.Write(q.TheirPub[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// write their refund pubkey
+	_, err = buf.Write(q.TheirRefundPub[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// done
+	return buf.Bytes(), nil
+}
+
+// QchanFromBytes turns bytes into a Qchan.
+// the first 60 bytes are the utxo, then next 33 is the pubkey, then their pkh.
+// then finally txid of spending transaction
+func QchanFromBytes(b []byte) (Qchan, error) {
+	var q Qchan
+
+	if len(b) < 126 {
+		return q, fmt.Errorf("Got %d bytes for qchan, expect 126", len(b))
+	}
+
+	u, err := UtxoFromBytes(b[:60])
+	if err != nil {
+		return q, err
+	}
+
+	q.Utxo = u // assign the utxo
+
+	copy(q.TheirPub[:], b[60:93])
+	if err != nil {
+		return q, err
+	}
+	copy(q.TheirRefundPub[:], b[93:])
+
+	return q, nil
+}
+
+/*----- serialization for CloseTXOs -------
+
+  serialization:
+closetxid	32
+closeheight	4
+
+only closeTxid needed, I think
+
+*/
+
+func (c *QCloseData) ToBytes() ([]byte, error) {
+	if c == nil {
+		return nil, fmt.Errorf("nil qclose")
+	}
+	b := make([]byte, 36)
+	copy(b[:32], c.CloseTxid.Bytes())
+	copy(b[32:], I32tB(c.CloseHeight))
+	return b, nil
+}
+
+// QCloseFromBytes deserializes a Qclose.  Note that a nil slice
+// gives an empty / non closed qclose.
+func QCloseFromBytes(b []byte) (QCloseData, error) {
+	var c QCloseData
+	if len(b) == 0 { // empty is OK
+		return c, nil
+
+	}
+	if len(b) < 36 {
+		return c, fmt.Errorf("close data %d bytes, expect 36", len(b))
+	}
+	var empty wire.ShaHash
+	c.CloseTxid.SetBytes(b[:32])
+	if !c.CloseTxid.IsEqual(&empty) {
+		c.Closed = true
+	}
+	c.CloseHeight = BtI32(b[32:36])
+
+	return c, nil
 }

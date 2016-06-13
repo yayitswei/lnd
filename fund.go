@@ -407,6 +407,14 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
+	// clear this channel from FundChanStash
+	// currently one per peer at a time
+	for i, stashChan := range FundChanStash {
+		if stashChan.PeerIdx == qc.PeerIdx {
+			FundChanStash = append(FundChanStash[:i], FundChanStash[i+1:]...)
+		}
+	}
+
 	// sign their com tx to send
 	sig, err = SCon.TS.SignState(qc)
 	if err != nil {

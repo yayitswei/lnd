@@ -193,7 +193,7 @@ func Push(args []string) error {
 		return err
 	}
 	if uint32(peerIdx) != currentPeerIdx {
-		return fmt.Errorf("Want to close with peer %d but connected to %d",
+		return fmt.Errorf("Want to push to peer %d but connected to %d",
 			peerIdx, currentPeerIdx)
 	}
 	fmt.Printf("push %d to (%d,%d) %d times\n", amt, peerIdx, cIdx, times)
@@ -202,7 +202,9 @@ func Push(args []string) error {
 	if err != nil {
 		return err
 	}
-
+	if qc.CloseData.Closed {
+		return fmt.Errorf("channel %d, %d is closed.", peerIdx, cIdx64)
+	}
 	for times > 0 {
 		err = SCon.TS.ReloadQchan(qc)
 		if err != nil {
@@ -301,6 +303,11 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("RTSHandler err %s", err.Error())
+		return
+	}
+	if qc.CloseData.Closed {
+		fmt.Printf("RTSHandler err: %d, %d is closed.",
+			qc.PeerIdx, qc.KeyIdx)
 		return
 	}
 	if RTSDelta < 1 {

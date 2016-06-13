@@ -2,7 +2,6 @@ package uspv
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/lightningnetwork/lnd/elkrem"
@@ -167,7 +166,26 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 	txIdx := GetStateIdxFromTx(tx)
 	if txIdx == 0 || len(tx.TxOut) != 2 {
 		// must have been cooperative, or something else we don't recognize
-		// nothing spendable, so we're done
+		// if simple close, still have a PKH output, find it.
+		// so far, assume 1 txo
+		var pkhTxo Utxo
+		for i, out := range tx.TxOut {
+			if len(out.PkScript) < 22 {
+				continue // skip to prevent crash
+			}
+			if bytes.Equal(
+				out.PkScript[2:22], btcutil.Hash160(q.MyRefundPub[:])) {
+				pkhTxo.Op.Hash = txid
+				pkhTxo.Op.Index = uint32(i)
+				pkhTxo.AtHeight = q.CloseData.CloseHeight
+				pkhTxo.KeyIdx = q.KeyIdx
+				pkhTxo.PeerIdx = q.PeerIdx
+				pkhTxo.Value = tx.TxOut[i].Value
+				pkhTxo.SpendLag = 1 // 1 for witness, non time locked
+				return []Utxo{pkhTxo}, nil
+			}
+		}
+		// couldn't find anything... shouldn't happen
 		return nil, nil
 	}
 	var shIdx, pkhIdx uint32
@@ -485,7 +503,7 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	hCache := txscript.NewTxSigHashes(tx)
 
 	// generate script preimage (keep track of key order)
-	pre, swap, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
+	pre, swap, err := FundTxScript(q.MyPub, q.TheirPub)
 	if err != nil {
 		return nil, err
 	}
@@ -512,6 +530,60 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	return tx, nil
 }
 
+// SimpleCloseTx produces a close tx based on the current state.
+func (q *Qchan) SimpleCloseTx() *wire.MsgTx {
+	// sanity checks
+	if q == nil || q.State == nil {
+		fmt.Printf("SimpleCloseTx: nil chan / state")
+		return nil
+	}
+	fee := int64(5000) // fixed fee for now (on both sides)
+
+	// make my output
+	myScript := DirectWPKHScript(q.MyRefundPub)
+	myOutput := wire.NewTxOut(q.State.MyAmt-fee, myScript)
+	// make their output
+	theirScript := DirectWPKHScript(q.TheirRefundPub)
+	theirOutput := wire.NewTxOut((q.Value-q.State.MyAmt)-fee, theirScript)
+
+	// make tx with these outputs
+	tx := wire.NewMsgTx()
+	tx.AddTxOut(myOutput)
+	tx.AddTxOut(theirOutput)
+	// add channel outpoint as txin
+	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
+	// sort and return
+	txsort.InPlaceSort(tx)
+	return tx
+}
+
+// SignSimpleClose creates a close tx based on the current state and signs it,
+// returning that sig.  Also returns a bool; true means this sig goes second.
+func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
+	tx := q.SimpleCloseTx()
+	if tx == nil {
+		return nil, fmt.Errorf("SignSimpleClose: no tx")
+	}
+	// make hash cache
+	hCache := txscript.NewTxSigHashes(tx)
+
+	// generate script preimage for signing (ignore key order)
+	pre, _, err := FundTxScript(q.MyPub, q.TheirPub)
+	if err != nil {
+		return nil, err
+	}
+	// get private signing key
+	priv := t.GetChanPrivkey(q.PeerIdx, q.KeyIdx)
+	// generate sig
+	sig, err := txscript.RawTxInWitnessSignature(
+		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
+	if err != nil {
+		return nil, err
+	}
+
+	return sig, nil
+}
+
 // SignNextState generates your signature for their state. (usually)
 func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	var empty [33]byte
@@ -525,7 +597,7 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	hCache := txscript.NewTxSigHashes(tx)
 
 	// generate script preimage (ignore key order)
-	pre, _, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
+	pre, _, err := FundTxScript(q.MyPub, q.TheirPub)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +640,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	}
 
 	// generate fund output script preimage (ignore key order)
-	pre, _, err := FundTxScript(q.MyPub[:], q.TheirPub[:])
+	pre, _, err := FundTxScript(q.MyPub, q.TheirPub)
 	if err != nil {
 		return err
 	}
@@ -619,6 +691,9 @@ func (q *Qchan) VerifySig(sig []byte) error {
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
 // also returns the script preimage for later spending.
 func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
+	if q == nil {
+		return nil, fmt.Errorf("BuildStateTx: nil chan")
+	}
 	// sanity checks
 	s := q.State // use it a lot, make shorthand variable
 	if s == nil {
@@ -714,7 +789,7 @@ func CommitScript2(RKey, TKey [33]byte, delay uint16) ([]byte, error) {
 // Give it the two pubkeys and it'll give you the p2sh'd txout.
 // You don't have to remember the p2sh preimage, as long as you remember the
 // pubkeys involved.
-func FundTxOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
+func FundTxOut(pubA, puB [33]byte, amt int64) (*wire.TxOut, error) {
 	if amt < 0 {
 		return nil, fmt.Errorf("Can't create FundTx script with negative coins")
 	}
@@ -730,12 +805,9 @@ func FundTxOut(pubA, puB []byte, amt int64) (*wire.TxOut, error) {
 // FundMultiPre generates the non-p2sh'd multisig script for 2 of 2 pubkeys.
 // useful for making transactions spending the fundtx.
 // returns a bool which is true if swapping occurs.
-func FundTxScript(aPub, bPub []byte) ([]byte, bool, error) {
-	if len(aPub) != 33 || len(bPub) != 33 {
-		return nil, false, fmt.Errorf("Pubkey size error. Compressed pubkeys only")
-	}
+func FundTxScript(aPub, bPub [33]byte) ([]byte, bool, error) {
 	var swapped bool
-	if bytes.Compare(aPub, bPub) == -1 { // swap to sort pubkeys if needed
+	if bytes.Compare(aPub[:], bPub[:]) == -1 { // swap to sort pubkeys if needed
 		aPub, bPub = bPub, aPub
 		swapped = true
 	}
@@ -743,8 +815,8 @@ func FundTxScript(aPub, bPub []byte) ([]byte, bool, error) {
 	// Require 1 signatures, either key// so from both of the pubkeys
 	bldr.AddOp(txscript.OP_2)
 	// add both pubkeys (sorted)
-	bldr.AddData(aPub)
-	bldr.AddData(bPub)
+	bldr.AddData(aPub[:])
+	bldr.AddData(bPub[:])
 	// 2 keys total.  In case that wasn't obvious.
 	bldr.AddOp(txscript.OP_2)
 	// Good ol OP_CHECKMULTISIG.  Don't forget the zero!
@@ -774,207 +846,4 @@ func P2WSHify(scriptBytes []byte) []byte {
 	bldr.AddData(wsh[:])
 	b, _ := bldr.Script() // ignore script errors
 	return b
-}
-
-/*----- serialization for StatCom ------- */
-/*
-bytes   desc   ends at
-1	len			1
-8	StateIdx		9
-8	MyAmt		17
-4	Delta		21
-33	MyRev		54
-33	MyPrevRev	87
-70?	Sig			157
-... to 131 bytes, ish.
-
-note that sigs are truncated and don't have the sighash type byte at the end.
-
-their rev hash can be derived from the elkrem sender
-and the stateidx.  hash160(elkremsend(sIdx)[:16])
-
-*/
-
-// ToBytes turns a StatCom into 106ish bytes
-func (s *StatCom) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	var err error
-
-	// write 8 byte state index
-	err = binary.Write(&buf, binary.BigEndian, s.StateIdx)
-	if err != nil {
-		return nil, err
-	}
-	// write 8 byte amount of my allocation in the channel
-	err = binary.Write(&buf, binary.BigEndian, s.MyAmt)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte delta.  At steady state it's 0.
-	err = binary.Write(&buf, binary.BigEndian, s.Delta)
-	if err != nil {
-		return nil, err
-	}
-	// write 33 byte my revocation pubkey
-	_, err = buf.Write(s.MyHAKDPub[:])
-	if err != nil {
-		return nil, err
-	}
-	// write 33 byte my previous revocation hash
-	// at steady state it's 0s.
-	_, err = buf.Write(s.MyPrevHAKDPub[:])
-	if err != nil {
-		return nil, err
-	}
-	// write their sig
-	_, err = buf.Write(s.sig)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// StatComFromBytes turns 160 ish bytes into a StatCom
-// it might be only 86 bytes because there is no sig (first save)
-func StatComFromBytes(b []byte) (*StatCom, error) {
-	var s StatCom
-	if len(b) < 80 || len(b) > 170 {
-		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
-			len(b))
-	}
-	buf := bytes.NewBuffer(b)
-	// read 8 byte state index
-	err := binary.Read(buf, binary.BigEndian, &s.StateIdx)
-	if err != nil {
-		return nil, err
-	}
-	// read 8 byte amount of my allocation in the channel
-	err = binary.Read(buf, binary.BigEndian, &s.MyAmt)
-	if err != nil {
-		return nil, err
-	}
-	// read 4 byte delta.
-	err = binary.Read(buf, binary.BigEndian, &s.Delta)
-	if err != nil {
-		return nil, err
-	}
-	// read 33 byte HAKD pubkey
-	copy(s.MyHAKDPub[:], buf.Next(33))
-	// read 33 byte previous HAKD pubkey
-	copy(s.MyPrevHAKDPub[:], buf.Next(33))
-	// the rest is their sig
-	s.sig = buf.Bytes()
-
-	return &s, nil
-}
-
-/*----- serialization for QChannels ------- */
-
-/* Qchan serialization:
-bytes   desc   at offset
-
-60	utxo		0
-33	nonce	60
-33	thrref	93
-
-length 126
-
-peeridx is inferred from position in db.
-*/
-//TODO !!! don't store the outpoint!  it's redundant!!!!!
-// it's just a nonce and a refund, that's it! 40 bytes!
-
-func (q *Qchan) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	// first serialize the utxo part
-	uBytes, err := q.Utxo.ToBytes()
-	if err != nil {
-		return nil, err
-	}
-	// write that into the buffer first
-	_, err = buf.Write(uBytes)
-	if err != nil {
-		return nil, err
-	}
-	// write their channel pubkey
-	_, err = buf.Write(q.TheirPub[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// write their refund pubkey
-	_, err = buf.Write(q.TheirRefundPub[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// done
-	return buf.Bytes(), nil
-}
-
-// QchanFromBytes turns bytes into a Qchan.
-// the first 60 bytes are the utxo, then next 33 is the pubkey, then their pkh.
-// then finally txid of spending transaction
-func QchanFromBytes(b []byte) (Qchan, error) {
-	var q Qchan
-
-	if len(b) < 126 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 126", len(b))
-	}
-
-	u, err := UtxoFromBytes(b[:60])
-	if err != nil {
-		return q, err
-	}
-
-	q.Utxo = u // assign the utxo
-
-	copy(q.TheirPub[:], b[60:93])
-	if err != nil {
-		return q, err
-	}
-	copy(q.TheirRefundPub[:], b[93:])
-
-	return q, nil
-}
-
-/*----- serialization for CloseTXOs -------
-
-  serialization:
-closetxid	32
-closeheight	4
-
-only closeTxid needed, I think
-
-*/
-
-func (c *QCloseData) ToBytes() ([]byte, error) {
-	if c == nil {
-		return nil, fmt.Errorf("nil qclose")
-	}
-	b := make([]byte, 36)
-	copy(b[:32], c.CloseTxid.Bytes())
-	copy(b[32:], I32tB(c.CloseHeight))
-	return b, nil
-}
-
-// QCloseFromBytes deserializes a Qclose.  Note that a nil slice
-// gives an empty / non closed qclose.
-func QCloseFromBytes(b []byte) (QCloseData, error) {
-	var c QCloseData
-	if len(b) == 0 { // empty is OK
-		return c, nil
-
-	}
-	if len(b) < 36 {
-		return c, fmt.Errorf("close data %d bytes, expect 36", len(b))
-	}
-	var empty wire.ShaHash
-	c.CloseTxid.SetBytes(b[:32])
-	if !c.CloseTxid.IsEqual(&empty) {
-		c.Closed = true
-	}
-	c.CloseHeight = BtI32(b[32:36])
-
-	return c, nil
 }

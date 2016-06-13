@@ -62,11 +62,11 @@ func OmniHandler(OmniChan chan []byte) {
 			continue
 		}
 		// CLOSE RESP
-		if msgid == uspv.MSGID_CLOSERESP {
-			fmt.Printf("Got close response from %x\n", from)
-			CloseRespHandler(from, msg[1:])
-			continue
-		}
+		//		if msgid == uspv.MSGID_CLOSERESP {
+		//			fmt.Printf("Got close response from %x\n", from)
+		//			CloseRespHandler(from, msg[1:])
+		//			continue
+		//		}
 		// REQUEST TO SEND
 		if msgid == uspv.MSGID_RTS {
 			fmt.Printf("Got RTS from %x\n", from)
