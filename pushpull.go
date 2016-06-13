@@ -59,7 +59,7 @@ func Resume(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("need args: fix peerIdx chanIdx")
 	}
-	if RemoteCon == nil {
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone, can't fix\n")
 	}
 	// this stuff is all the same as in cclose, should put into a function...
@@ -157,7 +157,7 @@ func Push(args []string) error {
 	if len(args) < 3 {
 		return fmt.Errorf("need args: push peerIdx chanIdx amt (times)")
 	}
-	if RemoteCon == nil {
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone, can't push\n")
 	}
 	// this stuff is all the same as in cclose, should put into a function...

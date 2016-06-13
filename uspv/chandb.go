@@ -107,15 +107,15 @@ func (ts *TxStore) NextIdxForPeer(peerBytes [33]byte) (uint32, uint32, error) {
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
-			return fmt.Errorf("NextPubForPeer: no peers")
+			return fmt.Errorf("NextIdxForPeer: no peers")
 		}
 		pr := prs.Bucket(peerBytes[:])
 		if pr == nil {
-			return fmt.Errorf("NextPubForPeer: peer %x not found", peerBytes)
+			return fmt.Errorf("NextIdxForPeer: peer %x not found", peerBytes)
 		}
 		peerIdxBytes := pr.Get(KEYIdx)
 		if peerIdxBytes == nil {
-			return fmt.Errorf("NextPubForPeer: peer %x has no index? db bad", peerBytes)
+			return fmt.Errorf("NextIdxForPeer: peer %x has no index? db bad", peerBytes)
 		}
 		peerIdx = BtU32(peerIdxBytes) // store for key creation
 		// can't use keyN.  Use BucketN.  So we start at 1.  Also this means
@@ -163,11 +163,10 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 // which figures out the inputs and outputs.  So basically move
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
-func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64,
+func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 	peerId, theirPub, theirRefund [33]byte) (*wire.OutPoint, error) {
 
 	var err error
-	var peerIdx, cIdx uint32
 	var op *wire.OutPoint
 
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
@@ -179,12 +178,12 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64,
 		if pr == nil {
 			return fmt.Errorf("MakeMultiTx: peer %x not found", peerId)
 		}
-		peerIdxBytes := pr.Get(KEYIdx) // find peer index
-		if peerIdxBytes == nil {
-			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerId)
-		}
-		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
-		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
+		//		peerIdxBytes := pr.Get(KEYIdx) // find peer index
+		//		if peerIdxBytes == nil {
+		//			return fmt.Errorf("MakeMultiTx: peer %x has no index? db bad", peerId)
+		//		}
+		//		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
+		//		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
 		myChanPub := ts.GetChanPubkey(peerIdx, cIdx)
 
@@ -217,6 +216,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64,
 		var mUtxo Utxo      // create new utxo and copy into it
 		mUtxo.AtHeight = -1 // not even broadcast yet
 		mUtxo.KeyIdx = cIdx
+		mUtxo.PeerIdx = peerIdx
 		mUtxo.Value = amt
 		mUtxo.SpendLag = 1 // multi/chan always wit
 		mUtxo.Op = *op

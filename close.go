@@ -20,7 +20,7 @@ doesn't reply, as the channel is closed.
 
 // CloseChannel is a cooperative closing of a channel to a specified address.
 func CloseChannel(args []string) error {
-	if RemoteCon == nil {
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
 	// need args, fail

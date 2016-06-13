@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/uspv"
@@ -110,12 +111,45 @@ func Math(args []string) error {
 }
 
 func FundChannel(args []string) error {
-	if RemoteCon == nil {
+	if len(args) < 2 {
+		return fmt.Errorf("need args: fund capacity initialSend")
+	}
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone")
 	}
 	if len(FundChanStash) > 0 {
 		return fmt.Errorf("Other channel creation not done yet")
 	}
+
+	// this stuff is all the same as in cclose, should put into a function...
+	cCap, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	iSend, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil {
+		return err
+	}
+	if iSend < 0 || cCap < 0 {
+		return fmt.Errorf("Can't have negative send or capacity")
+	}
+	if cCap < 1000000 { // limit for now
+		return fmt.Errorf("Min channe capacity 1M sat")
+	}
+	if iSend > cCap {
+		return fmt.Errorf("Cant send %d in %d capacity channel",
+			iSend, cCap)
+	}
+	// get inputs. comes sorted from PickUtxos.
+	// add these into fundreserve to freeze them
+	_, overshoot, err := SCon.PickUtxos(cCap, true)
+	if err != nil {
+		return err
+	}
+	if overshoot < 0 {
+		return fmt.Errorf("witness utxos undershoot by %d", -overshoot)
+	}
+
 	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	peerIdx, cIdx, err := SCon.TS.NextIdxForPeer(peerArr)
@@ -126,10 +160,9 @@ func FundChannel(args []string) error {
 	fr := new(FundReserve)
 	fr.PeerIdx = peerIdx
 	fr.ChanIdx = cIdx
-	fr.Cap = 2000000
-	fr.InitSend = 500000
+	fr.Cap = cCap
+	fr.InitSend = iSend
 	//TODO freeze utxos here
-	//	SCon.PickUtxos(qChanCapacity, true)
 
 	FundChanStash = append(FundChanStash, fr)
 	msg := []byte{uspv.MSGID_POINTREQ}
@@ -217,7 +250,8 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
 	// save partial tx to db; populate output, get their channel pubkey
-	op, err := SCon.TS.MakeFundTx(tx, fr.Cap, peerArr, theirPub, theirRefundPub)
+	op, err := SCon.TS.MakeFundTx(
+		tx, fr.Cap, fr.PeerIdx, fr.ChanIdx, peerArr, theirPub, theirRefundPub)
 	if err != nil {
 		return err
 	}

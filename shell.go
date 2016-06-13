@@ -19,7 +19,7 @@ import (
 )
 
 /* this is a CLI shell for testing out LND.  Right now it's only for uspv
-testing.  It can send and receive coins.
+testing.  It can send and receive coins.  And make / update / close channels.
 */
 
 const (
@@ -64,7 +64,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	// setup spvCon
 
 	SCon, err = uspv.OpenSPV(
-		SPVHostAdr, headerFileName, dbFileName, &Store, false, false, Params)
+		SPVHostAdr, headerFileName, dbFileName, &Store, true, false, Params)
 	if err != nil {
 		log.Printf("can't connect: %s", err.Error())
 		log.Fatal(err) // back to fatal when can't connect
@@ -75,7 +75,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 40000 // hardcoded; later base on keyfile date?
+		tip = 42000 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -353,7 +353,7 @@ func Say(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("you have to say something")
 	}
-	if RemoteCon == nil {
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
 

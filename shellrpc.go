@@ -358,7 +358,7 @@ type PushReply struct {
 }
 
 func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
-	if RemoteCon == nil {
+	if RemoteCon == nil || RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone, can't push\n")
 	}
 	if args.Amt > 100000000 || args.Amt < 1 {
