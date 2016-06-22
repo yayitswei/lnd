@@ -20,6 +20,7 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	s.Ironman = iron
 	// I should really merge SPVCon and TxStore, they're basically the same
 	inTs.Param = p
+	s.OKTxids = make(map[wire.ShaHash]int32)
 	s.TS = inTs // copy pointer of txstore into spvcon
 
 	// open header file
@@ -38,7 +39,7 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 		return s, err
 	}
 	for _, txid := range txids {
-		inTs.OKTxids[*txid] = 0
+		s.OKTxids[*txid] = 0
 	}
 
 	// open TCP connection
@@ -101,7 +102,7 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	go s.fPositiveHandler()
 
 	if hard {
-		err = s.TS.RefilterLocal()
+		err = s.RefilterLocal(s.TS)
 		if err != nil {
 			return s, err
 		}

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil/bloom"
 )
 
 const (
@@ -29,6 +30,11 @@ type SPVCon struct {
 
 	headerMutex sync.Mutex
 	headerFile  *os.File // file for SPV headers
+
+	OKTxids map[wire.ShaHash]int32 // known good txids and their heights
+	OKMutex sync.Mutex
+
+	localFilter *bloom.Filter // local bloom filter for hard mode
 
 	//[doesn't work without fancy mutexes, nevermind, just use header file]
 	// localHeight   int32  // block height we're on
@@ -128,7 +134,7 @@ func (s *SPVCon) IngestMerkleBlock(m *wire.MsgMerkleBlock) {
 	}
 
 	for _, txid := range txids {
-		err := s.TS.AddTxid(txid, hah.height)
+		err := s.AddTxid(txid, hah.height)
 		if err != nil {
 			log.Printf("Txid store error: %s\n", err.Error())
 			return
@@ -330,7 +336,7 @@ func (s *SPVCon) AskForOneBlock(h int32) error {
 // AskForMerkBlocks requests blocks from current to last
 // right now this asks for 1 block per getData message.
 // Maybe it's faster to ask for many in a each message?
-func (s *SPVCon) AskForBlocks() error {
+func (s *SPVCon) AskForBlocks(dbTip int32) error {
 	var hdr wire.BlockHeader
 
 	s.headerMutex.Lock() // lock just to check filesize
@@ -340,10 +346,6 @@ func (s *SPVCon) AskForBlocks() error {
 
 	headerTip := int32(endPos/80) - 1 // move back 1 header length to read
 
-	dbTip, err := s.TS.GetDBSyncHeight()
-	if err != nil {
-		return err
-	}
 	fmt.Printf("dbTip %d headerTip %d\n", dbTip, headerTip)
 	if dbTip > headerTip {
 		return fmt.Errorf("error- db longer than headers! shouldn't happen.")
@@ -370,16 +372,6 @@ func (s *SPVCon) AskForBlocks() error {
 
 	fmt.Printf("will request blocks %d to %d\n", dbTip+1, headerTip)
 
-	if !s.HardMode { // don't send this in hardmode! that's the whole point
-		// create initial filter
-		filt, err := s.TS.GimmeFilter()
-		if err != nil {
-			return err
-		}
-		// send filter
-		s.SendFilter(filt)
-		fmt.Printf("sent filter %x\n", filt.MsgFilterLoad().Filter)
-	}
 	// loop through all heights where we want merkleblocks.
 	for dbTip < headerTip {
 		dbTip++ // we're requesting the next header

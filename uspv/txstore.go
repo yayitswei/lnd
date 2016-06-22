@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"sync"
 
 	"github.com/boltdb/bolt"
 	"github.com/roasbeef/btcd/blockchain"
@@ -17,13 +16,11 @@ import (
 )
 
 type TxStore struct {
-	OKTxids map[wire.ShaHash]int32 // known good txids and their heights
-	OKMutex sync.Mutex
-
+	// could get rid of adr slice, it's just an in-ram cache...
 	Adrs    []MyAdr  // endeavouring to acquire capital
 	StateDB *bolt.DB // place to write all this down
 	// can make a map of *bolt.DBs later for lots-o-channels
-	localFilter *bloom.Filter // local bloom filter for hard mode
+	xlocalFilter *bloom.Filter // local bloom filter for hard mode
 
 	// Params live here, not SCon
 	Param *chaincfg.Params // network parameters (testnet3, testnetL)
@@ -76,30 +73,29 @@ func NewTxStore(rootkey *hdkeychain.ExtendedKey, p *chaincfg.Params) TxStore {
 	var txs TxStore
 	txs.rootPrivKey = rootkey
 	txs.Param = p
-	txs.OKTxids = make(map[wire.ShaHash]int32)
 	return txs
 }
 
 // add txid of interest
-func (t *TxStore) AddTxid(txid *wire.ShaHash, height int32) error {
+func (s *SPVCon) AddTxid(txid *wire.ShaHash, height int32) error {
 	if txid == nil {
 		return fmt.Errorf("tried to add nil txid")
 	}
 	log.Printf("added %s to OKTxids at height %d\n", txid.String(), height)
-	t.OKMutex.Lock()
-	t.OKTxids[*txid] = height
-	t.OKMutex.Unlock()
+	s.OKMutex.Lock()
+	s.OKTxids[*txid] = height
+	s.OKMutex.Unlock()
 	return nil
 }
 
 // add txid of interest
-func (t *TxStore) TxidExists(txid *wire.ShaHash) bool {
+func (s *SPVCon) TxidExists(txid *wire.ShaHash) bool {
 	if txid == nil {
 		return false
 	}
-	t.OKMutex.Lock()
-	_, ok := t.OKTxids[*txid]
-	t.OKMutex.Unlock()
+	s.OKMutex.Lock()
+	_, ok := s.OKTxids[*txid]
+	s.OKMutex.Unlock()
 	return ok
 }
 

@@ -129,10 +129,11 @@ func (ts *TxStore) NewAdr() (btcutil.Address, error) {
 	ma.PkhAdr = nAdr
 	ma.KeyIdx = n
 
-	ts.Adrs = append(ts.Adrs, ma)
-	if ts.localFilter != nil { // if in hard mode / there is a filter
-		ts.localFilter.Add(ma.PkhAdr.ScriptAddress())
-	}
+	//	ts.Adrs = append(ts.Adrs, ma)
+	//	if ts.localFilter != nil { // if in hard mode / there is a filter
+	//		ts.localFilter.Add(ma.PkhAdr.ScriptAddress())
+	//	}
+
 	return nAdr, nil
 }
 

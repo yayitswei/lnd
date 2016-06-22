@@ -122,13 +122,13 @@ func calcRoot(hashes []*wire.ShaHash) *wire.ShaHash {
 
 // RefilterLocal reconstructs the local in-memory bloom filter.  It does
 // this by calling GimmeFilter() but doesn't broadcast the result.
-func (ts *TxStore) RefilterLocal() error {
+func (s *SPVCon) RefilterLocal(ts *TxStore) error {
 	var err error
-	ts.localFilter, err = ts.GimmeFilter()
+	s.localFilter, err = ts.GimmeFilter()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("generated filter %x\n", ts.localFilter.MsgFilterLoad().Filter)
+	fmt.Printf("generated filter %x\n", s.localFilter.MsgFilterLoad().Filter)
 	return nil
 }
 
@@ -177,7 +177,7 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 	for _, tx := range m.Transactions {
 		utilTx := btcutil.NewTx(tx)
 		// find txs that look like hits
-		if s.TS.localFilter.MatchTxAndUpdate(utilTx) {
+		if s.localFilter.MatchTxAndUpdate(utilTx) {
 			txs = append(txs, tx)
 		}
 	}
@@ -199,7 +199,7 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 
 	if fPositive > reFilter {
 		fmt.Printf("%d filter false positives in this block\n", fPositive)
-		err = s.TS.RefilterLocal()
+		err = s.RefilterLocal(s.TS)
 		if err != nil {
 			log.Printf("Refilter error: %s\n", err.Error())
 			return

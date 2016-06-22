@@ -119,7 +119,7 @@ func (s SortableUtxoSlice) Less(i, j int) bool {
 func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 	txid := tx.TxSha()
 	// assign height of zero for txs we create
-	err := s.TS.AddTxid(&txid, 0)
+	err := s.AddTxid(&txid, 0)
 	if err != nil {
 		return err
 	}

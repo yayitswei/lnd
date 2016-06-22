@@ -123,8 +123,23 @@ func (s *SPVCon) HeaderHandler(m *wire.MsgHeaders) {
 		}
 		return
 	}
-	// no moar, done w/ headers, get blocks
-	err = s.AskForBlocks()
+	// no moar, done w/ headers, send filter and get blocks
+	if !s.HardMode { // don't send this in hardmode! that's the whole point
+		filt, err := s.TS.GimmeFilter()
+		if err != nil {
+			log.Printf("AskForBlocks error: %s", err.Error())
+			return
+		}
+		// send filter
+		s.SendFilter(filt)
+		fmt.Printf("sent filter %x\n", filt.MsgFilterLoad().Filter)
+	}
+	dbTip, err := s.TS.GetDBSyncHeight()
+	if err != nil {
+		log.Printf("AskForBlocks error: %s", err.Error())
+		return
+	}
+	err = s.AskForBlocks(dbTip)
 	if err != nil {
 		log.Printf("AskForBlocks error: %s", err.Error())
 		return
@@ -134,9 +149,9 @@ func (s *SPVCon) HeaderHandler(m *wire.MsgHeaders) {
 // TxHandler takes in transaction messages that come in from either a request
 // after an inv message or after a merkle block message.
 func (s *SPVCon) TxHandler(m *wire.MsgTx) {
-	s.TS.OKMutex.Lock()
-	height, ok := s.TS.OKTxids[m.TxSha()]
-	s.TS.OKMutex.Unlock()
+	s.OKMutex.Lock()
+	height, ok := s.OKTxids[m.TxSha()]
+	s.OKMutex.Unlock()
 	if !ok {
 		log.Printf("Tx %s unknown, will not ingest\n", m.TxSha().String())
 		return
@@ -160,7 +175,7 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 	//		}
 	//	}
 	utilTx := btcutil.NewTx(m)
-	if !s.HardMode || s.TS.localFilter.MatchTxAndUpdate(utilTx) {
+	if !s.HardMode || s.localFilter.MatchTxAndUpdate(utilTx) {
 		hits, err := s.TS.Ingest(m, height)
 		if err != nil {
 			log.Printf("Incoming Tx error: %s\n", err.Error())
@@ -170,7 +185,7 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 		if hits == 0 {
 			if s.HardMode {
 				// refilter if local; shouldn't have in-mem false positives
-				err = s.TS.RefilterLocal()
+				err = s.RefilterLocal(s.TS)
 				if err != nil {
 					log.Printf("Incoming Tx error: %s\n", err.Error())
 					return
@@ -237,9 +252,9 @@ func (s *SPVCon) InvHandler(m *wire.MsgInv) {
 			i, thing.Type.String(), thing.Hash.String())
 		if thing.Type == wire.InvTypeTx {
 			// ignore tx invs in ironman mode, or if we already have it
-			if !s.Ironman && !s.TS.TxidExists(&thing.Hash) {
+			if !s.Ironman && !s.TxidExists(&thing.Hash) {
 				// new tx, OK it at 0 and request
-				s.TS.AddTxid(&thing.Hash, 0) // unconfirmed
+				s.AddTxid(&thing.Hash, 0) // unconfirmed
 				s.AskForTx(thing.Hash)
 			}
 		}
