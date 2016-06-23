@@ -124,6 +124,9 @@ func (e *ElkremReceiver) AddNext(sha *wire.ShaHash) error {
 
 // AtIndex returns the w'th hash in the receiver.
 func (e *ElkremReceiver) AtIndex(w uint64) (*wire.ShaHash, error) {
+	if e == nil || e.s == nil {
+		return nil, fmt.Errorf("nil elkrem receiver")
+	}
 	var out ElkremNode      // node we will eventually return
 	for _, n := range e.s { // go through stack
 		if w <= n.i { // found one bigger than or equal to what we want

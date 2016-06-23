@@ -519,20 +519,18 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					if qchanBucket == nil {
 						return nil // nothing stored / not a bucket
 					}
-					// found a channel, deserialize part of it.
-					// this is not the full channel data; only using the
-					// outpoint.  full data will be loaded if we need it
-					// (when the channel is getting closed.)
-					hitQChan, err := QchanFromBytes(qchanBucket.Get(KEYutxo))
+					// load everything about the channel from the bucket
+					hitQChan, err := ts.RestoreQchanFromBucket(pIdx, idPub, qchanBucket)
 					if err != nil {
 						return err
 					}
-					hitQChan.PeerIdx = pIdx
+
+					//					hitQChan.PeerIdx = pIdx
 					// will need state to see if grabbable
-					hitQChan.State, err = StatComFromBytes(qchanBucket.Get(KEYState))
-					if err != nil {
-						return err
-					}
+					//					hitQChan.State, err = StatComFromBytes(qchanBucket.Get(KEYState))
+					//					if err != nil {
+					//						return err
+					//					}
 
 					// check if we gain a known txid but unknown tx
 					for i, txid := range cachedShas {
@@ -571,6 +569,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							}
 
 							// need my pubkey too
+							// needed?
 							hitQChan.MyRefundPub = ts.GetRefundPubkey(
 								pIdx, hitQChan.KeyIdx)
 

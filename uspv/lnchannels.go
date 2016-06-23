@@ -59,8 +59,9 @@ type Qchan struct {
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
 	ElkRcv *elkrem.ElkremReceiver // S stored in db
 
-	TimeOut uint16   // blocks for timeout (default 5 for testing)
-	State   *StatCom // S state of channel
+	TimeOut uint16 // blocks for timeout (default 5 for testing)
+
+	State *StatCom // S state of channel
 }
 
 // StatComs are State Commitments.
@@ -101,13 +102,17 @@ type QCloseData struct {
 
 // GetStateIdxFromTx returns the state index from a commitment transaction.
 // No errors; returns 0 if there is no retrievable index.
-func GetStateIdxFromTx(tx *wire.MsgTx) uint64 {
+// Takes the xor input X which is derived from the 0th elkrems.
+func GetStateIdxFromTx(tx *wire.MsgTx, x uint64) uint64 {
 	// no tx, so no index
 	if tx == nil {
 		return 0
 	}
 	// more than 1 input, so not a close tx
 	if len(tx.TxIn) != 1 {
+		return 0
+	}
+	if x >= 1<<48 {
 		return 0
 	}
 	// check that indicating high bytes are correct
@@ -120,12 +125,12 @@ func GetStateIdxFromTx(tx *wire.MsgTx) uint64 {
 	seqBits := uint64(tx.TxIn[0].Sequence & 0x00ffffff)
 	timeBits := uint64(tx.LockTime & 0x00ffffff)
 
-	return seqBits<<24 | timeBits
+	return (seqBits<<24 | timeBits) ^ x
 }
 
 // SetStateIdxBits modifies the tx in place, setting the sequence and locktime
 // fields to indicate the given state index.
-func SetStateIdxBits(tx *wire.MsgTx, idx uint64) error {
+func SetStateIdxBits(tx *wire.MsgTx, idx, x uint64) error {
 	if tx == nil {
 		return fmt.Errorf("SetStateIdxBits: nil tx")
 	}
@@ -137,6 +142,7 @@ func SetStateIdxBits(tx *wire.MsgTx, idx uint64) error {
 			"SetStateIdxBits: index %d greater than max %d", idx, uint64(1<<48)-1)
 	}
 
+	idx = idx ^ x
 	// high 24 bits sequence, low 24 bits locktime
 	seqBits := uint32(idx >> 24)
 	timeBits := uint32(idx & 0x00ffffff)
@@ -161,9 +167,12 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 	}
 	// hardcode here now... need to save to qchan struct I guess
 	q.TimeOut = 5
-
+	x := q.GetElkZeroOffset()
+	if x >= 1<<48 {
+		return nil, fmt.Errorf("GetCloseTxos elkrem error, x= %x", x)
+	}
 	// first, check if cooperative
-	txIdx := GetStateIdxFromTx(tx)
+	txIdx := GetStateIdxFromTx(tx, x)
 	if txIdx == 0 || len(tx.TxOut) != 2 {
 		// must have been cooperative, or something else we don't recognize
 		// if simple close, still have a PKH output, find it.
@@ -335,8 +344,13 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, fmt.Errorf("grab txout pkscript length %d, expect 34",
 			len(spendTx.TxOut[u.Op.Index].PkScript))
 	}
+
+	x := qc.GetElkZeroOffset()
+	if x >= 1<<48 {
+		return nil, fmt.Errorf("GrabUtxo elkrem error, x= %x", x)
+	}
 	// find state index based on tx hints (locktime / sequence)
-	txIdx := GetStateIdxFromTx(spendTx)
+	txIdx := GetStateIdxFromTx(spendTx, x)
 	if txIdx == 0 {
 		return nil, fmt.Errorf("no hint, can't recover")
 	}
@@ -400,6 +414,30 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	// that's it...?
 
 	return sweepTx, nil
+}
+
+// GetElkZeroOffset returns a 48-bit uint (cast up to 8 bytes) based on the sender
+// and receiver elkrem at index 0.  If there's an error, it returns ff...
+func (q *Qchan) GetElkZeroOffset() uint64 {
+	theirZero, err := q.ElkRcv.AtIndex(0)
+	if err != nil {
+		fmt.Printf(err.Error())
+		return 0xffffffffffffffff
+	}
+	myZero, err := q.ElkSnd.AtIndex(0)
+	if err != nil {
+		fmt.Printf(err.Error())
+		return 0xffffffffffffffff
+	}
+	theirBytes := theirZero.Bytes()
+	myBytes := myZero.Bytes()
+	x := make([]byte, 8)
+	for i := 2; i < 8; i++ {
+		x[i] = myBytes[i] ^ theirBytes[i]
+	}
+
+	// only 48 bits so will be OK when cast to signed 64 bit
+	return uint64(BtI64(x[:]))
 }
 
 // MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
@@ -749,7 +787,14 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	// add unsigned txin
 	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
 	// set index hints
-	SetStateIdxBits(tx, s.StateIdx)
+	var x uint64
+	if s.StateIdx > 1 { // state 0 and 1 can't use xor'd elkrem... fix this?
+		x = q.GetElkZeroOffset()
+		if x >= 1<<48 {
+			return nil, fmt.Errorf("BuildStateTx elkrem error, x= %x", x)
+		}
+	}
+	SetStateIdxBits(tx, s.StateIdx, x)
 
 	// sort outputs
 	txsort.InPlaceSort(tx)
