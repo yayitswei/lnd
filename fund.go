@@ -282,10 +282,15 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	if err != nil {
 		return err
 	}
+	elk, err := qc.ElkSnd.AtIndex(0)
+	if err != nil {
+		//		fmt.Printf("QChanDescHandler ElkSnd err %s", err.Error())
+		return err
+	}
 
 	initPayBytes := uspv.I64tB(fr.InitSend) // also will be an arg
 	// description is outpoint (36), mypub(33), myrefund(33), capacity (8),
-	// initial payment (8), HAKD (33)
+	// initial payment (8), HAKD (33), elk0 (32)
 	// total length 138
 	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
@@ -294,6 +299,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
 	msg = append(msg, theirHAKDpub[:]...)
+	msg = append(msg, elk.Bytes()...)
 	_, err = RemoteCon.Write(msg)
 
 	return err
@@ -302,7 +308,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 151 || len(descbytes) > 151 {
+	if len(descbytes) < 183 || len(descbytes) > 183 {
 		fmt.Printf("got %d byte channel description, expect 151", len(descbytes))
 		return
 	}
@@ -317,7 +323,12 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	copy(theirRefundPub[:], descbytes[69:102])
 	amt := uspv.BtI64(descbytes[102:110])
 	initPay := uspv.BtI64(descbytes[110:118])
-	copy(myFirstHAKD[:], descbytes[118:])
+	copy(myFirstHAKD[:], descbytes[118:151])
+	revElk, err := wire.NewShaHash(descbytes[151:])
+	if err != nil {
+		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
+		return
+	}
 
 	// save to db
 	// it should go into the next bucket and get the right key index.
@@ -344,9 +355,13 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// use new HAKDpub for signing
 	qc.State.MyHAKDPub = myFirstHAKD
 
-	// create empty elkrem pair
+	// create empty elkrem receiver to save
 	qc.ElkRcv = new(elkrem.ElkremReceiver)
-	qc.ElkSnd = new(elkrem.ElkremSender)
+	err = qc.IngestElkrem(revElk)
+	if err != nil { // this can't happen because it's the first elk... remove?
+		fmt.Printf("QChanDescHandler err %s", err.Error())
+		return
+	}
 
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
@@ -370,7 +385,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 
-	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1) // which is 0
 	if err != nil {
 		fmt.Printf("QChanDescHandler ElkSnd err %s", err.Error())
 		return
@@ -416,6 +431,12 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 
+	err = qc.IngestElkrem(revElk)
+	if err != nil { // this can't happen because it's the first elk... remove?
+		fmt.Printf("QChanAckHandler err %s", err.Error())
+		return
+	}
+
 	// save the refund address they gave us.  Save state doesn't do this.
 	//	err = SCon.TS.SetQchanRefund(qc, refund)
 	//	if err != nil {
@@ -428,12 +449,6 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 	qc.State.MyHAKDPub = myFirstHAKD
-
-	err = qc.IngestElkrem(revElk)
-	if err != nil { // this can't happen because it's the first elk... remove?
-		fmt.Printf("QChanAckHandler err %s", err.Error())
-		return
-	}
 
 	// verify worked; Save state 1 to DB
 	err = SCon.TS.SaveQchanState(qc)
@@ -470,18 +485,18 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 
-	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
-	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
-		return
-	}
+	//	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
+	//	if err != nil {
+	//		fmt.Printf("QChanAckHandler err %s", err.Error())
+	//		return
+	//	}
 
 	// sig proof should be sent later once there are confirmations.
 	// it'll have an spv proof of the fund tx.
 	// but for now just send the sig.
 	msg := []byte{uspv.MSGID_SIGPROOF}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	msg = append(msg, elk.Bytes()...)
+	//	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
 	return
@@ -490,7 +505,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func SigProofHandler(from [16]byte, sigproofbytes []byte) {
-	if len(sigproofbytes) < 130 || len(sigproofbytes) > 140 {
+	if len(sigproofbytes) < 100 || len(sigproofbytes) > 110 {
 		fmt.Printf("got %d byte Sigproof, expect ~137\n", len(sigproofbytes))
 		return
 	}
@@ -498,12 +513,12 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 	var opArr [36]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	copy(opArr[:], sigproofbytes[:36])
-	revElk, err := wire.NewShaHash(sigproofbytes[36:68])
-	if err != nil {
-		fmt.Printf("SigProofHandler err %s", err.Error())
-		return
-	}
-	sig := sigproofbytes[68:]
+	//	revElk, err := wire.NewShaHash(sigproofbytes[36:68])
+	//	if err != nil {
+	//		fmt.Printf("SigProofHandler err %s", err.Error())
+	//		return
+	//	}
+	sig := sigproofbytes[36:]
 
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
@@ -516,11 +531,11 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return
 	}
-	err = qc.IngestElkrem(revElk)
-	if err != nil { // this can't happen because it's the first elk... remove?
-		fmt.Printf("SigProofHandler err %s", err.Error())
-		return
-	}
+	//	err = qc.IngestElkrem(revElk)
+	//	if err != nil { // this can't happen because it's the first elk... remove?
+	//		fmt.Printf("SigProofHandler err %s", err.Error())
+	//		return
+	//	}
 
 	// sig OK, save
 	err = SCon.TS.SaveQchanState(qc)

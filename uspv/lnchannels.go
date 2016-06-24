@@ -788,7 +788,7 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
 	// set index hints
 	var x uint64
-	if s.StateIdx > 1 { // state 0 and 1 can't use xor'd elkrem... fix this?
+	if s.StateIdx > 0 { // state 0 and 1 can't use xor'd elkrem... fix this?
 		x = q.GetElkZeroOffset()
 		if x >= 1<<48 {
 			return nil, fmt.Errorf("BuildStateTx elkrem error, x= %x", x)
