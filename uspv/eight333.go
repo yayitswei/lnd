@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil/bloom"
 )
@@ -49,7 +50,8 @@ type SPVCon struct {
 	WBytes uint64 // total bytes written
 	RBytes uint64 // total bytes read
 
-	TS *TxStore // transaction store to write to
+	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)
+	TS    *TxStore         // transaction store to write to
 
 	// mBlockQueue is for keeping track of what height we've requested.
 	blockQueue chan HashAndHeight
@@ -226,7 +228,7 @@ func (s *SPVCon) IngestHeaders(m *wire.MsgHeaders) (bool, error) {
 		// advance chain tip
 		tip++
 		// check last header
-		worked := CheckHeader(s.headerFile, tip, s.TS.Param)
+		worked := CheckHeader(s.headerFile, tip, s.Param)
 		if !worked {
 			if endPos < 8080 {
 				// jeez I give up, back to genesis

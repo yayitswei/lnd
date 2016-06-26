@@ -29,11 +29,11 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "na:28901"
+	SPVHostAdr = "10.0.0.86:18333"
 )
 
 var (
-	Params         = &chaincfg.SegNet4Params
+	Params         = &chaincfg.TestNet3Params
 	SCon           uspv.SPVCon   // global here for now
 	GlobalOmniChan chan []byte   // channel for omnihandler
 	RemoteCon      *lndc.LNDConn // one because simple
@@ -587,7 +587,7 @@ func Sweep(args []string) error {
 	if len(args) == 2 {
 		for i, u := range allUtxos {
 			if u.AtHeight != 0 && u.Value > 10000 {
-				_, err = SCon.SendOne(*allUtxos[i], adr)
+				_, err = SCon.TS.SendOne(*allUtxos[i], adr)
 				if err != nil {
 					return err
 				}
@@ -603,7 +603,15 @@ func Sweep(args []string) error {
 	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 {
-			_, err = SCon.SendDrop(*allUtxos[i], adr)
+			intx, outtx, err := SCon.TS.SendDrop(*allUtxos[i], adr)
+			if err != nil {
+				return err
+			}
+			err = SCon.NewOutgoingTx(intx)
+			if err != nil {
+				return err
+			}
+			err = SCon.NewOutgoingTx(outtx)
 			if err != nil {
 				return err
 			}
@@ -644,8 +652,12 @@ func Fan(args []string) error {
 		adrs[i] = adr
 		amts[i] = valOutputs + i
 	}
-	_, err = SCon.SendCoins(adrs, amts)
-	return err
+	tx, err := SCon.TS.SendCoins(adrs, amts)
+	if err != nil {
+		return err
+	}
+
+	return SCon.NewOutgoingTx(tx)
 }
 
 // Send sends coins.
@@ -693,11 +705,11 @@ func Send(args []string) error {
 
 	adrs = append(adrs, adr)
 	amts = append(amts, amt)
-	_, err = SCon.SendCoins(adrs, amts)
+	tx, err := SCon.TS.SendCoins(adrs, amts)
 	if err != nil {
 		return err
 	}
-	return nil
+	return SCon.NewOutgoingTx(tx)
 }
 
 func Help(args []string) error {

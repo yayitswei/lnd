@@ -189,11 +189,16 @@ func (r *LNRpc) Send(args SendArgs, reply *TxidsReply) error {
 			return err
 		}
 	}
-	txid, err := SCon.SendCoins(adrs, args.Amts)
+	tx, err := SCon.TS.SendCoins(adrs, args.Amts)
 	if err != nil {
 		return err
 	}
-	reply.Txids = append(reply.Txids, txid.String())
+	err = SCon.NewOutgoingTx(tx)
+	if err != nil {
+		return err
+	}
+
+	reply.Txids = append(reply.Txids, tx.TxSha().String())
 	return nil
 }
 
@@ -229,12 +234,27 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 		if u.AtHeight != 0 && u.Value > 10000 {
 			var txid *wire.ShaHash
 			if args.Drop {
-				txid, err = SCon.SendDrop(*allUtxos[i], adr)
+				intx, outtx, err := SCon.TS.SendDrop(*allUtxos[i], adr)
+				if err != nil {
+					return err
+				}
+				err = SCon.NewOutgoingTx(intx)
+				if err != nil {
+					return err
+				}
+				err = SCon.NewOutgoingTx(outtx)
+				if err != nil {
+					return err
+				}
 			} else {
-				txid, err = SCon.SendOne(*allUtxos[i], adr)
-			}
-			if err != nil {
-				return err
+				tx, err := SCon.TS.SendOne(*allUtxos[i], adr)
+				if err != nil {
+					return err
+				}
+				err = SCon.NewOutgoingTx(tx)
+				if err != nil {
+					return err
+				}
 			}
 			reply.Txids = append(reply.Txids, txid.String())
 			nokori--
@@ -274,11 +294,15 @@ func (r *LNRpc) Fanout(args FanArgs, reply *TxidsReply) error {
 		adrs[i] = adr
 		amts[i] = args.AmtPerOutput + i
 	}
-	txid, err := SCon.SendCoins(adrs, amts)
+	tx, err := SCon.TS.SendCoins(adrs, amts)
 	if err != nil {
 		return err
 	}
-	reply.Txids = append(reply.Txids, txid.String())
+	err = SCon.NewOutgoingTx(tx)
+	if err != nil {
+		return err
+	}
+	reply.Txids = append(reply.Txids, tx.TxSha().String())
 	return nil
 }
 

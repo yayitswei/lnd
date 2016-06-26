@@ -142,7 +142,7 @@ func FundChannel(args []string) error {
 	}
 	// get inputs. comes sorted from PickUtxos.
 	// add these into fundreserve to freeze them
-	_, overshoot, err := SCon.PickUtxos(cCap, true)
+	_, overshoot, err := SCon.TS.PickUtxos(cCap, true)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	tx := wire.NewMsgTx() // make new tx
 
 	// first get inputs. comes sorted from PickUtxos.
-	utxos, overshoot, err := SCon.PickUtxos(fr.Cap, true)
+	utxos, overshoot, err := SCon.TS.PickUtxos(fr.Cap, true)
 	if err != nil {
 		return err
 	}

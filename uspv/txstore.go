@@ -22,8 +22,8 @@ type TxStore struct {
 	// can make a map of *bolt.DBs later for lots-o-channels
 	xlocalFilter *bloom.Filter // local bloom filter for hard mode
 
-	// Params live here, not SCon
-	Param *chaincfg.Params // network parameters (testnet3, testnetL)
+	// Params live here... AND SCon
+	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)
 
 	// From here, comes everything. It's a secret to everybody.
 	rootPrivKey *hdkeychain.ExtendedKey

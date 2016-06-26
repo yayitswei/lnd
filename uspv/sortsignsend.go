@@ -141,15 +141,15 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 // PickUtxos Picks Utxos for spending.  Tell it how much money you want.
 // It returns a tx-sortable utxoslice, and the overshoot amount.  Also errors.
 // if "ow" is true, only gives witness utxos (for channel funding)
-func (s *SPVCon) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
+func (ts *TxStore) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
-	curHeight, err := s.TS.GetDBSyncHeight()
+	curHeight, err := ts.GetDBSyncHeight()
 	if err != nil {
 		return nil, 0, err
 	}
 
 	var allUtxos SortableUtxoSlice
-	allUtxos, err = s.TS.GetAllUtxos()
+	allUtxos, err = ts.GetAllUtxos()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -219,7 +219,7 @@ func (t *TxStore) GrabTx(qc *Qchan, idx uint64) (*wire.MsgTx, error) {
 // all it does is waste space.  Kindof useless.
 // Returns the 2nd, large tx's txid.
 // Probably doesn't work with time-locked.  Doesn't really matter.
-func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
+func (ts *TxStore) SendDrop(u Utxo, adr btcutil.Address) (*wire.MsgTx, *wire.MsgTx, error) {
 	var err error
 	// fixed fee
 	fee := int64(5000)
@@ -248,16 +248,16 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	if u.SpendLag > 0 {
 		//		tx.Flags = 0x01
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
-			s.TS.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), s.TS.Param)
+			ts.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), ts.Param)
 		prevPKs, err = txscript.PayToAddrScript(wa)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else { // otherwise generate directly
 		prevPKs, err = txscript.PayToAddrScript(
-			s.TS.Adrs[u.KeyIdx].PkhAdr)
+			ts.Adrs[u.KeyIdx].PkhAdr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	tx.AddTxIn(wire.NewTxIn(&u.Op, prevPKs, nil))
@@ -266,9 +266,9 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	var wit [][]byte
 	hCache := txscript.NewTxSigHashes(tx)
 
-	priv := s.TS.GetWalletPrivkey(u.KeyIdx)
+	priv := ts.GetWalletPrivkey(u.KeyIdx)
 	if priv == nil {
-		return nil, fmt.Errorf("SendDrop: nil privkey")
+		return nil, nil, fmt.Errorf("SendDrop: nil privkey")
 	}
 
 	// This is where witness based sighash types need to happen
@@ -278,14 +278,14 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else {
 		sig, err = txscript.SignatureScript(
 			tx, 0, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -297,10 +297,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		tx.TxIn[0].Witness = wit
 		tx.TxIn[0].SignatureScript = nil
 	}
-	err = s.NewOutgoingTx(tx)
-	if err != nil {
-		return nil, err
-	}
+
 	tx1id := tx.TxSha()
 	sendAmt2 := sendAmt - fee
 	tx2 := wire.NewMsgTx() // make new tx
@@ -309,7 +306,7 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	// add single output
 	outAdrScript, err := txscript.PayToAddrScript(adr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	txout2 := wire.NewTxOut(sendAmt2, outAdrScript)
@@ -322,20 +319,18 @@ func (s *SPVCon) SendDrop(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		dropIn.Witness[i] = make([]byte, 512)
 		_, err := rand.Read(dropIn.Witness[i])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	dropIn.Witness[16] = outpre
 	tx2.AddTxIn(dropIn)
-	txid := tx2.TxSha()
-	//	fmt.Printf("droptx: %s", TxToString(tx2))
 
-	return &txid, s.NewOutgoingTx(tx2)
+	return tx, tx2, nil
 }
 
 // SendOne is for the sweep function, and doesn't do change.
 // Probably can get rid of this for real txs.
-func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
+func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 	var prevScript []byte
 
 	// fixed fee
@@ -359,9 +354,9 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 
 	// check if channel close PKH
 	if u.PeerIdx == 0 {
-		priv = s.TS.GetWalletPrivkey(u.KeyIdx)
+		priv = ts.GetWalletPrivkey(u.KeyIdx)
 	} else {
-		priv = s.TS.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
+		priv = ts.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
 	}
 	if priv == nil {
 		return nil, fmt.Errorf("SendOne: nil privkey")
@@ -372,7 +367,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 			return nil, fmt.Errorf("Can't spend %s, timelocked and unconfirmed",
 				u.Op.String())
 		}
-		curHeight, err := s.TS.GetDBSyncHeight()
+		curHeight, err := ts.GetDBSyncHeight()
 		if err != nil {
 			return nil, err
 		}
@@ -384,7 +379,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		}
 		// got here; possible to spend.  But need the previous script
 		// first get the channel data
-		qc, err := s.TS.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
+		qc, err := ts.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +417,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	// sign into stash
 	if u.SpendLag == 0 { // non-witness pkh
 		prevAdr, err := btcutil.NewAddressPubKeyHash(
-			btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 		if err != nil {
 			return nil, err
 		}
@@ -438,7 +433,7 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 	}
 	if u.SpendLag == 1 { // witness pkh
 		prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-			btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 		if err != nil {
 			return nil, err
 		}
@@ -461,14 +456,13 @@ func (s *SPVCon) SendOne(u Utxo, adr btcutil.Address) (*wire.ShaHash, error) {
 		tx.TxIn[0].Witness = wit
 		tx.TxIn[0].SignatureScript = nil
 	}
-	txid := tx.TxSha()
 	fmt.Printf("%s", TxToString(tx))
-	return &txid, s.NewOutgoingTx(tx)
+	return tx, nil
 }
 
 // SendCoins sends coins.
-func (s *SPVCon) SendCoins(
-	adrs []btcutil.Address, sendAmts []int64) (*wire.ShaHash, error) {
+func (ts *TxStore) SendCoins(
+	adrs []btcutil.Address, sendAmts []int64) (*wire.MsgTx, error) {
 
 	if len(adrs) != len(sendAmts) {
 		return nil, fmt.Errorf(
@@ -496,13 +490,13 @@ func (s *SPVCon) SendCoins(
 		tx.AddTxOut(txout)
 	}
 
-	changeOut, err := s.TS.NewChangeOut(0)
+	changeOut, err := ts.NewChangeOut(0)
 	if err != nil {
 		return nil, err
 	}
 	tx.AddTxOut(changeOut)
 	// get inputs for this tx
-	utxos, overshoot, err := s.PickUtxos(totalSend, false)
+	utxos, overshoot, err := ts.PickUtxos(totalSend, false)
 	if err != nil {
 		return nil, err
 	}
@@ -547,9 +541,9 @@ func (s *SPVCon) SendCoins(
 		// pick key
 		priv := new(btcec.PrivateKey)
 		if utxos[i].PeerIdx == 0 {
-			priv = s.TS.GetWalletPrivkey(utxos[i].KeyIdx)
+			priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
 		} else {
-			priv = s.TS.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
+			priv = ts.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			// fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
 		}
 		if priv == nil {
@@ -561,7 +555,7 @@ func (s *SPVCon) SendCoins(
 		// (maybe too risky to allow those to be normal txins...)
 		if utxos[i].SpendLag == 0 { // non-witness PKH
 			prevAdr, err := btcutil.NewAddressPubKeyHash(
-				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 			if err != nil {
 				return nil, err
 			}
@@ -577,7 +571,7 @@ func (s *SPVCon) SendCoins(
 		}
 		if utxos[i].SpendLag == 1 { // witness PKH
 			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-				btcutil.Hash160(priv.PubKey().SerializeCompressed()), s.TS.Param)
+				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 			if err != nil {
 				return nil, err
 			}
@@ -594,7 +588,7 @@ func (s *SPVCon) SendCoins(
 		if utxos[i].SpendLag > 1 { // witness, time-locked SH
 			// this utxo is returned by PickUtxos() so should be ready to spend
 			// first get the channel data
-			qc, err := s.TS.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
+			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			if err != nil {
 				return nil, err
 			}
@@ -627,16 +621,11 @@ func (s *SPVCon) SendCoins(
 			txin.Witness = witStash[i]
 			txin.SignatureScript = nil
 		}
-
 	}
 
 	fmt.Printf("tx: %s", TxToString(tx))
-	//	buf := bytes.NewBuffer(make([]byte, 0, tx.SerializeSize()))
 
-	// send it out on the wire.  hope it gets there.
-	// we should deal with rejects.  Don't yet.
-	txid := tx.TxSha()
-	return &txid, s.NewOutgoingTx(tx)
+	return tx, nil
 }
 
 // EstFee gives a fee estimate based on a tx and a sat/Byte target.
