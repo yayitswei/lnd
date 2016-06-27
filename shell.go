@@ -75,7 +75,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 44935 // hardcoded; later base on keyfile date?
+		tip = 873000 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -587,7 +587,11 @@ func Sweep(args []string) error {
 	if len(args) == 2 {
 		for i, u := range allUtxos {
 			if u.AtHeight != 0 && u.Value > 10000 {
-				_, err = SCon.TS.SendOne(*allUtxos[i], adr)
+				tx, err := SCon.TS.SendOne(*allUtxos[i], adr)
+				if err != nil {
+					return err
+				}
+				err = SCon.NewOutgoingTx(tx)
 				if err != nil {
 					return err
 				}
