@@ -102,12 +102,13 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	s.inWaitState = make(chan bool, 1)
 	go s.fPositiveHandler()
 
-	if hard {
+	if hard { // what about for non-hard?  send filter?
 		filt, err := s.TS.GimmeFilter()
 		if err != nil {
 			return s, err
 		}
-		s.Refilter(filt)
+		s.localFilter = filt
+		//		s.Refilter(filt)
 	}
 
 	return s, nil

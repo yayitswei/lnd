@@ -125,11 +125,10 @@ func calcRoot(hashes []*wire.ShaHash) *wire.ShaHash {
 // this by calling GimmeFilter() but doesn't broadcast the result.
 func (s *SPVCon) Refilter(f *bloom.Filter) {
 	if s.HardMode {
-		s.localFilter = f
-		return
+		s.localFilter.Reload(f.MsgFilterLoad())
+	} else {
+		s.SendFilter(f)
 	}
-	s.SendFilter(f)
-	return
 }
 
 // IngestBlock is like IngestMerkleBlock but aralphic

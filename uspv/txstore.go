@@ -129,15 +129,14 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	}
 	// actually... we should monitor addresses, not txids, right?
 	// or no...?
-	for _, m := range allQ {
-
+	for _, q := range allQ {
 		// aha, add HASH here, not the outpoint! (txid of fund tx)
-		f.AddShaHash(&m.Op.Hash)
+		f.AddShaHash(&q.Op.Hash)
 		// also add outpoint...?  wouldn't the hash be enough?
 		// not sure why I have to do both of these, but seems like close txs get
 		// ignored without the outpoint, and fund txs get ignored without the
 		// shahash. Might be that shahash operates differently (on txids, not txs)
-		f.AddOutPoint(&m.Op)
+		f.AddOutPoint(&q.Op)
 	}
 	// still some problem with filter?  When they broadcast a close which doesn't
 	// send any to us, sometimes we don't see it and think the channel is still open.

@@ -339,14 +339,6 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
-	// before acking, add to bloom filter.  Otherwise we won't see it as
-	// it doesn't involve our utxos / adrs.
-	filt, err := SCon.TS.GimmeFilter()
-	if err != nil {
-		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
-		return
-	}
-	SCon.Refilter(filt)
 
 	// create initial state
 	qc.State = new(uspv.StatCom)
@@ -479,18 +471,21 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
+
+	// add to bloom filter here for channel creator
+	filt, err := SCon.TS.GimmeFilter()
+	if err != nil {
+		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
+		return
+	}
+	SCon.Refilter(filt)
+
 	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
 	err = SCon.NewOutgoingTx(tx)
 	if err != nil {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
-
-	//	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
-	//	if err != nil {
-	//		fmt.Printf("QChanAckHandler err %s", err.Error())
-	//		return
-	//	}
 
 	// sig proof should be sent later once there are confirmations.
 	// it'll have an spv proof of the fund tx.
@@ -514,11 +509,7 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 	var opArr [36]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	copy(opArr[:], sigproofbytes[:36])
-	//	revElk, err := wire.NewShaHash(sigproofbytes[36:68])
-	//	if err != nil {
-	//		fmt.Printf("SigProofHandler err %s", err.Error())
-	//		return
-	//	}
+
 	sig := sigproofbytes[36:]
 
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
@@ -532,11 +523,6 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return
 	}
-	//	err = qc.IngestElkrem(revElk)
-	//	if err != nil { // this can't happen because it's the first elk... remove?
-	//		fmt.Printf("SigProofHandler err %s", err.Error())
-	//		return
-	//	}
 
 	// sig OK, save
 	err = SCon.TS.SaveQchanState(qc)
@@ -544,6 +530,15 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return
 	}
+
+	// add to bloom filter here; later should instead receive spv proof
+	filt, err := SCon.TS.GimmeFilter()
+	if err != nil {
+		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
+		return
+	}
+	SCon.Refilter(filt)
+
 	// sig OK; in terms of UI here's where you can say "payment received"
 	// "channel online" etc
 	return
