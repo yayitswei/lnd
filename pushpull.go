@@ -10,6 +10,8 @@ import (
 	"github.com/roasbeef/btcd/wire"
 )
 
+const minBal = 10000 // channels have to have 10K sat in them; can make variable later.
+
 // Grab the coins that are rightfully yours! Plus some more.
 // For right now, spend all outputs from channel close.
 func Grab(args []string) error {
@@ -234,10 +236,7 @@ func Push(args []string) error {
 
 // PushChannel initiates a state update by sending an RTS
 func PushChannel(qc *uspv.Qchan, amt uint32) error {
-	// local sanity check
-	//	if amt >= qc.State.MyAmt {
-	//		return fmt.Errorf("push %d, you have %d in channel", amt, qc.State.MyAmt)
-	//	}
+
 	var empty [33]byte
 
 	// don't try to update state until all prior updates have cleared
@@ -245,9 +244,19 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 	if qc.State.Delta != 0 || qc.State.MyPrevHAKDPub != empty {
 		return fmt.Errorf("channel update in progress, cannot push")
 	}
-	if int64(amt) > qc.State.MyAmt { //TODO add the "can't go below" line
-		return fmt.Errorf("want to push %d but %d available", amt, qc.State.MyAmt)
+	// check if this push would lower my balance below minBal
+	if int64(amt)+minBal > qc.State.MyAmt {
+		return fmt.Errorf("want to push %d but %d available, %d minBal",
+			amt, qc.State.MyAmt, minBal)
 	}
+	// check if this push is sufficient to get them above minBal (only needed at
+	// state 1)
+	// if qc.State.StateIdx < 2 && int64(amt)+(qc.Value-qc.State.MyAmt) < minBal {
+	if int64(amt)+(qc.Value-qc.State.MyAmt) < minBal {
+		return fmt.Errorf("pushing %d insufficient; counterparty minBal %d",
+			amt, minBal)
+	}
+
 	qc.State.Delta = int32(-amt)
 	// save to db with ONLY delta changed
 	err := SCon.TS.SaveQchanState(qc)
@@ -324,11 +333,21 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 		fmt.Printf("RTSHandler err: RTS delta %d", RTSDelta)
 		return
 	}
-	if int64(RTSDelta) > qc.Value-qc.State.MyAmt {
-		fmt.Printf("RTSHandler err: RTS delta %d but they have %d",
-			RTSDelta, qc.Value-qc.State.MyAmt)
+	// check if this push would lower counterparty balance below minBal
+	if int64(RTSDelta) > (qc.Value-qc.State.MyAmt)+minBal {
+		fmt.Printf("RTSHandler err: RTS delta %d but they have %d, minBal %d",
+			RTSDelta, qc.Value-qc.State.MyAmt, minBal)
 		return
 	}
+	// check if this push is sufficient to get us above minBal (only needed at
+	// state 1)
+	//if qc.State.StateIdx < 2 && int64(RTSDelta)+qc.State.MyAmt < minBal {
+	if int64(RTSDelta)+qc.State.MyAmt < minBal {
+		fmt.Printf("RTSHandler err: current %d, incoming delta %d, minBal %d",
+			qc.State.MyAmt, RTSDelta, minBal)
+		return
+	}
+
 	if peerArr != qc.PeerId {
 		fmt.Printf("RTSHandler err: peer %x trying to modify peer %x's channel\n",
 			peerArr, qc.PeerId)
