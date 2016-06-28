@@ -341,11 +341,12 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
 	// before acking, add to bloom filter.  Otherwise we won't see it as
 	// it doesn't involve our utxos / adrs.
-	err = SCon.RefilterLocal(SCon.TS)
+	filt, err := SCon.TS.GimmeFilter()
 	if err != nil {
 		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
 		return
 	}
+	SCon.Refilter(filt)
 
 	// create initial state
 	qc.State = new(uspv.StatCom)

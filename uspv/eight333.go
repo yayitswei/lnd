@@ -69,11 +69,12 @@ type SPVCon struct {
 func (s *SPVCon) AskForTx(txid wire.ShaHash) {
 	gdata := wire.NewMsgGetData()
 	inv := wire.NewInvVect(wire.InvTypeTx, &txid)
-	// get wit txs if in hardmode
-	if s.HardMode {
-		inv.Type = wire.InvTypeWitnessTx
-	}
+	// no longer get wit txs if in hardmode... don't need to, right?
+	//	if s.HardMode {
+	//		inv.Type = wire.InvTypeWitnessTx
+	//	}
 	gdata.AddInvVect(inv)
+	log.Printf("asking for tx %s\n", txid.String())
 	s.outMsgQueue <- gdata
 }
 

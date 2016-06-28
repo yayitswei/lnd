@@ -75,7 +75,6 @@ func (s *SPVCon) outgoingMessageHandler() {
 }
 
 // fPositiveHandler monitors false positives and when it gets enough of them,
-//
 func (s *SPVCon) fPositiveHandler() {
 	var fpAccumulator int32
 	for {
@@ -88,7 +87,7 @@ func (s *SPVCon) fPositiveHandler() {
 				return
 			}
 			// send filter
-			s.SendFilter(filt)
+			s.Refilter(filt)
 			fmt.Printf("sent filter %x\n", filt.MsgFilterLoad().Filter)
 
 			// clear the channel
@@ -149,6 +148,7 @@ func (s *SPVCon) HeaderHandler(m *wire.MsgHeaders) {
 // TxHandler takes in transaction messages that come in from either a request
 // after an inv message or after a merkle block message.
 func (s *SPVCon) TxHandler(m *wire.MsgTx) {
+	log.Printf("received msgtx %s\n", m.TxSha().String())
 	s.OKMutex.Lock()
 	height, ok := s.OKTxids[m.TxSha()]
 	s.OKMutex.Unlock()
@@ -157,7 +157,7 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 		return
 	}
 
-	// check for double spends
+	// check for double spends ...?
 	//	allTxs, err := s.TS.GetAllTxs()
 	//	if err != nil {
 	//		log.Printf("Can't get txs from db: %s", err.Error())
@@ -174,6 +174,7 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 	//				i, dub.String(), m.TxSha().String())
 	//		}
 	//	}
+
 	utilTx := btcutil.NewTx(m)
 	if !s.HardMode || s.localFilter.MatchTxAndUpdate(utilTx) {
 		hits, err := s.TS.Ingest(m, height)
@@ -183,19 +184,9 @@ func (s *SPVCon) TxHandler(m *wire.MsgTx) {
 		}
 
 		if hits == 0 {
-			if s.HardMode {
-				// refilter if local; shouldn't have in-mem false positives
-				err = s.RefilterLocal(s.TS)
-				if err != nil {
-					log.Printf("Incoming Tx error: %s\n", err.Error())
-					return
-				}
-			} else { // remote filters / easyMode
-				log.Printf("tx %s had no hits, filter false positive.",
-					m.TxSha().String())
-				s.fPositives <- 1 // add one false positive to chan
-				return
-			}
+			log.Printf("tx %s had no hits, filter false positive.",
+				m.TxSha().String())
+			s.fPositives <- 1 // add one false positive to chan
 		}
 		log.Printf("tx %s ingested and matches %d utxo/adrs.",
 			m.TxSha().String(), hits)
@@ -229,6 +220,7 @@ func (s *SPVCon) GetDataHandler(m *wire.MsgGetData) {
 			if err != nil {
 				log.Printf("error getting tx %s: %s",
 					thing.Hash.String(), err.Error())
+				continue
 			}
 			// Shouldn't connect to non-witness aware nodes anyway so
 			// probably remove this and just return an error?
@@ -252,8 +244,10 @@ func (s *SPVCon) InvHandler(m *wire.MsgInv) {
 			i, thing.Type.String(), thing.Hash.String())
 		if thing.Type == wire.InvTypeTx {
 			// ignore tx invs in ironman mode, or if we already have it
-			if !s.Ironman && !s.TxidExists(&thing.Hash) {
+			if !s.Ironman {
 				// new tx, OK it at 0 and request
+				// also request if we already have it; might have new witness?
+				// needed for confirmed channels...
 				s.AddTxid(&thing.Hash, 0) // unconfirmed
 				s.AskForTx(thing.Hash)
 			}

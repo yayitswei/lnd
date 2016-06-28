@@ -117,7 +117,7 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 
 	filterElements := uint32(len(allUtxos) + len(t.Adrs) + len(allQ))
 
-	f := bloom.NewFilter(filterElements, 0, 0.000001, wire.BloomUpdateAll)
+	f := bloom.NewFilter(filterElements, 0, 0.0000001, wire.BloomUpdateAll)
 
 	// note there could be false positives since we're just looking
 	// for the 20 byte PKH without the opcodes.
@@ -131,7 +131,7 @@ func (t *TxStore) GimmeFilter() (*bloom.Filter, error) {
 	// or no...?
 	for _, m := range allQ {
 
-		// aha, add HASH here, not the outpoint!
+		// aha, add HASH here, not the outpoint! (txid of fund tx)
 		f.AddShaHash(&m.Op.Hash)
 		// also add outpoint...?  wouldn't the hash be enough?
 		// not sure why I have to do both of these, but seems like close txs get

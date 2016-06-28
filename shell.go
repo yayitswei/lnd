@@ -29,7 +29,7 @@ const (
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
-	SPVHostAdr = "10.0.0.86:18333"
+	SPVHostAdr = "10.0.0.86:18330"
 )
 
 var (
@@ -546,6 +546,14 @@ func Adr(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	filt, err := SCon.TS.GimmeFilter()
+	if err != nil {
+		return err
+	}
+
+	SCon.Refilter(filt)
+
 	fmt.Printf("made new address %s\n",
 		a.String())
 

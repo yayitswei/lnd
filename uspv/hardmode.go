@@ -7,6 +7,7 @@ import (
 
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/roasbeef/btcutil/bloom"
 )
 
 var (
@@ -122,14 +123,13 @@ func calcRoot(hashes []*wire.ShaHash) *wire.ShaHash {
 
 // RefilterLocal reconstructs the local in-memory bloom filter.  It does
 // this by calling GimmeFilter() but doesn't broadcast the result.
-func (s *SPVCon) RefilterLocal(ts *TxStore) error {
-	var err error
-	s.localFilter, err = ts.GimmeFilter()
-	if err != nil {
-		return err
+func (s *SPVCon) Refilter(f *bloom.Filter) {
+	if s.HardMode {
+		s.localFilter = f
+		return
 	}
-	fmt.Printf("generated filter %x\n", s.localFilter.MsgFilterLoad().Filter)
-	return nil
+	s.SendFilter(f)
+	return
 }
 
 // IngestBlock is like IngestMerkleBlock but aralphic
@@ -199,11 +199,12 @@ func (s *SPVCon) IngestBlock(m *wire.MsgBlock) {
 
 	if fPositive > reFilter {
 		fmt.Printf("%d filter false positives in this block\n", fPositive)
-		err = s.RefilterLocal(s.TS)
+		filt, err := s.TS.GimmeFilter()
 		if err != nil {
 			log.Printf("Refilter error: %s\n", err.Error())
 			return
 		}
+		s.Refilter(filt)
 	}
 	// write to db that we've sync'd to the height indicated in the
 	// merkle block.  This isn't QUITE true since we haven't actually gotten
