@@ -68,3 +68,5 @@ This would be a mode where uspv doesn't use bloom filters and request merkle blo
 * Ironman SPV
 
 Never request txs.  Only merkleBlocks (or in above mode, blocks).  No unconfirmed transactions are presented to the user, which makes a whole lot of sense as with unconfirmed SPV transactions you're relying completely on the honesty of the reporting node.
+
+C4:1Lb99OK
