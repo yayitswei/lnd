@@ -39,9 +39,11 @@ func OpenSPV(remoteNode string, hfn, dbfn string,
 	if err != nil {
 		return s, err
 	}
+	s.OKMutex.Lock()
 	for _, txid := range txids {
 		s.OKTxids[*txid] = 0
 	}
+	s.OKMutex.Unlock()
 
 	// open TCP connection
 	s.con, err = net.Dial("tcp", remoteNode)

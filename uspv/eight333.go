@@ -367,9 +367,9 @@ func (s *SPVCon) AskForBlocks(dbTip int32) error {
 		s.Rebroadcast()
 		// ask for mempool each time...?  put something in to only ask the
 		// first time we sync...?
-		if !s.Ironman {
-			s.AskForMempool()
-		}
+		//		if !s.Ironman {
+		//			s.AskForMempool()
+		//		}
 		return nil
 	}
 
