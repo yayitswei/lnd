@@ -4,7 +4,7 @@ import random
 
 def main():
 
-	s = socket.create_connection(("127.0.0.1", 1234))
+	s = socket.create_connection(("10.0.30.30", 1234))
 	
 	amt1 = random.randint(100000, 200000000)
 	amt2 = random.randint(100000, 289900000)
@@ -14,8 +14,8 @@ def main():
 		   "params": [{
 	   "DestAddrs": [
 	   #~ "GgKoNkRcfz99oAbey3Fy35nHWUPUjk3Viod5",
-	   "GgKiMfQCEud9SSLAyk67NhPxmJ2jT85m87td",
-	   "GgKvQDhUbuLzpvjpxcmqXXHLZzDWxDBnFgJG",],
+	   "H5qci2nQEhF9X3nkMPRG2LH2saHHWrFerjGLL",
+	   "H5qchdqTgGLrWBc87tYAvyKKYTV9gYS4cU5L5",],
 	   "Amts": [
 	   #~ 40000000,
 	   amt1,
@@ -23,14 +23,14 @@ def main():
 	   }]
 	}    
 	#~ 
-	#~ rpc_input = {
-		   #~ "method": "LNRpc.Sweep",
-		   #~ "params": [{
-	   #~ "NumTx": 1,
-	   #~ "DestAdr": "GgL26pL4qPKJBrk2ZFy97bNU6do26FKWoMyt",
-	   #~ "Drop": True,
-	   #~ }]
-	#~ }
+	rpc_input = {
+		   "method": "LNRpc.Sweep",
+		   "params": [{
+	   "NumTx": 100,
+	   "DestAdr": "H5qci2nQEhF9X3nkMPRG2LH2saHHWrFerjGLL",
+	   "Drop": True,
+	   }]
+	}
 	
 	#~ rpc_input = {
 		   #~ "method": "LNRpc.Fanout",
@@ -54,7 +54,7 @@ def main():
 	   #~ }]
 	#~ }
 	
-	rpc_input = {
+	rpc_input8 = {
 		   "method": "LNRpc.Address",
 		   "params": [{
 	   "NumToMake": 0,

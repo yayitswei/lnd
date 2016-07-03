@@ -232,12 +232,13 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 
 	for i, u := range allUtxos {
 		if u.AtHeight != 0 && u.Value > 10000 {
-			var txid *wire.ShaHash
+			var txid wire.ShaHash
 			if args.Drop {
 				intx, outtx, err := SCon.TS.SendDrop(*allUtxos[i], adr)
 				if err != nil {
 					return err
 				}
+				txid = outtx.TxSha()
 				err = SCon.NewOutgoingTx(intx)
 				if err != nil {
 					return err
@@ -251,6 +252,7 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 				if err != nil {
 					return err
 				}
+				txid = tx.TxSha()
 				err = SCon.NewOutgoingTx(tx)
 				if err != nil {
 					return err
