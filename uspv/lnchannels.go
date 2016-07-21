@@ -331,18 +331,18 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, err
 	}
 
-	// load spending tx
-	spendTx, err := t.GetTx(&qc.CloseData.CloseTxid)
+	// load closing tx
+	closeTx, err := t.GetTx(&qc.CloseData.CloseTxid)
 	if err != nil {
 		return nil, err
 	}
-	if len(spendTx.TxOut) != 2 { // (could be more later; onehop is 2)
-		return nil, fmt.Errorf("spend tx has %d outputs, can't sweep",
-			len(spendTx.TxOut))
+	if len(closeTx.TxOut) != 2 { // (could be more later; onehop is 2)
+		return nil, fmt.Errorf("close tx has %d outputs, can't grab",
+			len(closeTx.TxOut))
 	}
-	if len(spendTx.TxOut[u.Op.Index].PkScript) != 34 {
+	if len(closeTx.TxOut[u.Op.Index].PkScript) != 34 {
 		return nil, fmt.Errorf("grab txout pkscript length %d, expect 34",
-			len(spendTx.TxOut[u.Op.Index].PkScript))
+			len(closeTx.TxOut[u.Op.Index].PkScript))
 	}
 
 	x := qc.GetElkZeroOffset()
@@ -350,13 +350,13 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, fmt.Errorf("GrabUtxo elkrem error, x= %x", x)
 	}
 	// find state index based on tx hints (locktime / sequence)
-	txIdx := GetStateIdxFromTx(spendTx, x)
+	txIdx := GetStateIdxFromTx(closeTx, x)
 	if txIdx == 0 {
 		return nil, fmt.Errorf("no hint, can't recover")
 	}
 
 	//	t.GrabTx(qc, txIdx)
-	shOut := spendTx.TxOut[u.Op.Index]
+	shOut := closeTx.TxOut[u.Op.Index]
 	// if hinted state is greater than elkrem state we can't recover
 	if txIdx > qc.ElkRcv.UpTo() {
 		return nil, fmt.Errorf("tx at state %d but elkrem only goes to %d",
@@ -443,28 +443,28 @@ func (q *Qchan) GetElkZeroOffset() uint64 {
 // MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
 // leaves channel struct the same; returns HAKD pubkey.
 func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
-	var HAKDpubArr [33]byte
+	var HAKDPubArr [33]byte
 
+	// sanity check
 	if q == nil || q.ElkSnd == nil { // can't do anything
-		return HAKDpubArr, fmt.Errorf("can't access elkrem")
+		var empty [33]byte
+		return empty, fmt.Errorf("can't access elkrem")
 	}
+
 	// use the elkrem sender at state's index.  not index + 1
 	// (you revoke index - 1)
 	elk, err := q.ElkSnd.AtIndex(q.State.StateIdx)
 	if err != nil {
-		return HAKDpubArr, err
+		return HAKDPubArr, err
 	}
-	// deserialize their channel pubkey
-	HAKDPub, err := btcec.ParsePubKey(q.TheirPub[:], btcec.S256())
-	if err != nil {
-		return HAKDpubArr, err
-	}
-	// add your elkrem to the pubkey
-	PubKeyAddBytes(HAKDPub, elk.Bytes())
 
-	copy(HAKDpubArr[:], HAKDPub.SerializeCompressed())
+	// copy their pubkey for modification
+	HAKDPubArr = q.TheirPub
 
-	return HAKDpubArr, nil
+	// add our elkrem to their channel pubkey
+	err = PubKeyArrAddBytes(&HAKDPubArr, elk.Bytes())
+
+	return HAKDPubArr, err
 }
 
 // IngestElkrem takes in an elkrem hash, performing 2 checks:
@@ -498,21 +498,14 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 		return nil
 	}
 
-	// make my channel pubkey array into a pubkey
-	derivedPub, err := btcec.ParsePubKey(q.MyPub[:], btcec.S256())
+	var PubArr, empty [33]byte
+	err = PubKeyArrAddBytes(&PubArr, elk.Bytes())
 	if err != nil {
 		return err
 	}
 
-	// add elkrem to my pubkey
-	PubKeyAddBytes(derivedPub, elk.Bytes())
-
-	// re-serialize to compare
-	var derivedArr, empty [33]byte
-	copy(derivedArr[:], derivedPub.SerializeCompressed())
-
 	// see if it matches my previous HAKD pubkey
-	if derivedArr != q.State.MyPrevHAKDPub {
+	if PubArr != q.State.MyPrevHAKDPub {
 		// didn't match, the whole channel is borked.
 		return fmt.Errorf("Provided elk doesn't create HAKD pub %x! Need to close",
 			q.State.MyPrevHAKDPub)
