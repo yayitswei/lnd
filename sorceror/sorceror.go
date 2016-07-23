@@ -4,133 +4,122 @@ import (
 	"fmt"
 
 	"github.com/lightningnetwork/lnd/elkrem"
-	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/wire"
 )
 
 // SorcedChan is data sufficient to monitor and guard the channel
-// You can't actually tell what the channel is though.
-type SorcedChan struct {
-
+// You can't actually tell what the channel is though!
+type SorceChan struct {
 	// Static, per channel data
-	FundPoint     wire.OutPoint // the outpoint of the channel we're monitoring
-	DestPKHScript [22]byte      // PKH to grab to
+	// Channels are primarily identified by their destination PKH.
+	DestPKHScript [20]byte // PKH to grab to
 
-	BasePoint       [33]byte // the base revokable point (pre-HAKD)
-	OtherRefdundPub [33]byte // the other side's refund pubkey (invariant)
+	Delay uint16 // timeout in blocks
+	Fee   int64  // fee to use for grab tx. could make variable but annoying...
 
-	XorIdx uint64 // xor mask to determine state index
-	Delay  uint16 // timeout in blocks
-	Fee    int64  // fee to use for grab tx
+	HAKDBasePoint [33]byte // client's HAKD key base point
+	TimeBasePoint [33]byte // potential attacker's timeout basepoint
 
-	// Variable, per-state data
-	Elk  elkrem.ElkremReceiver // elk receiver of the channel
-	Sigs [][]byte              // the sigs for each tx
-
-	// note that Elk.UpTo() will be 1 less than len(Sigs)
-	// as Elk[0] fits with Sigs[0], which has len 1
+	// state data
+	Elk    elkrem.ElkremReceiver // elk receiver of the channel
+	States []SorceState
 }
 
-// SorcedState is the next state of the channel for monitoring
-type SorcedState struct {
-	ElkHash wire.ShaHash // elk hash to figure out the pubkey
-	Sig     []byte       // signature of grab tx
+// SorcedState is the state of the channel being monitored
+// (for writing to disk; 105 bytes).
+type SorceState struct {
+	Txid wire.ShaHash
+	Sig  [73]byte // signature of grab tx
+}
+
+type SorceMsg struct {
+	Txid wire.ShaHash // txid of close tx
+	Elk  wire.ShaHash // elkrem for this state index
+	Sig  [73]byte     // sig for the grab tx
 }
 
 // Ingest the next state.  Will error half the time if the elkrem's invalid.
 // Never errors on invalid sig.
-func (sc *SorcedChan) Ingest(ss SorcedState) error {
+func (sc *SorceChan) Ingest(ss SorceState) error {
 	if sc == nil {
 		return fmt.Errorf("Ingest: nil SorcedChan")
 	}
-	sc.Sigs = append(sc.Sigs, ss.Sig)
-	return sc.Elk.AddNext(&ss.ElkHash)
+	return nil
 }
 
 // Detect if this close tx is invalid and if we should attempt to grab it.
 // If there's errors we'll just return false for now.
-func (sc *SorcedChan) Detect(tx *wire.MsgTx) (hit bool) {
-	if tx == nil || sc == nil {
-		return
-	}
-	stateIdx := uspv.GetStateIdxFromTx(tx, sc.XorIdx)
-	if stateIdx == 0 {
-		// no valid state index, likely a cooperative close
-		return
-	}
-	// state index is LESS than our max state!  Can grab!
-	// ###### watch out for off-by one here!! there is no state 0 or sig for 0.
-	// but there IS an elkrem for 0; a little messy.
-	if stateIdx < sc.Elk.UpTo() {
-		hit = true
-	}
-	// if stateIdx == or > len(sc.Sigs), it's a later state than we can grab
-	return
-}
+//func (sc *SorceChan) Detect(tx *wire.MsgTx) (hit bool) {
+//	if tx == nil || sc == nil {
+//		return
+//	}
+//	return
+//}
 
 // Grab produces the grab tx, if possible.
-func (sc *SorcedChan) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
+func (sc *SorceChan) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
 	// sanity chex
-	if sc == nil {
-		return nil, fmt.Errorf("Grab: nil SorcedChan")
-	}
-	if cTx == nil || len(cTx.TxOut) == 0 {
-		return nil, fmt.Errorf("Grab: nil close tx")
-	}
-	// determine state index from close tx
-	stateIdx := uspv.GetStateIdxFromTx(cTx, sc.XorIdx)
-	if stateIdx == 0 {
-		// no valid state index, likely a cooperative close
-		return nil, fmt.Errorf("Grab: close tx has 0 state index")
-	}
-	// check if we have sufficient elkrem
-	if stateIdx >= sc.Elk.UpTo() {
-		return nil, fmt.Errorf("Grab: state idx %d but elk up to %d",
-			stateIdx, sc.Elk.UpTo())
-	}
-	// check if we have sufficient sig.  This is redundant because elks & sigs
-	// should always be in sync.
-	if stateIdx > uint64(len(sc.Sigs)) {
-		return nil, fmt.Errorf("Grab: state idx %d but %d sigs",
-			stateIdx, len(sc.Sigs))
-	}
-	PubArr := sc.BasePoint
-	elk, err := sc.Elk.AtIndex(stateIdx)
-	if err != nil {
-		return nil, err
-	}
-	err = uspv.PubKeyArrAddBytes(&PubArr, elk.Bytes())
-	if err != nil {
-		return nil, err
-	}
+	//	if sc == nil {
+	//		return nil, fmt.Errorf("Grab: nil SorcedChan")
+	//	}
+	//	if cTx == nil || len(cTx.TxOut) == 0 {
+	//		return nil, fmt.Errorf("Grab: nil close tx")
+	//	}
+	//	// determine state index from close tx
+	//	stateIdx := uspv.GetStateIdxFromTx(cTx, sc.XorIdx)
+	//	if stateIdx == 0 {
+	//		// no valid state index, likely a cooperative close
+	//		return nil, fmt.Errorf("Grab: close tx has 0 state index")
+	//	}
+	//	// check if we have sufficient elkrem
+	//	if stateIdx >= sc.Elk.UpTo() {
+	//		return nil, fmt.Errorf("Grab: state idx %d but elk up to %d",
+	//			stateIdx, sc.Elk.UpTo())
+	//	}
+	//	// check if we have sufficient sig.  This is redundant because elks & sigs
+	//	// should always be in sync.
+	//	if stateIdx > uint64(len(sc.Sigs)) {
+	//		return nil, fmt.Errorf("Grab: state idx %d but %d sigs",
+	//			stateIdx, len(sc.Sigs))
+	//	}
+	//	PubArr := sc.BasePoint
+	//	elk, err := sc.Elk.AtIndex(stateIdx)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	err = uspv.PubKeyArrAddBytes(&PubArr, elk.Bytes())
+	//	if err != nil {
+	//		return nil, err
+	//	}
 
-	// figure out amount to grab
-	// for now, assumes 2 outputs.  Later, look for the largest wsh output
-	if len(tx.TxOut[0].PkScript) == 34 {
-		shIdx = 0
-	} else {
-		shIdx = 1
-	}
+	//	// figure out amount to grab
+	//	// for now, assumes 2 outputs.  Later, look for the largest wsh output
+	//	if len(cTx.TxOut[0].PkScript) == 34 {
+	//		shIdx = 0
+	//	} else {
+	//		shIdx = 1
+	//	}
 
-	// calculate script for p2wsh
-	preScript, _ := uspv.CommitScript2(PubArr, sc.OtherRefdundPub, sc.Delay)
+	//	// calculate script for p2wsh
+	//	preScript, _ := uspv.CommitScript2(PubArr, sc.OtherRefdundPub, sc.Delay)
 
-	// annoying 2-step outpoint calc
-	closeTxid := cTx.TxSha()
-	grabOP := wire.NewOutPoint(&closeTxid, 0)
-	// make the txin
-	grabTxIn := wire.NewTxIn(grabOP, nil, make([][]byte, 2))
-	// sig, then script
-	grabTxIn.Witness[0] = sc.Sigs[stateIdx]
-	grabTxIn.Witness[1] = preScript
+	//	// annoying 2-step outpoint calc
+	//	closeTxid := cTx.TxSha()
+	//	grabOP := wire.NewOutPoint(&closeTxid, 0)
+	//	// make the txin
+	//	grabTxIn := wire.NewTxIn(grabOP, nil, make([][]byte, 2))
+	//	// sig, then script
+	//	grabTxIn.Witness[0] = sc.Sigs[stateIdx]
+	//	grabTxIn.Witness[1] = preScript
 
-	// make a txout
-	grabTxOut := wire.NewTxOut(10000, sc.DestPKHScript[:])
+	//	// make a txout
+	//	grabTxOut := wire.NewTxOut(10000, sc.DestPKHScript[:])
 
-	// make the tx and add the txin and txout
-	grabTx := wire.NewMsgTx()
-	grabTx.AddTxIn(grabTxIn)
-	grabTx.AddTxOut(grabTxOut)
+	//	// make the tx and add the txin and txout
+	//	grabTx := wire.NewMsgTx()
+	//	grabTx.AddTxIn(grabTxIn)
+	//	grabTx.AddTxOut(grabTxOut)
 
-	return grabTx, nil
+	//	return grabTx, nil
+	return nil, nil
 }
