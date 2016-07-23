@@ -1,4 +1,4 @@
-package sorceror
+package sig64
 
 import "fmt"
 
