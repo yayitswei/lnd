@@ -84,7 +84,7 @@ func SigCompress(sig []byte) (csig [64]byte, err error) {
 		slen = 32
 	}
 	// copy s, leaving 0s at the MSB
-	copy(s[:], sig[:slen])
+	copy(s[32-slen:], sig[:slen])
 	// we're done with sig
 	// serialize compressed sig as r, s
 	copy(csig[0:32], r[:])

@@ -1,8 +1,12 @@
 package sorceror
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/wire"
 )
 
 var (
@@ -11,8 +15,31 @@ var (
 	sig3big, _ = hex.DecodeString("3045022059f28edc62e4b744ff7097717b7d4701614e4af6a30dfa2081ef3e8e279241840221008279ca7eb40a4bd04c923b96110b00d472d648c67df09ad39945130b8f7e4dc8")
 )
 
-// TestElkremBig tries 10K hashes
-func TestSigCompress(t *testing.T) {
+// TestRandom makes random signatures and compresses / decompresses them
+func TestRandom(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		priv, _ := btcec.NewPrivateKey(btcec.S256())
+		sig, err := priv.Sign(wire.DoubleSha256([]byte{byte(i)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		bigsig := sig.Serialize()
+		lilsig, err := SigCompress(bigsig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decsig := SigDecompress(lilsig)
+		if !bytes.Equal(bigsig, decsig) {
+			t.Fatalf("big/recover/comp:\n%x\n%x\n%x\n", bigsig, decsig, lilsig)
+
+		}
+		t.Logf("big/recover:\n%x\n%x\n", bigsig, decsig)
+
+	}
+}
+
+// TestHardCoded tries compressing / decompressing hardcoded sigs
+func TestHardCoded(t *testing.T) {
 	c1, err := SigCompress(sig1big)
 	if err != nil {
 		t.Fatal(err)
