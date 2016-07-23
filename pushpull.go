@@ -269,7 +269,8 @@ func PushChannel(qc *uspv.Qchan, amt uint32) error {
 // SendRTS based on channel info
 func SendRTS(qc *uspv.Qchan) error {
 	qc.State.StateIdx++
-	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+
+	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 	if err != nil {
 		return err
 	}
@@ -383,7 +384,7 @@ func SendACKSIG(qc *uspv.Qchan) error {
 	if err != nil {
 		return err
 	}
-	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 	if err != nil {
 		return err
 	}

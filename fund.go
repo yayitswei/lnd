@@ -284,13 +284,12 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 		return err
 	}
 
-	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 	if err != nil {
 		return err
 	}
 	elk, err := qc.ElkSnd.AtIndex(0)
 	if err != nil {
-		//		fmt.Printf("QChanDescHandler ElkSnd err %s", err.Error())
 		return err
 	}
 
@@ -377,9 +376,9 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("QChanDescHandler GetQchan err %s", err.Error())
 		return
 	}
-	theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 	if err != nil {
-		fmt.Printf("QChanDescHandler MakeTheirHAKDPubkey err %s", err.Error())
+		fmt.Printf("QChanDescHandler MakeTheirHAKDMyTimeout err %s", err.Error())
 		return
 	}
 	sig, err := SCon.TS.SignState(qc)

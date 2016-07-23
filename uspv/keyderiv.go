@@ -30,7 +30,11 @@ const (
 
 // PrivKeyAddBytes adds bytes to a private key.
 // NOTE that this modifies the key in place, overwriting it!!!!1
+// If k is nil, does nothing and doesn't error (k stays nil)
 func PrivKeyAddBytes(k *btcec.PrivateKey, b []byte) {
+	if k == nil {
+		return
+	}
 	// turn arg bytes into a bigint
 	arg := new(big.Int).SetBytes(b)
 	// add private key to arg

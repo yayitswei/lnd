@@ -387,17 +387,22 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		// elkrem hash so they haven't been able to spend, and the delay is over.
 		// (this assumes the state matches the tx being spent.  It won't
 		// work if you're spending from an invalid close that you made.)
-		theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+		theirHAKDpub, myTimeoutPub, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 		if err != nil {
 			return nil, err
 		}
-		myTimeoutKey, err := qc.MakeMyTimeoutKey()
-		if err != nil {
-			return nil, err
+		// not using the refund pub, but the base point instead.
+		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
+		// also, priv changes here (add their hash)
+		PrivKeyAddBytes(priv, wire.DoubleSha256(theirHAKDpub[:]))
+		// make sure priv is non-nil.  may be redundant
+		if priv == nil {
+			return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
 		}
+
 		// need the previous script. ignore builder error
 		prevScript, _ = CommitScript2(
-			theirHAKDpub, myTimeoutKey, uint16(u.SpendLag))
+			theirHAKDpub, myTimeoutPub, uint16(u.SpendLag))
 
 		scriptHash := P2WSHify(prevScript) // p2wsh-ify to check
 		fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
@@ -597,13 +602,27 @@ func (ts *TxStore) SendCoins(
 			if err != nil {
 				return nil, err
 			}
-			// Need their HAKD pubkey to build script.  States should line up OK.
-			theirHAKDpub, err := qc.MakeTheirHAKDPubkey()
+
+			// I need their HAKD pubkey.  I haven't given them the revocation
+			// elkrem hash so they haven't been able to spend, and the delay is over.
+			// (this assumes the state matches the tx being spent.  It won't
+			// work if you're spending from an invalid close that you made.)
+			theirHAKDpub, myTimeoutPub, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
 			if err != nil {
 				return nil, err
 			}
+			// not using the refund pub, but the base point instead.
+			priv = ts.GetHAKDBasePriv(utxos[i].PeerIdx, utxos[i].KeyIdx)
+			// also, priv changes here (add their hash)
+			PrivKeyAddBytes(priv, wire.DoubleSha256(theirHAKDpub[:]))
+			// make sure priv is non-nil.  may be redundant
+			if priv == nil {
+				return nil, fmt.Errorf("nil privkey on timeout spend %s", utxos[i].Op.String())
+			}
+
+			// need the previous script. ignore builder error
 			prevScript, _ := CommitScript2(
-				theirHAKDpub, qc.MyRefundPub, uint16(utxos[i].SpendLag))
+				theirHAKDpub, myTimeoutPub, uint16(utxos[i].SpendLag))
 			// sign with channel refund key and prevScript
 			tsig, err := txscript.RawTxInWitnessSignature(
 				tx, hCache, i, utxos[i].Value, prevScript, txscript.SigHashAll, priv)

@@ -277,8 +277,9 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	// display txid instead of outpoint because easier to copy/paste
 	fmt.Printf("CHANNEL %s h:%d (%d,%d) cap: %d\n",
 		q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-	fmt.Printf("\tPUB mine:%x them:%x REFUND mine:%x them:%x\n",
-		q.MyPub[:4], q.TheirPub[:4], q.MyRefundPub[:4], q.TheirRefundPub[:4])
+	fmt.Printf("\tPUB mine:%x them:%x REFUND mine:%x them:%x BASE mine:%x them:%x\n",
+		q.MyPub[:4], q.TheirPub[:4], q.MyRefundPub[:4], q.TheirRefundPub[:4],
+		q.MyHAKDBase[:4], q.TheirHAKDBase[:4])
 	if q.State == nil || q.ElkRcv == nil {
 		fmt.Printf("\t no valid state or elkrem\n")
 	} else {
@@ -373,8 +374,8 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	}
 	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
 
-	// get private signing key
-	priv := t.GetRefundPrivkey(qc.PeerIdx, qc.KeyIdx)
+	// get HAKD base scalar
+	priv := t.GetHAKDBasePriv(qc.PeerIdx, qc.KeyIdx)
 	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
 	// modify private key
 	PrivKeyAddBytes(priv, elk.Bytes())
@@ -384,8 +385,14 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	copy(HAKDpubArr[:], priv.PubKey().SerializeCompressed())
 	fmt.Printf("made HAKD to recover from %x\n", HAKDpubArr)
 
+	// add the HAKD pub point hash to their base point for timeout pubkey
+	theirTimeoutPub, err := MakeTimeoutFromHAKD(qc.TheirHAKDBase, HAKDpubArr)
+	if err != nil {
+		return nil, err
+	}
+
 	// now that everything is chosen, build fancy script and pkh script
-	preScript, _ := CommitScript2(HAKDpubArr, qc.TheirRefundPub, qc.TimeOut)
+	preScript, _ := CommitScript2(HAKDpubArr, theirTimeoutPub, qc.TimeOut)
 	fancyScript := P2WSHify(preScript) // p2wsh-ify
 	fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
 	if !bytes.Equal(fancyScript, shOut.PkScript) {
@@ -464,17 +471,22 @@ func (q *Qchan) MakeTheirHAKDMyTimeout(
 
 	// start with the base points
 	hakd = q.TheirHAKDBase
-	timeout = q.MyHAKDBase
 
 	// add my still secret elkrem (point) to their base point
 	err = PubKeyArrAddBytes(&hakd, elk.Bytes())
 	if err != nil {
 		return
 	}
+
 	// my timeout key is my base point plus the hash of their hakd
-	err = PubKeyArrAddBytes(&timeout, wire.DoubleSha256(hakd[:]))
+	timeout, err = MakeTimeoutFromHAKD(q.MyHAKDBase, hakd)
 
 	return
+}
+
+func MakeTimeoutFromHAKD(base, hakd [33]byte) ([33]byte, error) {
+	err := PubKeyArrAddBytes(&base, wire.DoubleSha256(hakd[:]))
+	return base, err
 }
 
 // MakeMyHAKDTheirTimeout makes my HAKD pubkey and their timeout key
@@ -495,7 +507,6 @@ func (q *Qchan) MakeMyHAKDTheirTimeout(
 
 	// start with the base points
 	hakd = q.MyHAKDBase
-	timeout = q.TheirHAKDBase
 
 	// add my their revealed elkrem (point) to my base point
 	err = PubKeyArrAddBytes(&hakd, elk.Bytes())
@@ -503,14 +514,14 @@ func (q *Qchan) MakeMyHAKDTheirTimeout(
 		return
 	}
 	// their timeout key is their base point plus the hash of my hakd
-	err = PubKeyArrAddBytes(&timeout, wire.DoubleSha256(hakd[:]))
+	timeout, err = MakeTimeoutFromHAKD(q.TheirHAKDBase, hakd)
 
 	return
 }
 
 // MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
 // leaves channel struct the same; returns HAKD pubkey.
-func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
+func (q *Qchan) MakeTheirHAKDPubkeyx() ([33]byte, error) {
 	var HAKDPubArr [33]byte
 
 	// sanity check
@@ -537,7 +548,7 @@ func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
 
 // MakeMyTimeoutKey genreates my time-lock pubkey based on the last
 // sent elkrem hash and my HAKD base point.
-func (q *Qchan) MakeMyTimeoutKey() ([33]byte, error) {
+func (q *Qchan) MakeMyTimeoutKeyx() ([33]byte, error) {
 	var empty [33]byte
 
 	// sanity check
@@ -563,7 +574,7 @@ func (q *Qchan) MakeMyTimeoutKey() ([33]byte, error) {
 
 // MakeTheirTimeoutKey genreates their time-lock pubkey based on the last
 // received elkrem hash and my HAKD base point.
-func (q *Qchan) MakeTheirTimeoutKey() ([33]byte, error) {
+func (q *Qchan) MakeTheirTimeoutKeyx() ([33]byte, error) {
 	var empty [33]byte
 
 	// sanity check
@@ -639,14 +650,14 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 // SignBreak signs YOUR tx, which you already have a sig for
 func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	// generate their HAKDpub.  Be sure you haven't revoked it!
-	theirHAKDpub, _, err := q.MakeTheirHAKDMyTimeout(q.State.StateIdx)
-	if err != nil {
-		return nil, err
-	}
+	//	theirHAKDpub, myTimeout, err := q.MakeTheirHAKDMyTimeout(q.State.StateIdx)
+	//	if err != nil {
+	//		return nil, err
+	//	}
 
 	//	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
 
-	tx, err := q.BuildStateTx(theirHAKDpub)
+	tx, err := q.BuildStateTx(true)
 	if err != nil {
 		return nil, err
 	}
@@ -737,11 +748,11 @@ func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
 	return sig, nil
 }
 
-// SignNextState generates your signature for their state. (usually)
+// SignNextState generates your signature for their state.
 func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	var empty [33]byte
 	// build transaction for next state
-	tx, err := q.BuildStateTx(empty) // generally their tx, as I'm signing
+	tx, err := q.BuildStateTx(false) // their tx, as I'm signing
 	if err != nil {
 		return nil, err
 	}
@@ -780,14 +791,8 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 // for verifying signature, always use theirHAKDpub, so generate & populate within
 // this function.
 func (q *Qchan) VerifySig(sig []byte) error {
-	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
-	if err != nil {
-		fmt.Printf("ACKSIGHandler err %s", err.Error())
-		return err
-	}
-
-	// ALWAYS my tx, ALWAYS their HAKD when I'm verifying.
-	tx, err := q.BuildStateTx(theirHAKDpub)
+	// my tx when I'm verifying.
+	tx, err := q.BuildStateTx(true)
 	if err != nil {
 		return err
 	}
@@ -820,7 +825,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
 	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
 	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.MyHAKDPub[:4], theirHAKDpub[:4], sig)
+	fmt.Printf("\tsig: %x\n", sig)
 
 	worked := pSig.Verify(hash, theirPubKey)
 	if !worked {
@@ -843,7 +848,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 // Index is used to set nlocktime for state hints.
 // fee and op_csv timeout are currently hardcoded, make those parameters later.
 // also returns the script preimage for later spending.
-func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
+func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	if q == nil {
 		return nil, fmt.Errorf("BuildStateTx: nil chan")
 	}
@@ -857,8 +862,6 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 		return nil, fmt.Errorf(
 			"BuildStateTx: delta is %d (expect 0)", s.Delta)
 	}
-
-	var empty [33]byte
 	var err error
 	var fancyAmt, pkhAmt int64   // output amounts
 	var revPub, timePub [33]byte // pubkeys
@@ -866,31 +869,31 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	fee := int64(5000)           // fixed fee for now
 	delay := uint16(5)           // fixed CSV delay for now
 	// delay is super short for testing.
-
-	if theirHAKDpub == empty { // TheirHAKDPub is empty; build THEIR tx (to sign)
-		// Their tx that they store.  I get funds unencumbered.
-		pkhPub = q.MyRefundPub
-		pkhAmt = s.MyAmt - fee
-
-		// make timepub: their refund pub with their elk of state-1
-		timePub, err = q.MakeTheirTimeoutKey()
+	if mine { // build MY tx (to verify) (unless breaking)
+		// My tx that I store.  They get funds unencumbered.
+		revPub, timePub, err = q.MakeTheirHAKDMyTimeout(s.StateIdx)
 		if err != nil {
 			return nil, err
 		}
-		revPub = s.MyHAKDPub // if they're given me the elkrem, it's mine
-		fancyAmt = (q.Value - s.MyAmt) - fee
-	} else { // theirHAKDPub is full; build MY tx (to verify) (unless breaking)
-		// My tx that I store.  They get funds unencumbered.
+
 		pkhPub = q.TheirRefundPub
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
-		// make timepub: my refund pub with my elk of state-1
-		timePub, err = q.MakeMyTimeoutKey()
+		fancyAmt = s.MyAmt - fee
+	} else { // build THEIR tx (to sign)
+		// Their tx that they store.  I get funds unencumbered.
+
+		// SH output
+		revPub = s.MyHAKDPub
+		timePub, err = MakeTimeoutFromHAKD(q.TheirHAKDBase, revPub)
 		if err != nil {
 			return nil, err
 		}
-		revPub = theirHAKDpub // I can revoke by giving them the elkrem
-		fancyAmt = s.MyAmt - fee
+		fancyAmt = (q.Value - s.MyAmt) - fee
+
+		// PKH output
+		pkhPub = q.MyRefundPub
+		pkhAmt = s.MyAmt - fee
 	}
 
 	// now that everything is chosen, build fancy script and pkh script
