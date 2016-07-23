@@ -186,11 +186,13 @@ func PointReqHandler(from [16]byte, pointReqBytes []byte) {
 	}
 	myChanPub := SCon.TS.GetChanPubkey(peerIdx, cIdx)
 	myRefundPub := SCon.TS.GetRefundPubkey(peerIdx, cIdx)
+	myHAKDbase := SCon.TS.GetHAKDBasePoint(peerIdx, cIdx)
 	fmt.Printf("Generated pubkey %x\n", myChanPub)
 
 	msg := []byte{uspv.MSGID_POINTRESP}
 	msg = append(msg, myChanPub[:]...)
 	msg = append(msg, myRefundPub[:]...)
+	msg = append(msg, myHAKDbase[:]...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -206,15 +208,19 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	satPerByte := int64(80)
 	capBytes := uspv.I64tB(fr.Cap)
 
-	if len(pointRespBytes) != 66 {
-		return fmt.Errorf("PointRespHandler err: pointRespBytes %d bytes, expect 66\n",
+	if len(pointRespBytes) != 99 {
+		return fmt.Errorf("PointRespHandler err: pointRespBytes %d bytes, expect 99\n",
 			len(pointRespBytes))
 	}
 	var theirPub [33]byte
 	copy(theirPub[:], pointRespBytes[:33])
 
 	var theirRefundPub [33]byte
-	copy(theirRefundPub[:], pointRespBytes[33:])
+	copy(theirRefundPub[:], pointRespBytes[33:66])
+
+	var theirHAKDbase [33]byte
+	copy(theirHAKDbase[:], pointRespBytes[66:])
+
 	// make sure their pubkey is a pubkey
 	_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
 	if err != nil {
@@ -250,8 +256,8 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
 	// save partial tx to db; populate output, get their channel pubkey
-	op, err := SCon.TS.MakeFundTx(
-		tx, fr.Cap, fr.PeerIdx, fr.ChanIdx, peerArr, theirPub, theirRefundPub)
+	op, err := SCon.TS.MakeFundTx(tx, fr.Cap, fr.PeerIdx, fr.ChanIdx,
+		peerArr, theirPub, theirRefundPub, theirHAKDbase)
 	if err != nil {
 		return err
 	}
@@ -289,13 +295,15 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	}
 
 	initPayBytes := uspv.I64tB(fr.InitSend) // also will be an arg
-	// description is outpoint (36), mypub(33), myrefund(33), capacity (8),
+	// description is outpoint (36), mypub(33), myrefund(33),
+	// myHAKDpoint(33), capacity (8),
 	// initial payment (8), HAKD (33), elk0 (32)
-	// total length 138
+	// total length 216
 	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, qc.MyPub[:]...)
 	msg = append(msg, qc.MyRefundPub[:]...)
+	msg = append(msg, qc.MyHAKDBase[:]...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
 	msg = append(msg, theirHAKDpub[:]...)
@@ -308,11 +316,11 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 // QChanDescHandler takes in a description of a channel output.  It then
 // saves it to the local db.
 func QChanDescHandler(from [16]byte, descbytes []byte) {
-	if len(descbytes) < 183 || len(descbytes) > 183 {
-		fmt.Printf("got %d byte channel description, expect 151", len(descbytes))
+	if len(descbytes) < 216 || len(descbytes) > 216 {
+		fmt.Printf("got %d byte channel description, expect 216", len(descbytes))
 		return
 	}
-	var peerArr, myFirstHAKD, theirPub, theirRefundPub [33]byte
+	var peerArr, myFirstHAKD, theirPub, theirRefundPub, theirHAKDbase [33]byte
 	var opArr [36]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
@@ -321,10 +329,11 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	op := uspv.OutPointFromBytes(opArr)
 	copy(theirPub[:], descbytes[36:69])
 	copy(theirRefundPub[:], descbytes[69:102])
-	amt := uspv.BtI64(descbytes[102:110])
-	initPay := uspv.BtI64(descbytes[110:118])
-	copy(myFirstHAKD[:], descbytes[118:151])
-	revElk, err := wire.NewShaHash(descbytes[151:])
+	copy(theirHAKDbase[:], descbytes[102:135])
+	amt := uspv.BtI64(descbytes[135:143])
+	initPay := uspv.BtI64(descbytes[143:151])
+	copy(myFirstHAKD[:], descbytes[151:184])
+	revElk, err := wire.NewShaHash(descbytes[184:])
 	if err != nil {
 		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
 		return
@@ -333,7 +342,8 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	qc, err := SCon.TS.SaveFundTx(op, amt, peerArr, theirPub, theirRefundPub)
+	qc, err := SCon.TS.SaveFundTx(
+		op, amt, peerArr, theirPub, theirRefundPub, theirHAKDbase)
 	if err != nil {
 		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
 		return

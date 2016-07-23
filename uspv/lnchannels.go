@@ -52,8 +52,12 @@ type Qchan struct {
 
 	PeerId [33]byte // D useful for quick traverse of db
 
-	TheirRefundPub [33]byte // S their pubkey for channel break
+	//TODO can make refund a 20 byte pubkeyhash
 	MyRefundPub    [33]byte // D my refund pubkey for channel break
+	TheirRefundPub [33]byte // S their pubkey for channel break
+
+	MyHAKDBase    [33]byte // D my base point for HAKD and timeout keys
+	TheirHAKDBase [33]byte // S their base point for HAKD and timeout keys
 
 	// Elkrem is used for revoking state commitments
 	ElkSnd *elkrem.ElkremSender   // D derived from channel specific key
@@ -370,7 +374,7 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
 
 	// get private signing key
-	priv := t.GetChanPrivkey(qc.PeerIdx, qc.KeyIdx)
+	priv := t.GetRefundPrivkey(qc.PeerIdx, qc.KeyIdx)
 	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
 	// modify private key
 	PrivKeyAddBytes(priv, elk.Bytes())
@@ -440,6 +444,70 @@ func (q *Qchan) GetElkZeroOffset() uint64 {
 	return uint64(BtI64(x[:]))
 }
 
+// MakeTheirHAKDMyTimeout makes their HAKD pubey, and my timeout pubkey
+// for the current state.  Their HAKD pub is their base point times my
+// current state elk; my timeout key is my base point times the hash
+// of the HAKD pub I just made for them.
+// idx the index at which to generate pubkeys (usually the current state index)
+func (q *Qchan) MakeTheirHAKDMyTimeout(
+	idx uint64) (hakd, timeout [33]byte, err error) {
+	// sanity check
+	if q == nil || q.ElkSnd == nil { // can't do anything
+		err = fmt.Errorf("can't access elkrem")
+		return
+	}
+	var elk *wire.ShaHash
+	elk, err = q.ElkSnd.AtIndex(idx)
+	if err != nil {
+		return
+	}
+
+	// start with the base points
+	hakd = q.TheirHAKDBase
+	timeout = q.MyHAKDBase
+
+	// add my still secret elkrem (point) to their base point
+	err = PubKeyArrAddBytes(&hakd, elk.Bytes())
+	if err != nil {
+		return
+	}
+	// my timeout key is my base point plus the hash of their hakd
+	err = PubKeyArrAddBytes(&timeout, wire.DoubleSha256(hakd[:]))
+
+	return
+}
+
+// MakeMyHAKDTheirTimeout makes my HAKD pubkey and their timeout key
+// for the current state.
+// idx the index at which to generate pubkeys (usually the current state index)
+func (q *Qchan) MakeMyHAKDTheirTimeout(
+	idx uint64) (hakd, timeout [33]byte, err error) {
+	// sanity check
+	if q == nil || q.ElkRcv == nil { // can't do anything
+		err = fmt.Errorf("can't access elkrem")
+		return
+	}
+	var elk *wire.ShaHash
+	elk, err = q.ElkRcv.AtIndex(idx)
+	if err != nil {
+		return
+	}
+
+	// start with the base points
+	hakd = q.MyHAKDBase
+	timeout = q.TheirHAKDBase
+
+	// add my their revealed elkrem (point) to my base point
+	err = PubKeyArrAddBytes(&hakd, elk.Bytes())
+	if err != nil {
+		return
+	}
+	// their timeout key is their base point plus the hash of my hakd
+	err = PubKeyArrAddBytes(&timeout, wire.DoubleSha256(hakd[:]))
+
+	return
+}
+
 // MakeHAKDPubkey generates the HAKD pubkey to send out or everify sigs.
 // leaves channel struct the same; returns HAKD pubkey.
 func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
@@ -459,12 +527,63 @@ func (q *Qchan) MakeTheirHAKDPubkey() ([33]byte, error) {
 	}
 
 	// copy their pubkey for modification
-	HAKDPubArr = q.TheirPub
+	HAKDPubArr = q.TheirHAKDBase
 
 	// add our elkrem to their channel pubkey
 	err = PubKeyArrAddBytes(&HAKDPubArr, elk.Bytes())
 
 	return HAKDPubArr, err
+}
+
+// MakeMyTimeoutKey genreates my time-lock pubkey based on the last
+// sent elkrem hash and my HAKD base point.
+func (q *Qchan) MakeMyTimeoutKey() ([33]byte, error) {
+	var empty [33]byte
+
+	// sanity check
+	if q == nil || q.ElkSnd == nil { // can't do anything
+		return empty, fmt.Errorf("can't access elkrem")
+	}
+
+	// use the elkrem sender at state's index-1.
+	fmt.Printf("MakeMyTimeoutKey make %d\n", q.State.StateIdx-1)
+	elk, err := q.ElkSnd.AtIndex(q.State.StateIdx - 1)
+	if err != nil {
+		return empty, err
+	}
+
+	// copy my HAKD base for modification
+	timePubArr := q.MyHAKDBase
+
+	// add our elkrem to my HAKD base point
+	err = PubKeyArrAddBytes(&timePubArr, elk.Bytes())
+
+	return timePubArr, err
+}
+
+// MakeTheirTimeoutKey genreates their time-lock pubkey based on the last
+// received elkrem hash and my HAKD base point.
+func (q *Qchan) MakeTheirTimeoutKey() ([33]byte, error) {
+	var empty [33]byte
+
+	// sanity check
+	if q == nil || q.ElkRcv == nil { // can't do anything
+		return empty, fmt.Errorf("can't access elkrem")
+	}
+	fmt.Printf("MakeTheirTimeoutKey make %d\n", q.State.StateIdx-1)
+	// use the elkrem sender at state's index-2.
+	elk, err := q.ElkRcv.AtIndex(q.State.StateIdx - 1)
+	if err != nil {
+		return empty, err
+	}
+
+	// copy my HAKD base for modification
+	timePubArr := q.TheirHAKDBase
+
+	// add our elkrem to my HAKD base point
+	err = PubKeyArrAddBytes(&timePubArr, elk.Bytes())
+
+	return timePubArr, err
 }
 
 // IngestElkrem takes in an elkrem hash, performing 2 checks:
@@ -499,11 +618,11 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 	}
 
 	var PubArr, empty [33]byte
+	PubArr = q.MyHAKDBase
 	err = PubKeyArrAddBytes(&PubArr, elk.Bytes())
 	if err != nil {
 		return err
 	}
-
 	// see if it matches my previous HAKD pubkey
 	if PubArr != q.State.MyPrevHAKDPub {
 		// didn't match, the whole channel is borked.
@@ -520,10 +639,12 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 // SignBreak signs YOUR tx, which you already have a sig for
 func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	// generate their HAKDpub.  Be sure you haven't revoked it!
-	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
+	theirHAKDpub, _, err := q.MakeTheirHAKDMyTimeout(q.State.StateIdx)
 	if err != nil {
 		return nil, err
 	}
+
+	//	theirHAKDpub, err := q.MakeTheirHAKDPubkey()
 
 	tx, err := q.BuildStateTx(theirHAKDpub)
 	if err != nil {
@@ -562,6 +683,7 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 }
 
 // SimpleCloseTx produces a close tx based on the current state.
+// When
 func (q *Qchan) SimpleCloseTx() *wire.MsgTx {
 	// sanity checks
 	if q == nil || q.State == nil {
@@ -737,7 +859,7 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 	}
 
 	var empty [33]byte
-
+	var err error
 	var fancyAmt, pkhAmt int64   // output amounts
 	var revPub, timePub [33]byte // pubkeys
 	var pkhPub [33]byte          // the simple output's pub key hash
@@ -750,16 +872,24 @@ func (q *Qchan) BuildStateTx(theirHAKDpub [33]byte) (*wire.MsgTx, error) {
 		pkhPub = q.MyRefundPub
 		pkhAmt = s.MyAmt - fee
 
-		timePub = q.TheirRefundPub // these are their funds, but they have to wait
-		revPub = s.MyHAKDPub       // if they're given me the elkrem, it's mine
+		// make timepub: their refund pub with their elk of state-1
+		timePub, err = q.MakeTheirTimeoutKey()
+		if err != nil {
+			return nil, err
+		}
+		revPub = s.MyHAKDPub // if they're given me the elkrem, it's mine
 		fancyAmt = (q.Value - s.MyAmt) - fee
 	} else { // theirHAKDPub is full; build MY tx (to verify) (unless breaking)
 		// My tx that I store.  They get funds unencumbered.
 		pkhPub = q.TheirRefundPub
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
-		timePub = q.MyRefundPub // these are my funds, but I have to wait
-		revPub = theirHAKDpub   // I can revoke by giving them the elkrem
+		// make timepub: my refund pub with my elk of state-1
+		timePub, err = q.MakeMyTimeoutKey()
+		if err != nil {
+			return nil, err
+		}
+		revPub = theirHAKDpub // I can revoke by giving them the elkrem
 		fancyAmt = s.MyAmt - fee
 	}
 

@@ -19,12 +19,13 @@ Channel refund keys are use 3, peer and index per peer / channel.
 */
 
 const (
-	UseWallet        = 0
-	UseChannelFund   = 2
-	UseChannelRefund = 3
-	UseChannelElkrem = 4
-	UseChannelNonce  = 10 // links Id and channel. replaces UseChannelFund
-	UseIdKey         = 11
+	UseWallet          = 0
+	UseChannelFund     = 2
+	UseChannelRefund   = 3
+	UseChannelHAKDBase = 4
+	UseChannelElkrem   = 8
+	UseChannelNonce    = 10 // links Id and channel. replaces UseChannelFund
+	UseIdKey           = 11
 )
 
 // PrivKeyAddBytes adds bytes to a private key.
@@ -66,6 +67,9 @@ func PrivKeyMult(k *btcec.PrivateKey, n uint32) {
 	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
 }
 
+// PubKeyArrAddBytes adds a byte slice to a serialized point.
+// You can't add scalars to a point, so you turn the bytes into a point,
+// then add that point.
 func PubKeyArrAddBytes(p *[33]byte, b []byte) error {
 	pub, err := btcec.ParsePubKey(p[:], btcec.S256())
 	if err != nil {
@@ -272,18 +276,30 @@ func (t *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
 	return wire.DoubleSha256SH(priv.Serialize())
 }
 
+// GetRefundPrivkey gives the private key for PKH refunds
 func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
 	return t.GetPrivkey(UseChannelRefund, peerIdx, cIdx)
 }
 
-// useless / remove?
-//func (ts *TxStore) GetRefundPubkey(peerIdx, cIdx uint32) *btcec.PublicKey {
-//	return ts.GetPubkey(UseChannelRefund, peerIdx, cIdx)
-//}
-
+// GetRefundPubkey gives the 33 byte serialized pubkey for PKH refunds
 func (t *TxStore) GetRefundPubkey(peerIdx, cIdx uint32) [33]byte {
 	var b [33]byte
 	k := t.GetPubkey(UseChannelRefund, peerIdx, cIdx)
+	if k != nil {
+		copy(b[:], k.SerializeCompressed())
+	}
+	return b
+}
+
+// GetRefundPrivkey gives the private key for HAKD operations
+func (t *TxStore) GetHAKDBasePriv(peerIdx, cIdx uint32) *btcec.PrivateKey {
+	return t.GetPrivkey(UseChannelHAKDBase, peerIdx, cIdx)
+}
+
+// GetHAKDBasePoint gives the 33 byte serialized point for HAKD operations
+func (t *TxStore) GetHAKDBasePoint(peerIdx, cIdx uint32) [33]byte {
+	var b [33]byte
+	k := t.GetPubkey(UseChannelHAKDBase, peerIdx, cIdx)
 	if k != nil {
 		copy(b[:], k.SerializeCompressed())
 	}

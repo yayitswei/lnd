@@ -321,7 +321,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	// load qchan & state from DB
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
-		fmt.Printf("RTSHandler err %s", err.Error())
+		fmt.Printf("RTSHandler GetQchan err %s", err.Error())
 		return
 	}
 	if qc.CloseData.Closed {
@@ -361,14 +361,14 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	// save delta, HAKDpub to db
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
-		fmt.Printf("RTSHandler err %s", err.Error())
+		fmt.Printf("RTSHandler SaveQchanState err %s", err.Error())
 		return
 	}
 	// saved to db, now proceed to create & sign their tx, and generate their
 	// HAKD pub for them to sign
 	err = SendACKSIG(qc)
 	if err != nil {
-		fmt.Printf("RTSHandler err %s", err.Error())
+		fmt.Printf("RTSHandler SendACKSIG err %s", err.Error())
 		return
 	}
 	return

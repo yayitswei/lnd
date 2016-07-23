@@ -9,6 +9,7 @@ import (
 )
 
 // SorcedChan is data sufficient to monitor and guard the channel
+// You can't actually tell what the channel is though.
 type SorcedChan struct {
 
 	// Static, per channel data
@@ -73,7 +74,7 @@ func (sc *SorcedChan) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
 	if sc == nil {
 		return nil, fmt.Errorf("Grab: nil SorcedChan")
 	}
-	if cTx == nil {
+	if cTx == nil || len(cTx.TxOut) == 0 {
 		return nil, fmt.Errorf("Grab: nil close tx")
 	}
 	// determine state index from close tx
@@ -101,6 +102,14 @@ func (sc *SorcedChan) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
 	err = uspv.PubKeyArrAddBytes(&PubArr, elk.Bytes())
 	if err != nil {
 		return nil, err
+	}
+
+	// figure out amount to grab
+	// for now, assumes 2 outputs.  Later, look for the largest wsh output
+	if len(tx.TxOut[0].PkScript) == 34 {
+		shIdx = 0
+	} else {
+		shIdx = 1
 	}
 
 	// calculate script for p2wsh

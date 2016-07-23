@@ -391,9 +391,14 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		if err != nil {
 			return nil, err
 		}
+		myTimeoutKey, err := qc.MakeMyTimeoutKey()
+		if err != nil {
+			return nil, err
+		}
 		// need the previous script. ignore builder error
 		prevScript, _ = CommitScript2(
-			theirHAKDpub, qc.MyRefundPub, uint16(u.SpendLag))
+			theirHAKDpub, myTimeoutKey, uint16(u.SpendLag))
+
 		scriptHash := P2WSHify(prevScript) // p2wsh-ify to check
 		fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
 		// set the sequence field so the OP_CSV works

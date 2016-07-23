@@ -164,7 +164,7 @@ func (ts *TxStore) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 // most of the code from MultiRespHandler() into here.  Yah.. should do that.
 //TODO ^^^^^^^^^^
 func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
-	peerId, theirPub, theirRefund [33]byte) (*wire.OutPoint, error) {
+	peerId, theirPub, theirRefund, theirHAKDbase [33]byte) (*wire.OutPoint, error) {
 
 	var err error
 	var op *wire.OutPoint
@@ -224,6 +224,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		qc.Utxo = mUtxo
 		qc.TheirPub = theirPub
 		qc.TheirRefundPub = theirRefund
+		qc.TheirHAKDBase = theirHAKDbase
 		// serialize multiOut
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -259,7 +260,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
 func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
-	peerArr, theirChanPub, theirRefund [33]byte) (*Qchan, error) {
+	peerArr, theirChanPub, theirRefund, theirHAKDbase [33]byte) (*Qchan, error) {
 
 	var cIdx uint32
 	qc := new(Qchan)
@@ -301,8 +302,9 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.TheirPub = theirChanPub
 		qc.PeerId = peerArr
 		qc.TheirRefundPub = theirRefund
+		qc.TheirHAKDBase = theirHAKDbase
 		qc.MyRefundPub = ts.GetRefundPubkey(qc.PeerIdx, cIdx)
-
+		qc.MyHAKDBase = ts.GetHAKDBasePoint(qc.PeerIdx, cIdx)
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -442,8 +444,9 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	// get my channel pubkey
 	qc.MyPub = ts.GetChanPubkey(qc.PeerIdx, qc.KeyIdx)
 
-	// derive my refund from index
+	// derive my refund / base point from index
 	qc.MyRefundPub = ts.GetRefundPubkey(peerIdx, qc.KeyIdx)
+	qc.MyHAKDBase = ts.GetHAKDBasePoint(peerIdx, qc.KeyIdx)
 	qc.State = new(StatCom)
 
 	// load state.  If it exists.
@@ -516,9 +519,9 @@ func (ts *TxStore) ReloadQchan(q *Qchan) error {
 	})
 }
 
-// SetQchanRefund overwrites "theirrefund" in a qchan.  This is needed
-// after getting a chanACK.
-func (ts *TxStore) SetQchanRefund(q *Qchan, refund [33]byte) error {
+// SetQchanRefund overwrites "theirrefund" and "theirHAKDbase" in a qchan.
+//   This is needed after getting a chanACK.
+func (ts *TxStore) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
 	return ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
@@ -542,6 +545,8 @@ func (ts *TxStore) SetQchanRefund(q *Qchan, refund [33]byte) error {
 		}
 		// modify their refund
 		qc.TheirRefundPub = refund
+		// modify their HAKDbase
+		qc.TheirHAKDBase = hakdBase
 		// re -serialize
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -973,19 +978,24 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// write their HAKD base
+	_, err = buf.Write(q.TheirHAKDBase[:])
+	if err != nil {
+		return nil, err
+	}
 
 	// done
 	return buf.Bytes(), nil
 }
 
 // QchanFromBytes turns bytes into a Qchan.
-// the first 60 bytes are the utxo, then next 33 is the pubkey, then their pkh.
-// then finally txid of spending transaction
+// the first 60 bytes are the utxo, then next 33 is the pubkey,
+// then their refund pubkey, then their HAKD base point.
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 126 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 126", len(b))
+	if len(b) < 159 {
+		return q, fmt.Errorf("Got %d bytes for qchan, expect 159", len(b))
 	}
 
 	u, err := UtxoFromBytes(b[:60])
@@ -996,10 +1006,8 @@ func QchanFromBytes(b []byte) (Qchan, error) {
 	q.Utxo = u // assign the utxo
 
 	copy(q.TheirPub[:], b[60:93])
-	if err != nil {
-		return q, err
-	}
-	copy(q.TheirRefundPub[:], b[93:])
+	copy(q.TheirRefundPub[:], b[93:126])
+	copy(q.TheirHAKDBase[:], b[126:])
 
 	return q, nil
 }
