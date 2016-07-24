@@ -284,10 +284,11 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 		return err
 	}
 
-	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
+	theirElkPoint, err := qc.MakeTheirCurElkPoint()
 	if err != nil {
 		return err
 	}
+
 	elk, err := qc.ElkSnd.AtIndex(0)
 	if err != nil {
 		return err
@@ -295,8 +296,8 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 
 	initPayBytes := uspv.I64tB(fr.InitSend) // also will be an arg
 	// description is outpoint (36), mypub(33), myrefund(33),
-	// myHAKDpoint(33), capacity (8),
-	// initial payment (8), HAKD (33), elk0 (32)
+	// myHAKDbase(33), capacity (8),
+	// initial payment (8), ElkPoint (33), elk0 (32)
 	// total length 216
 	msg := []byte{uspv.MSGID_CHANDESC}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
@@ -305,7 +306,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	msg = append(msg, qc.MyHAKDBase[:]...)
 	msg = append(msg, capBytes...)
 	msg = append(msg, initPayBytes...)
-	msg = append(msg, theirHAKDpub[:]...)
+	msg = append(msg, theirElkPoint[:]...)
 	msg = append(msg, elk.Bytes()...)
 	_, err = RemoteCon.Write(msg)
 
@@ -319,7 +320,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("got %d byte channel description, expect 216", len(descbytes))
 		return
 	}
-	var peerArr, myFirstHAKD, theirPub, theirRefundPub, theirHAKDbase [33]byte
+	var peerArr, myFirstElkPoint, theirPub, theirRefundPub, theirHAKDbase [33]byte
 	var opArr [36]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
@@ -331,7 +332,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	copy(theirHAKDbase[:], descbytes[102:135])
 	amt := uspv.BtI64(descbytes[135:143])
 	initPay := uspv.BtI64(descbytes[143:151])
-	copy(myFirstHAKD[:], descbytes[151:184])
+	copy(myFirstElkPoint[:], descbytes[151:184])
 	revElk, err := wire.NewShaHash(descbytes[184:])
 	if err != nil {
 		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
@@ -354,8 +355,8 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// similar to SIGREV in pushpull
 	qc.State.MyAmt = initPay
 	qc.State.StateIdx = 1
-	// use new HAKDpub for signing
-	qc.State.MyHAKDPub = myFirstHAKD
+	// use new ElkPoint for signing
+	qc.State.ElkPoint = myFirstElkPoint
 
 	// create empty elkrem receiver to save
 	qc.ElkRcv = new(elkrem.ElkremReceiver)
@@ -376,11 +377,13 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		fmt.Printf("QChanDescHandler GetQchan err %s", err.Error())
 		return
 	}
-	theirHAKDpub, _, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
+
+	theirElkPoint, err := qc.MakeTheirCurElkPoint()
 	if err != nil {
-		fmt.Printf("QChanDescHandler MakeTheirHAKDMyTimeout err %s", err.Error())
+		fmt.Printf("QChanDescHandler MakeTheirCurElkPoint err %s", err.Error())
 		return
 	}
+
 	sig, err := SCon.TS.SignState(qc)
 	if err != nil {
 		fmt.Printf("QChanDescHandler SignState err %s", err.Error())
@@ -393,10 +396,10 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	// ACK the channel address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), HAKD (33), elk (32) and signature (~70)
+	// ACK is outpoint (36), ElkPoint (33), elk (32) and signature (~70)
 	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	msg = append(msg, theirHAKDpub[:]...)
+	msg = append(msg, theirElkPoint[:]...)
 	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig...)
 	_, err = RemoteCon.Write(msg)
@@ -411,12 +414,12 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		return
 	}
 	var opArr [36]byte
-	var peerArr, myFirstHAKD [33]byte
+	var peerArr, myFirstElkPoint [33]byte
 
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// deserialize chanACK
 	copy(opArr[:], ackbytes[:36])
-	copy(myFirstHAKD[:], ackbytes[36:69])
+	copy(myFirstElkPoint[:], ackbytes[36:69])
 	revElk, err := wire.NewShaHash(ackbytes[69:101])
 	if err != nil {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
@@ -450,7 +453,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
-	qc.State.MyHAKDPub = myFirstHAKD
+	qc.State.ElkPoint = myFirstElkPoint
 
 	// verify worked; Save state 1 to DB
 	err = SCon.TS.SaveQchanState(qc)

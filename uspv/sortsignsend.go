@@ -383,18 +383,31 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		// I need their HAKD pubkey.  I haven't given them the revocation
+		// I need the pubkeys.  I haven't given them the revocation
 		// elkrem hash so they haven't been able to spend, and the delay is over.
 		// (this assumes the state matches the tx being spent.  It won't
 		// work if you're spending from an invalid close that you made.)
-		theirHAKDpub, myTimeoutPub, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
+
+		// get the current state sender elkrem hash
+		elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
 		if err != nil {
 			return nil, err
 		}
-		// not using the refund pub, but the base point instead.
+
+		// copy our base points
+		theirHAKDpub := qc.TheirHAKDBase
+		myTimeoutPub := qc.MyHAKDBase
+
+		// add elkrem point to theirs for HAKD pub
+		err = PubKeyArrAddBytes(&theirHAKDpub, elk.Bytes())
+		if err != nil {
+			return nil, err
+		}
+
+		// get my HAKD base scalar
 		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
 		// also, priv changes here (add their hash)
-		PrivKeyAddBytes(priv, wire.DoubleSha256(theirHAKDpub[:]))
+		PrivKeyAddBytes(priv, elk.Bytes())
 		// make sure priv is non-nil.  may be redundant
 		if priv == nil {
 			return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
@@ -607,17 +620,31 @@ func (ts *TxStore) SendCoins(
 			// elkrem hash so they haven't been able to spend, and the delay is over.
 			// (this assumes the state matches the tx being spent.  It won't
 			// work if you're spending from an invalid close that you made.)
-			theirHAKDpub, myTimeoutPub, err := qc.MakeTheirHAKDMyTimeout(qc.State.StateIdx)
+
+			// get the current state sender elkrem hash
+			elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
 			if err != nil {
 				return nil, err
 			}
-			// not using the refund pub, but the base point instead.
+
+			// copy our base points
+			theirHAKDpub := qc.TheirHAKDBase
+			myTimeoutPub := qc.MyHAKDBase
+
+			// add elkrem point to theirs for HAKD pub
+			err = PubKeyArrAddBytes(&theirHAKDpub, elk.Bytes())
+			if err != nil {
+				return nil, err
+			}
+
+			// get my HAKD base scalar
 			priv = ts.GetHAKDBasePriv(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			// also, priv changes here (add their hash)
-			PrivKeyAddBytes(priv, wire.DoubleSha256(theirHAKDpub[:]))
+			PrivKeyAddBytes(priv, elk.Bytes())
 			// make sure priv is non-nil.  may be redundant
 			if priv == nil {
-				return nil, fmt.Errorf("nil privkey on timeout spend %s", utxos[i].Op.String())
+				return nil, fmt.Errorf(
+					"nil privkey on timeout spend %s", utxos[i].Op.String())
 			}
 
 			// need the previous script. ignore builder error

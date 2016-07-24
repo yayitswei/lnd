@@ -887,13 +887,13 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 	// write 33 byte my revocation pubkey
-	_, err = buf.Write(s.MyHAKDPub[:])
+	_, err = buf.Write(s.ElkPoint[:])
 	if err != nil {
 		return nil, err
 	}
 	// write 33 byte my previous revocation hash
 	// at steady state it's 0s.
-	_, err = buf.Write(s.MyPrevHAKDPub[:])
+	_, err = buf.Write(s.PrevElkPoint[:])
 	if err != nil {
 		return nil, err
 	}
@@ -930,9 +930,9 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 		return nil, err
 	}
 	// read 33 byte HAKD pubkey
-	copy(s.MyHAKDPub[:], buf.Next(33))
+	copy(s.ElkPoint[:], buf.Next(33))
 	// read 33 byte previous HAKD pubkey
-	copy(s.MyPrevHAKDPub[:], buf.Next(33))
+	copy(s.PrevElkPoint[:], buf.Next(33))
 	// the rest is their sig
 	s.sig = buf.Bytes()
 
