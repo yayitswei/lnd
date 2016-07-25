@@ -2,6 +2,7 @@ package sorceror
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/roasbeef/btcd/wire"
@@ -21,21 +22,34 @@ type SorceChan struct {
 	TimeBasePoint [33]byte // potential attacker's timeout basepoint
 
 	// state data
-	Elk    elkrem.ElkremReceiver // elk receiver of the channel
-	States []SorceState
+	Elk       elkrem.ElkremReceiver // elk receiver of the channel
+	StateFile *os.File              // flat file storing states
 }
 
-// SorcedState is the state of the channel being monitored
-// (for writing to disk; 105 bytes).
-type SorceState struct {
-	Txid wire.ShaHash
-	Sig  [73]byte // signature of grab tx
+// SorceDescriptor is the initial description of a SorceChan
+type SorceDescriptor struct {
+	DestPKHScript [20]byte // PKH to grab to; main unique identifier.
+
+	Delay uint16 // timeout in blocks
+	Fee   int64  // fee to use for grab tx. could make variable but annoying...
+
+	HAKDBasePoint [33]byte // client's HAKD key base point
+	TimeBasePoint [33]byte // potential attacker's timeout basepoint
 }
 
+// the message describing the next state, sent from the client
 type SorceMsg struct {
 	Txid wire.ShaHash // txid of close tx
 	Elk  wire.ShaHash // elkrem for this state index
-	Sig  [73]byte     // sig for the grab tx
+	Sig  [64]byte     // sig for the grab tx
+}
+
+// SorcedState is the state of the channel being monitored
+// (for writing to disk; 100 bytes).
+type SorceState struct {
+	Txid wire.ShaHash // txid of invalid close tx
+	Sig  [64]byte     // signature of grab tx
+	xtra [4]byte      // empty 4 bytes for now, could use for fee or something
 }
 
 // Ingest the next state.  Will error half the time if the elkrem's invalid.
