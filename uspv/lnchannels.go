@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/lightningnetwork/lnd/elkrem"
+	"github.com/lightningnetwork/lnd/sig64"
 
 	"github.com/btcsuite/fastsha256"
 	"github.com/roasbeef/btcd/btcec"
@@ -82,7 +83,7 @@ type StatCom struct {
 	ElkPoint     [33]byte // saved to disk
 	PrevElkPoint [33]byte // When you haven't gotten their revocation elkrem yet.
 
-	sig []byte // Counterparty's signature (for StatCom tx)
+	sig [64]byte // Counterparty's signature (for StatCom tx)
 	// don't write to sig directly; only overwrite via fn() call
 
 	// note sig can be nil during channel creation. if stateIdx isn't 0,
@@ -556,11 +557,9 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
 
+	theirSig := sig64.SigDecompress(q.State.sig)
 	// put the sighash all byte on the end of their signature
-	// copy here because... otherwise I get unexpected fault address 0x...
-	theirSig := make([]byte, len(q.State.sig)+1)
-	copy(theirSig, q.State.sig)
-	theirSig[len(theirSig)-1] = byte(txscript.SigHashAll)
+	theirSig = append(theirSig, byte(txscript.SigHashAll))
 
 	fmt.Printf("made mysig: %x theirsig: %x\n", mySig, theirSig)
 	// add sigs to the witness stack
@@ -628,12 +627,12 @@ func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
 }
 
 // SignNextState generates your signature for their state.
-func (t TxStore) SignState(q *Qchan) ([]byte, error) {
-	var empty [33]byte
+func (t TxStore) SignState(q *Qchan) ([64]byte, error) {
+	var sig [64]byte
 	// build transaction for next state
 	tx, err := q.BuildStateTx(false) // their tx, as I'm signing
 	if err != nil {
-		return nil, err
+		return sig, err
 	}
 
 	// make hash cache for this tx
@@ -642,29 +641,28 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 	// generate script preimage (ignore key order)
 	pre, _, err := FundTxScript(q.MyPub, q.TheirPub)
 	if err != nil {
-		return nil, err
+		return sig, err
 	}
 
 	// get private signing key
 	priv := t.GetChanPrivkey(q.PeerIdx, q.KeyIdx)
 
 	// generate sig.
-	sig, err := txscript.RawTxInWitnessSignature(
+	bigSig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
 	// truncate sig (last byte is sighash type, always sighashAll)
-	sig = sig[:len(sig)-1]
+	bigSig = bigSig[:len(bigSig)-1]
 
-	//	sig64, err := sig64.SigCompress(sig)
-	//	if err != nil {
-	//		return nil, err
-	//	}
+	sig, err = sig64.SigCompress(bigSig)
+	if err != nil {
+		return sig, err
+	}
 
 	fmt.Printf("____ sig creation for channel (%d,%d):\n", q.PeerIdx, q.KeyIdx)
 	fmt.Printf("\tinput %s\n", tx.TxIn[0].PreviousOutPoint.String())
 	fmt.Printf("\toutput 0: %x %d\n", tx.TxOut[0].PkScript, tx.TxOut[0].Value)
 	fmt.Printf("\toutput 1: %x %d\n", tx.TxOut[1].PkScript, tx.TxOut[1].Value)
 	fmt.Printf("\tstate %d myamt: %d theiramt: %d\n", q.State.StateIdx, q.State.MyAmt, q.Value-q.State.MyAmt)
-	fmt.Printf("\tmy HAKD pub: %x their HAKD pub: %x sig: %x\n", q.State.ElkPoint[:4], empty[:4], sig)
 
 	return sig, nil
 }
@@ -674,7 +672,9 @@ func (t TxStore) SignState(q *Qchan) ([]byte, error) {
 // do bool, error or just error?  Bad sig is an error I guess.
 // for verifying signature, always use theirHAKDpub, so generate & populate within
 // this function.
-func (q *Qchan) VerifySig(sig []byte) error {
+func (q *Qchan) VerifySig(sig [64]byte) error {
+
+	bigSig := sig64.SigDecompress(sig)
 	// my tx when I'm verifying.
 	tx, err := q.BuildStateTx(true)
 	if err != nil {
@@ -696,7 +696,7 @@ func (q *Qchan) VerifySig(sig []byte) error {
 	}
 
 	// sig is pre-truncated; last byte for sighashtype is always sighashAll
-	pSig, err := btcec.ParseDERSignature(sig, btcec.S256())
+	pSig, err := btcec.ParseDERSignature(bigSig, btcec.S256())
 	if err != nil {
 		return err
 	}

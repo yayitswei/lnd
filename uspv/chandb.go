@@ -850,14 +850,13 @@ func (ts *TxStore) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error
 /*----- serialization for StatCom ------- */
 /*
 bytes   desc   ends at
-1	len			1
-8	StateIdx		9
-8	MyAmt		17
-4	Delta		21
-33	MyRev		54
-33	MyPrevRev	87
-70?	Sig			157
-... to 131 bytes, ish.
+8	StateIdx		8
+8	MyAmt		16
+4	Delta		20
+33	MyRev		53
+33	MyPrevRev	86
+64	Sig			150
+
 
 note that sigs are truncated and don't have the sighash type byte at the end.
 
@@ -898,7 +897,7 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 	// write their sig
-	_, err = buf.Write(s.sig)
+	_, err = buf.Write(s.sig[:])
 	if err != nil {
 		return nil, err
 	}
@@ -906,11 +905,10 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 }
 
 // StatComFromBytes turns 160 ish bytes into a StatCom
-// it might be only 86 bytes because there is no sig (first save)
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
-	if len(b) < 80 || len(b) > 170 {
-		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect around 131\n",
+	if len(b) < 150 || len(b) > 150 {
+		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect 150\n",
 			len(b))
 	}
 	buf := bytes.NewBuffer(b)
@@ -934,7 +932,7 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 	// read 33 byte previous HAKD pubkey
 	copy(s.PrevElkPoint[:], buf.Next(33))
 	// the rest is their sig
-	s.sig = buf.Bytes()
+	copy(s.sig[:], buf.Bytes())
 
 	return &s, nil
 }

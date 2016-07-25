@@ -396,12 +396,12 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 	// ACK the channel address, which causes the funder to sign / broadcast
-	// ACK is outpoint (36), ElkPoint (33), elk (32) and signature (~70)
+	// ACK is outpoint (36), ElkPoint (33), elk (32) and signature (64)
 	msg := []byte{uspv.MSGID_CHANACK}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
 	msg = append(msg, theirElkPoint[:]...)
 	msg = append(msg, elk.Bytes()...)
-	msg = append(msg, sig...)
+	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -409,23 +409,21 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func QChanAckHandler(from [16]byte, ackbytes []byte) {
-	if len(ackbytes) < 170 || len(ackbytes) > 180 {
-		fmt.Printf("got %d byte multiAck, expect ~170\n", len(ackbytes))
+	if len(ackbytes) < 165 || len(ackbytes) > 165 {
+		fmt.Printf("got %d byte multiAck, expect 165\n", len(ackbytes))
 		return
 	}
 	var opArr [36]byte
 	var peerArr, myFirstElkPoint [33]byte
+	var sig [64]byte
 
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	// deserialize chanACK
 	copy(opArr[:], ackbytes[:36])
 	copy(myFirstElkPoint[:], ackbytes[36:69])
-	revElk, err := wire.NewShaHash(ackbytes[69:101])
-	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
-		return
-	}
-	sig := ackbytes[101:]
+	// don't think this can error as length is specified
+	revElk, _ := wire.NewShaHash(ackbytes[69:101])
+	copy(sig[:], ackbytes[101:])
 
 	op := uspv.OutPointFromBytes(opArr)
 
@@ -504,8 +502,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// but for now just send the sig.
 	msg := []byte{uspv.MSGID_SIGPROOF}
 	msg = append(msg, uspv.OutPointToBytes(*op)...)
-	//	msg = append(msg, elk.Bytes()...)
-	msg = append(msg, sig...)
+	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
 	return
 }
@@ -513,16 +510,16 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 // QChanAckHandler takes in an acknowledgement multisig description.
 // when a multisig outpoint is ackd, that causes the funder to sign and broadcast.
 func SigProofHandler(from [16]byte, sigproofbytes []byte) {
-	if len(sigproofbytes) < 100 || len(sigproofbytes) > 110 {
-		fmt.Printf("got %d byte Sigproof, expect ~137\n", len(sigproofbytes))
+	if len(sigproofbytes) < 100 || len(sigproofbytes) > 100 {
+		fmt.Printf("got %d byte Sigproof, expect ~100\n", len(sigproofbytes))
 		return
 	}
 	var peerArr [33]byte
 	var opArr [36]byte
+	var sig [64]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 	copy(opArr[:], sigproofbytes[:36])
-
-	sig := sigproofbytes[36:]
+	copy(sig[:], sigproofbytes[36:])
 
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {

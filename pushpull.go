@@ -389,31 +389,32 @@ func SendACKSIG(qc *uspv.Qchan) error {
 		return err
 	}
 
-	// ACKSIG is op (36), ElkPoint (33), sig (~70)
-	// total length ~139
+	// ACKSIG is op (36), ElkPoint (33), sig (64)
+	// total length 133
 	msg := []byte{uspv.MSGID_ACKSIG}
 	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
 	msg = append(msg, theirElkPoint[:]...)
-	msg = append(msg, sig...)
+	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
 	return err
 }
 
 // ACKSIGHandler takes in an ACKSIG and responds with an SIGREV (if everything goes OK)
 func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
-
-	if len(ACKSIGBytes) < 135 || len(ACKSIGBytes) > 145 {
-		fmt.Printf("got %d byte ACKSIG, expect 139", len(ACKSIGBytes))
+	if len(ACKSIGBytes) < 133 || len(ACKSIGBytes) > 133 {
+		fmt.Printf("got %d byte ACKSIG, expect 133", len(ACKSIGBytes))
 		return
 	}
 
 	var opArr [36]byte
 	var ACKSIGElkPoint [33]byte
+	var sig [64]byte
 
 	// deserialize ACKSIG
 	copy(opArr[:], ACKSIGBytes[:36])
 	copy(ACKSIGElkPoint[:], ACKSIGBytes[36:69])
-	sig := ACKSIGBytes[69:]
+	copy(sig[:], ACKSIGBytes[69:])
+
 	// make sure the ElkPoint is a point
 	_, err := btcec.ParsePubKey(ACKSIGElkPoint[:], btcec.S256())
 	if err != nil {
@@ -479,12 +480,12 @@ func SendSIGREV(qc *uspv.Qchan) error {
 		return err
 	}
 
-	// SIGREV is op (36), elk (32), sig (~70)
-	// total length ~138
+	// SIGREV is op (36), elk (32), sig (64)
+	// total length ~132
 	msg := []byte{uspv.MSGID_SIGREV}
 	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
 	msg = append(msg, elk.Bytes()...)
-	msg = append(msg, sig...)
+	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
 	return err
 }
@@ -492,15 +493,17 @@ func SendSIGREV(qc *uspv.Qchan) error {
 // SIGREVHandler takes in an SIGREV and responds with a REV (if everything goes OK)
 func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 
-	if len(SIGREVBytes) < 135 || len(SIGREVBytes) > 145 {
-		fmt.Printf("got %d byte SIGREV, expect 138", len(SIGREVBytes))
+	if len(SIGREVBytes) < 132 || len(SIGREVBytes) > 132 {
+		fmt.Printf("got %d byte SIGREV, expect 132", len(SIGREVBytes))
 		return
 	}
 
 	var opArr [36]byte
+	var sig [64]byte
 	// deserialize SIGREV
 	copy(opArr[:], SIGREVBytes[:36])
-	sig := SIGREVBytes[68:]
+	copy(sig[:], SIGREVBytes[68:])
+
 	revElk, err := wire.NewShaHash(SIGREVBytes[36:68])
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
