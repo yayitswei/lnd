@@ -16,7 +16,6 @@ import (
 // ToBytes turns a SorceDescriptor into 100 bytes
 func (sd *SorceDescriptor) ToBytes() []byte {
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, sd.ChanId)
 	buf.Write(sd.DestPKHScript[:])
 	binary.Write(&buf, binary.BigEndian, sd.Delay)
 	binary.Write(&buf, binary.BigEndian, sd.Fee)
@@ -46,15 +45,15 @@ func SorceDescriptorFromBytes(b [96]byte) (SorceDescriptor, error) {
 	return sd, nil
 }
 
-// SorceMsgs are 132 bytes.
-// chanID 4
+// SorceMsgs are 148 bytes.
+// PKH 20
 // txid 32
 // elk 32
 // sig 64
-// ToBytes turns a SorceMsg into 132 bytes
-func (sm *SorceMsg) ToBytes() (b [132]byte) {
+// ToBytes turns a SorceMsg into 148 bytes
+func (sm *SorceMsg) ToBytes() (b [148]byte) {
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, sm.ChanId)
+	buf.Write(sm.DestPKHScript[:])
 	buf.Write(sm.Txid.Bytes())
 	buf.Write(sm.Elk.Bytes())
 	buf.Write(sm.Sig[:])
@@ -71,25 +70,12 @@ func SorceMsgFromBytes(b [128]byte) SorceMsg {
 	return sm
 }
 
-// SorceStates are 100 bytes
-// txid 32
-// sig 64
-// xtra 4
-// ToBytes turns a SorceState into 100 bytes
-func (ss *SorceState) ToBytes() []byte {
-	var buf bytes.Buffer
-	buf.Write(ss.Txid.Bytes())
-	buf.Write(ss.Sig[:])
-	buf.Write(ss.xtra[:])
-	return buf.Bytes()
-}
-
-// SorceStateFromBytes turns 100 bytes into a SorceState
-func SorceStateFromBytes(b [100]byte) SorceState {
-	buf := bytes.NewBuffer(b[:])
-	var ss SorceState
-	copy(ss.Txid[:], buf.Next(32))
-	copy(ss.Sig[:], buf.Next(64))
-	copy(ss.xtra[:], buf.Next(4))
-	return ss
+// IdxSigs are 74 bytes
+// PKHIdx 4
+// StateIdx 6
+// Sig 64
+type IdxSig struct {
+	PKHIdx   uint32
+	StateIdx uint64
+	Sig      [64]byte
 }
