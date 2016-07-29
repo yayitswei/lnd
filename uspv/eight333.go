@@ -63,6 +63,14 @@ type SPVCon struct {
 	inWaitState chan bool
 }
 
+// BlockChainIO functions:
+
+// Watch([]byte, height) chan hah
+// GetBlock(height) block, error
+// GetTx(txid) tx, error
+// SendTx(tx) error
+//... maybe?
+
 // AskForTx requests a tx we heard about from an inv message.
 // It's one at a time but should be fast enough.
 // I don't like this function because SPV shouldn't even ask...

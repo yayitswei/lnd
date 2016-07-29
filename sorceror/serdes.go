@@ -3,15 +3,16 @@ package sorceror
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
-// Descriptors are 96 bytes
-// ChanId 4
+// Descriptors are 128 bytes
 // PKH 20
 // Delay 2
 // Fee 8
 // HAKDbase 33
 // Timebase 33
+// Elk0 32
 
 // ToBytes turns a SorceDescriptor into 100 bytes
 func (sd *SorceDescriptor) ToBytes() []byte {
@@ -21,13 +22,17 @@ func (sd *SorceDescriptor) ToBytes() []byte {
 	binary.Write(&buf, binary.BigEndian, sd.Fee)
 	buf.Write(sd.HAKDBasePoint[:])
 	buf.Write(sd.TimeBasePoint[:])
+	buf.Write(sd.ElkZero.Bytes())
 	return buf.Bytes()
 }
 
-// SorceDescriptorFromBytes turns 96 bytes into a SorceDescriptor
-func SorceDescriptorFromBytes(b [96]byte) (SorceDescriptor, error) {
-	buf := bytes.NewBuffer(b[:])
+// SorceDescriptorFromBytes turns 96 or 128 bytes into a SorceDescriptor
+func SorceDescriptorFromBytes(b []byte) (SorceDescriptor, error) {
 	var sd SorceDescriptor
+	if len(b) != 128 && len(b) != 96 {
+		return sd, fmt.Errorf("SorceDescriptor %d bytes, expect 128", len(b))
+	}
+	buf := bytes.NewBuffer(b)
 
 	copy(sd.DestPKHScript[:], buf.Next(20))
 	err := binary.Read(buf, binary.BigEndian, &sd.Delay)
@@ -41,6 +46,8 @@ func SorceDescriptorFromBytes(b [96]byte) (SorceDescriptor, error) {
 
 	copy(sd.HAKDBasePoint[:], buf.Next(33))
 	copy(sd.TimeBasePoint[:], buf.Next(33))
+	// might not be anything left, which is OK, elk0 will just be blank
+	copy(sd.ElkZero[:], buf.Next(32))
 
 	return sd, nil
 }
@@ -74,8 +81,11 @@ func SorceMsgFromBytes(b [128]byte) SorceMsg {
 // PKHIdx 4
 // StateIdx 6
 // Sig 64
-type IdxSig struct {
-	PKHIdx   uint32
-	StateIdx uint64
-	Sig      [64]byte
-}
+
+// no idxSig to bytes function -- done inline in the addMsg db call
+
+//type IdxSig struct {
+//	PKHIdx   uint32
+//	StateIdx uint64
+//	Sig      [64]byte
+//}

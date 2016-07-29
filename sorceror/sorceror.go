@@ -2,14 +2,19 @@ package sorceror
 
 import (
 	"github.com/boltdb/bolt"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/roasbeef/btcd/wire"
 )
 
-const defaultpath = "."
+const (
+	defaultpath = "."
+	dbname      = "sorce.db"
+)
 
-type SorceStore struct {
-	Path    string
-	SorceDB *bolt.DB
+// The main sorceror struct
+type Sorceror struct {
+	Path       string   // where the DB goes?  needed?
+	SorceDB    *bolt.DB // DB with everything in it
+	SyncHeight int32    // last block we've sync'd to.
 }
 
 // 2 structs that the sorceror gets from clients: Descriptors and Msgs
@@ -36,7 +41,7 @@ type SorceMsg struct {
 	Sig           [64]byte     // sig for the grab tx
 }
 
-// 2 structs used in the DB: IdxSigs and ChanData
+// 2 structs used in the DB: IdxSigs and ChanStatic
 
 // IdxSig is what we save in the DB for each txid
 type IdxSig struct {
@@ -56,43 +61,8 @@ type ChanStatic struct {
 	PeerIdx uint32 // can save the user you're watching this for.  Optional
 }
 
-// IngestDescriptor takes a channel descriptor and sets up the DB to
-// receive state update messages
-func (s *SorceStore) IngestDescriptor(d SorceDescriptor) error {
-	return nil
-}
-
-// IngestMsg takes a state update message and saves it in the DB.
-// A bunch of errors are possible.
-func (s *SorceStore) IngestMsg(m SorceMsg) error {
-	return nil
-}
-
-// Ingest the next state.  Will error half the time if the elkrem's invalid.
-// Never errors on invalid sig.
-//func (sc *SorceStore) Ingest(sm SorceMsg) error {
-//	if sc == nil {
-//		return fmt.Errorf("Ingest: nil SorcedChan")
-//	}
-//	// first ingest the elkrem
-//	err := sc.Elk.AddNext(&sm.Elk)
-//	if err != nil {
-//		return err
-//	}
-//	// serialize elkrem
-//	//	elkBytes, err := sc.Elk.ToBytes()
-//	//	if err != nil {
-//	//		return err
-//	//	}
-//	// should mv elk to oldelk here?  For faster recovery if write fails?
-//	// not really critical though as this is a backup anyway and can re-sync it
-//	// from the client
-
-//	return nil
-//}
-
 // Grab produces the grab tx, if possible.
-func (sc *SorceStore) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
+func (sc *Sorceror) Grab(cTx *wire.MsgTx) (*wire.MsgTx, error) {
 
 	// sanity chex
 	//	if sc == nil {

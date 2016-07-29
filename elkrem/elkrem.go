@@ -57,13 +57,13 @@ func RightSha(in wire.ShaHash) wire.ShaHash {
 	return wire.DoubleSha256SH(append(in.Bytes(), 0x01)) // sha(sha(in, 1))
 }
 
-// iterative descent of sub-tree. w = hash number you want. i = input index
-// h = height of input index. sha = input hash
+// iterative descent of sub-tree. w = hash number you Want. i = input Index
+// h = Height of input index. sha = input hash
 func descend(w, i uint64, h uint8, sha wire.ShaHash) (wire.ShaHash, error) {
 	for w < i {
 		if w <= i-(1<<h) { // left
 			sha = LeftSha(sha)
-			i = i - (1 << h) // left descent reduces index by 2**h
+			i -= 1 << h // left descent reduces index by 2**h
 		} else { // right
 			sha = RightSha(sha)
 			i-- // right descent reduces index by 1
