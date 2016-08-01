@@ -752,17 +752,22 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	fee := int64(5000)           // fixed fee for now
 	delay := uint16(5)           // fixed CSV delay for now
 	// delay is super short for testing.
+
+	// Both received and self-generated elkpoints are needed
+	// Here generate the elk point we give them (we know the scalar; they don't)
+	theirElkPoint, err := q.MakeTheirCurElkPoint()
+	if err != nil {
+		return nil, err
+	}
+	// the PKH clear refund also has elkrem points added to mask the PKH.
+	// this changes the txouts at each state to blind sorceror better.
 	if mine { // build MY tx (to verify) (unless breaking)
 		// My tx that I store.  They get funds unencumbered.
-		elkPoint, err := q.MakeTheirCurElkPoint()
-		if err != nil {
-			return nil, err
-		}
-		// SH pubkeys are our base points plus the elk point give them
-		revPub = AddPubs(q.TheirHAKDBase, elkPoint)
-		timePub = AddPubs(q.MyHAKDBase, elkPoint)
+		// SH pubkeys are our base points plus the elk point we give them
+		revPub = AddPubs(q.TheirHAKDBase, theirElkPoint)
+		timePub = AddPubs(q.MyHAKDBase, theirElkPoint)
 
-		pkhPub = q.TheirRefundPub
+		pkhPub = AddPubs(q.TheirRefundPub, s.ElkPoint) // received elkpoint
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
 		fancyAmt = s.MyAmt - fee
@@ -775,7 +780,7 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 		fancyAmt = (q.Value - s.MyAmt) - fee
 
 		// PKH output
-		pkhPub = q.MyRefundPub
+		pkhPub = AddPubs(q.MyRefundPub, theirElkPoint)
 		pkhAmt = s.MyAmt - fee
 	}
 

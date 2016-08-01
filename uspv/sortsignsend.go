@@ -566,8 +566,20 @@ func (ts *TxStore) SendCoins(
 		if utxos[i].PeerIdx == 0 {
 			priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
 		} else {
+			// channel PKH refund; get channel info to add elkrem
+			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
+			if err != nil {
+				return nil, err
+			}
+			// get the current state sender elkrem hash
+			elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+			if err != nil {
+				return nil, err
+			}
+			// generate refund private key from indexes
 			priv = ts.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			// fmt.Printf("sc() made refund pub %x\n", priv.PubKey().SerializeCompressed())
+			// add elkrem sender hash for the state index
+			PrivKeyAddBytes(priv, elk.Bytes())
 		}
 		if priv == nil {
 			return nil, fmt.Errorf("SendCoins: nil privkey")
