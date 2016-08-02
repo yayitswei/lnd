@@ -439,19 +439,13 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
+	qc.State.ElkPoint = myFirstElkPoint
 
-	// save the refund address they gave us.  Save state doesn't do this.
-	//	err = SCon.TS.SetQchanRefund(qc, refund)
-	//	if err != nil {
-	//		fmt.Printf("QChanAckHandler err %s", err.Error())
-	//		return
-	//	}
 	err = qc.VerifySig(sig)
 	if err != nil {
 		fmt.Printf("QChanAckHandler err %s", err.Error())
 		return
 	}
-	qc.State.ElkPoint = myFirstElkPoint
 
 	// verify worked; Save state 1 to DB
 	err = SCon.TS.SaveQchanState(qc)
