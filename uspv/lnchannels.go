@@ -80,8 +80,11 @@ type StatCom struct {
 
 	// Elkrem point from counterparty, used to make
 	// Homomorphic Adversarial Key Derivation public keys (HAKD)
-	ElkPoint     [33]byte // saved to disk
-	PrevElkPoint [33]byte // When you haven't gotten their revocation elkrem yet.
+	ElkPointR     [33]byte // saved to disk, revealable point
+	PrevElkPointR [33]byte // When you haven't gotten their revocation elkrem yet.
+
+	ElkPointT     [33]byte // their timeout elk point; needed for script
+	PrevElkPointT [33]byte // When you haven't gotten their revocation elkrem yet.
 
 	sig [64]byte // Counterparty's signature (for StatCom tx)
 	// don't write to sig directly; only overwrite via fn() call
@@ -184,7 +187,8 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			txIdx, q.State.StateIdx)
 	}
 
-	theirElkPoint, err := q.ElkPoint(false, txIdx)
+	// refund PKHs are not time elkrem points
+	theirElkPoint, err := q.ElkPoint(false, false, txIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -298,12 +302,12 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 			q.State.MyAmt, q.Value-q.State.MyAmt, q.State.StateIdx)
 
 		fmt.Printf("\tdelta:%d HAKD:%x prevHAKD:%x elk@ %d\n",
-			q.State.Delta, q.State.ElkPoint[:4], q.State.PrevElkPoint[:4],
+			q.State.Delta, q.State.ElkPointR[:4], q.State.PrevElkPointR[:4],
 			q.ElkRcv.UpTo())
-		elkp, _ := q.ElkPoint(false, q.State.StateIdx)
+		elkp, _ := q.ElkPoint(false, false, q.State.StateIdx)
 		myRefPub := AddPubs(q.MyRefundPub, elkp)
 
-		theirRefPub := AddPubs(q.TheirRefundPub, q.State.ElkPoint)
+		theirRefPub := AddPubs(q.TheirRefundPub, q.State.ElkPointT)
 		fmt.Printf("\tMy Refund: %x Their Refund %x\n", myRefPub[:4], theirRefPub[:4])
 	}
 
@@ -389,12 +393,13 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, err
 	}
 	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
+	elkR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
 
 	// get HAKD base scalar
 	priv := t.GetHAKDBasePriv(qc.PeerIdx, qc.KeyIdx)
 	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
 	// modify private key
-	PrivKeyAddBytes(priv, elk.Bytes())
+	PrivKeyAddBytes(priv, elkR.Bytes())
 
 	// serialize pubkey part for script generation
 	var HAKDpubArr [33]byte
@@ -466,16 +471,28 @@ func (q *Qchan) GetElkZeroOffset() uint64 {
 	return uint64(BtI64(x[:]))
 }
 
-// MakeTheirCurElkPoint makes the current state elkrem point to send out
-func (q *Qchan) MakeTheirCurElkPoint() (p [33]byte, err error) {
-	return q.ElkPoint(false, q.State.StateIdx)
+// MakeTheirCurElkPoint makes the current state elkrem points to send out
+func (q *Qchan) MakeTheirCurElkPoints() (r, t [33]byte, err error) {
+	// generate revocable elkrem point
+	r, err = q.ElkPoint(false, false, q.State.StateIdx)
+	if err != nil {
+		return
+	}
+	// generate timeout elkrem point
+	t, err = q.ElkPoint(false, true, q.State.StateIdx)
+	return
 }
 
-// ElkSndPoint generates an elkrem Point.  "My" elkrem point is the point
+// ElkPoint generates an elkrem Point.  "My" elkrem point is the point
 // I receive from the counter party, and can create after the state has
 // been revoked.  "Their" elkrem point (mine=false) is generated from my elkrem
 // sender at any index.
-func (q *Qchan) ElkPoint(mine bool, idx uint64) (p [33]byte, err error) {
+// Elkrem points are sub-hashes of the hash coming from the elkrem tree.
+// There are "time" and "revoke" elkrem points, which are just sha2d(elk, "t")
+// and sha2d(elk, "r") of the hash from the elkrem tree.
+// Having different points prevents observers from distinguishing the channel
+// when they have the HAKD base points but not the elkrem point.
+func (q *Qchan) ElkPoint(mine, time bool, idx uint64) (p [33]byte, err error) {
 	// sanity check
 	if q == nil || q.ElkSnd == nil || q.ElkRcv == nil { // can't do anything
 		err = fmt.Errorf("can't access elkrem")
@@ -492,6 +509,13 @@ func (q *Qchan) ElkPoint(mine bool, idx uint64) (p [33]byte, err error) {
 	if err != nil {
 		return
 	}
+
+	if time {
+		*elk = wire.DoubleSha256SH(append(elk.Bytes(), 0x74)) // ascii "t"
+	} else {
+		*elk = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // ascii "r"
+	}
+
 	// turn the hash into a point
 	p = PubFromHash(*elk)
 	return
@@ -532,19 +556,21 @@ func (q *Qchan) IngestElkrem(elk *wire.ShaHash) error {
 	// in the mysterious power of abelian group homomorphisms that the private
 	// key modification will also work.
 
-	// Make a point from the received elk hash
-	CheckArr := PubFromHash(*elk)
+	// Make r and t points from received elk hash
+	CheckR := PubFromHash(wire.DoubleSha256SH(append(elk.Bytes(), 0x72))) // r
+	CheckT := PubFromHash(wire.DoubleSha256SH(append(elk.Bytes(), 0x74))) // t
 
 	// see if it matches previous elk point
-	if CheckArr != q.State.PrevElkPoint {
+	if CheckR != q.State.PrevElkPointR || CheckT != q.State.PrevElkPointT {
 		// didn't match, the whole channel is borked.
-		return fmt.Errorf("Provided elk doesn't create elkpoint %x! Need to close",
-			q.State.PrevElkPoint)
+		return fmt.Errorf("hash %x (index %d) fits tree but creates wrong elkpoint!",
+			elk[:8], q.State.PrevElkPointR, q.State.PrevElkPointT)
 	}
 
 	// it did match, so we can clear the previous HAKD pub
 	var empty [33]byte
-	q.State.PrevElkPoint = empty
+	q.State.PrevElkPointR = empty
+	q.State.PrevElkPointT = empty
 
 	return nil
 }
@@ -769,7 +795,7 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 
 	// Both received and self-generated elkpoints are needed
 	// Here generate the elk point we give them (we know the scalar; they don't)
-	theirElkPoint, err := q.MakeTheirCurElkPoint()
+	theirElkPointR, theirElkPointT, err := q.MakeTheirCurElkPoints()
 	if err != nil {
 		return nil, err
 	}
@@ -778,10 +804,10 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	if mine { // build MY tx (to verify) (unless breaking)
 		// My tx that I store.  They get funds unencumbered.
 		// SH pubkeys are our base points plus the elk point we give them
-		revPub = AddPubs(q.TheirHAKDBase, theirElkPoint)
-		timePub = AddPubs(q.MyHAKDBase, theirElkPoint)
+		revPub = AddPubs(q.TheirHAKDBase, theirElkPointR)
+		timePub = AddPubs(q.MyHAKDBase, theirElkPointT)
 
-		pkhPub = AddPubs(q.TheirRefundPub, s.ElkPoint) // received elkpoint
+		pkhPub = AddPubs(q.TheirRefundPub, s.ElkPointR) // received elkpoint
 		pkhAmt = (q.Value - s.MyAmt) - fee
 
 		fancyAmt = s.MyAmt - fee
@@ -789,12 +815,12 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 		// Their tx that they store.  I get funds unencumbered.
 
 		// SH pubkeys are our base points plus the received elk point
-		revPub = AddPubs(q.MyHAKDBase, s.ElkPoint)
-		timePub = AddPubs(q.TheirHAKDBase, s.ElkPoint)
+		revPub = AddPubs(q.MyHAKDBase, s.ElkPointR)
+		timePub = AddPubs(q.TheirHAKDBase, s.ElkPointT)
 		fancyAmt = (q.Value - s.MyAmt) - fee
 
 		// PKH output
-		pkhPub = AddPubs(q.MyRefundPub, theirElkPoint)
+		pkhPub = AddPubs(q.MyRefundPub, theirElkPointR)
 		pkhAmt = s.MyAmt - fee
 	}
 

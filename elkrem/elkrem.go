@@ -51,10 +51,10 @@ type ElkremReceiver struct {
 }
 
 func LeftSha(in wire.ShaHash) wire.ShaHash {
-	return wire.DoubleSha256SH(in.Bytes()) // left is sha(sha(in))
+	return wire.DoubleSha256SH(append(in.Bytes(), 0x00)) // left is sha(sha(in, 0))
 }
 func RightSha(in wire.ShaHash) wire.ShaHash {
-	return wire.DoubleSha256SH(append(in.Bytes(), 0x01)) // sha(sha(in, 1))
+	return wire.DoubleSha256SH(append(in.Bytes(), 0x01)) // right is sha(sha(in, 1))
 }
 
 // iterative descent of sub-tree. w = hash number you Want. i = input Index

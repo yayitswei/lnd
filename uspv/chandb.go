@@ -885,17 +885,30 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// write 33 byte my revocation pubkey
-	_, err = buf.Write(s.ElkPoint[:])
+	// write 33 byte my elk point R
+	_, err = buf.Write(s.ElkPointR[:])
 	if err != nil {
 		return nil, err
 	}
-	// write 33 byte my previous revocation hash
+	// write 33 byte my previous elk point R
 	// at steady state it's 0s.
-	_, err = buf.Write(s.PrevElkPoint[:])
+	_, err = buf.Write(s.PrevElkPointR[:])
 	if err != nil {
 		return nil, err
 	}
+
+	// write 33 byte elk point T
+	_, err = buf.Write(s.ElkPointT[:])
+	if err != nil {
+		return nil, err
+	}
+	// write 33 byte previous elk point T
+	// at steady state it's 0s.
+	_, err = buf.Write(s.PrevElkPointT[:])
+	if err != nil {
+		return nil, err
+	}
+
 	// write their sig
 	_, err = buf.Write(s.sig[:])
 	if err != nil {
@@ -904,10 +917,10 @@ func (s *StatCom) ToBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// StatComFromBytes turns 160 ish bytes into a StatCom
+// StatComFromBytes turns 216 bytes into a StatCom
 func StatComFromBytes(b []byte) (*StatCom, error) {
 	var s StatCom
-	if len(b) < 150 || len(b) > 150 {
+	if len(b) < 216 || len(b) > 216 {
 		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect 150\n",
 			len(b))
 	}
@@ -927,12 +940,17 @@ func StatComFromBytes(b []byte) (*StatCom, error) {
 	if err != nil {
 		return nil, err
 	}
-	// read 33 byte HAKD pubkey
-	copy(s.ElkPoint[:], buf.Next(33))
-	// read 33 byte previous HAKD pubkey
-	copy(s.PrevElkPoint[:], buf.Next(33))
+	// read 33 byte elk point R
+	copy(s.ElkPointR[:], buf.Next(33))
+	// read 33 byte previous elk point R
+	copy(s.PrevElkPointR[:], buf.Next(33))
+	// read 33 byte elk point T
+	copy(s.ElkPointT[:], buf.Next(33))
+	// read 33 byte previous elk point T
+	copy(s.PrevElkPointT[:], buf.Next(33))
+
 	// the rest is their sig
-	copy(s.sig[:], buf.Bytes())
+	copy(s.sig[:], buf.Next(64))
 
 	return &s, nil
 }

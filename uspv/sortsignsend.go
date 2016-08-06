@@ -401,36 +401,35 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		// (this assumes the state matches the tx being spent.  It won't
 		// work if you're spending from an invalid close that you made.)
 
-		// get the current state sender elkrem hash
-		elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+		// get the current state elkrem point R (their revocable point)
+		elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
 		if err != nil {
 			return nil, err
 		}
 
-		// copy our base points
-		theirHAKDpub := qc.TheirHAKDBase
-		myTimeoutPub := qc.MyHAKDBase
-
-		// add elkrem point to theirs for HAKD pub
-		err = PubKeyArrAddBytes(&theirHAKDpub, elk.Bytes())
+		// get my elkrem T-hash to add to my HAKD base for the timeout key
+		elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
 		if err != nil {
 			return nil, err
 		}
-
-		// add elkrem point to ours for the timeout
-		err = PubKeyAddBytes(&myTimeoutPub, elk.Bytes())
-		if err != nil {
-			return nil, err
-		}
+		elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74))
 
 		// get my HAKD base scalar; overwrite priv
 		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
-		// also, priv changes here (add their hash)
-		PrivKeyAddBytes(priv, elk.Bytes())
+		// priv changes here (add their T hash)
+		PrivKeyAddBytes(priv, elkHashT.Bytes())
 		// make sure priv is non-nil.  may be redundant
 		if priv == nil {
 			return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
 		}
+
+		// make pubkeys for the script
+		theirHAKDpub := qc.TheirHAKDBase
+		var myTimeoutPub [33]byte
+		copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
+
+		// Construct the revokable pubkey by adding elkrem point R to their HAKD base
+		AddPubs(theirHAKDpub, elkPointR)
 
 		// need the previous script. ignore builder error
 		prevScript, _ = CommitScript2(
@@ -647,40 +646,45 @@ func (ts *TxStore) SendCoins(
 				return nil, err
 			}
 
-			// I need their HAKD pubkey.  I haven't given them the revocation
+			// I need the pubkeys.  I haven't given them the revocation
 			// elkrem hash so they haven't been able to spend, and the delay is over.
 			// (this assumes the state matches the tx being spent.  It won't
 			// work if you're spending from an invalid close that you made.)
 
-			// get the current state sender elkrem hash
-			elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+			// get the current state elkrem point R (their revocable point)
+			elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
 			if err != nil {
 				return nil, err
 			}
 
-			// copy our base points
-			theirHAKDpub := qc.TheirHAKDBase
-			myTimeoutPub := qc.MyHAKDBase
-
-			// add elkrem point to theirs for HAKD pub
-			err = PubKeyArrAddBytes(&theirHAKDpub, elk.Bytes())
+			// get my elkrem T-hash to add to my HAKD base for the timeout key
+			elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
 			if err != nil {
 				return nil, err
 			}
+			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74))
 
-			// get my HAKD base scalar
+			// get my HAKD base scalar; overwrite priv
 			priv = ts.GetHAKDBasePriv(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			// also, priv changes here (add their hash)
-			PrivKeyAddBytes(priv, elk.Bytes())
+			// priv changes here (add their T hash)
+			PrivKeyAddBytes(priv, elkHashT.Bytes())
 			// make sure priv is non-nil.  may be redundant
 			if priv == nil {
-				return nil, fmt.Errorf(
-					"nil privkey on timeout spend %s", utxos[i].Op.String())
+				return nil, fmt.Errorf("nil privkey on timeout spend %s", utxos[i].Op.String())
 			}
+
+			// make pubkeys for the script
+			theirHAKDpub := qc.TheirHAKDBase
+			var myTimeoutPub [33]byte
+			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
+
+			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
+			AddPubs(theirHAKDpub, elkPointR)
 
 			// need the previous script. ignore builder error
 			prevScript, _ := CommitScript2(
 				theirHAKDpub, myTimeoutPub, uint16(utxos[i].SpendLag))
+
 			// sign with channel refund key and prevScript
 			tsig, err := txscript.RawTxInWitnessSignature(
 				tx, hCache, i, utxos[i].Value, prevScript, txscript.SigHashAll, priv)
