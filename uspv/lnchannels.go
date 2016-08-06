@@ -53,7 +53,7 @@ type Qchan struct {
 
 	PeerId [33]byte // D useful for quick traverse of db
 
-	//TODO can make refund a 20 byte pubkeyhash
+	// Refunds are also elkremified
 	MyRefundPub    [33]byte // D my refund pubkey for channel break
 	TheirRefundPub [33]byte // S their pubkey for channel break
 
@@ -179,6 +179,19 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 	}
 	// first, check if cooperative
 	txIdx := GetStateIdxFromTx(tx, x)
+	if txIdx > q.State.StateIdx { // future state, uhoh.  Crash for now.
+		return nil, fmt.Errorf("indicated state %d but we know up to %d",
+			txIdx, q.State.StateIdx)
+	}
+
+	theirElkPoint, err := q.ElkPoint(false, txIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	myRefundArr := AddPubs(theirElkPoint, q.MyRefundPub)
+	myPKH := btcutil.Hash160(myRefundArr[:])
+
 	if txIdx == 0 || len(tx.TxOut) != 2 {
 		// must have been cooperative, or something else we don't recognize
 		// if simple close, still have a PKH output, find it.
@@ -189,7 +202,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 				continue // skip to prevent crash
 			}
 			if bytes.Equal(
-				out.PkScript[2:22], btcutil.Hash160(q.MyRefundPub[:])) {
+				out.PkScript[2:22], myPKH) {
 				pkhTxo.Op.Hash = txid
 				pkhTxo.Op.Index = uint32(i)
 				pkhTxo.AtHeight = q.CloseData.CloseHeight
@@ -219,10 +232,10 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			len(tx.TxOut[pkhIdx].PkScript))
 	}
 
-	// next, check if SH is mine (implied by PKH is not mine)
+	// check if PKH is mine
 	if !bytes.Equal(
-		tx.TxOut[pkhIdx].PkScript[2:22], btcutil.Hash160(q.MyRefundPub[:])) {
-		// ------------pkh not mine; sh is mine
+		tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
+		// ------------pkh not mine; assume sh is mine
 		// note that this doesn't actually check that the SH script is correct.
 		// could add that in to double check.
 
@@ -238,7 +251,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		// if SH is mine we're done
 		return cTxos, nil
 	}
-	// ----------pkh is mine
+	// ---------- pkh is mine
 	var pkhTxo Utxo // create new utxo and copy into it
 	pkhTxo.Op.Hash = txid
 	pkhTxo.Op.Index = pkhIdx
@@ -266,11 +279,6 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 		cTxos = append(cTxos, shTxo)
 	}
 
-	//	if txIdx > q.State.StateIdx {
-	// invalid FUTURE state.  Is this even an error..?
-	// don't error for now.  can't do anything anyway.
-	//	}
-
 	return cTxos, nil
 }
 
@@ -279,7 +287,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 	// display txid instead of outpoint because easier to copy/paste
 	fmt.Printf("CHANNEL %s h:%d (%d,%d) cap: %d\n",
 		q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
-	fmt.Printf("\tPUB mine:%x them:%x REFUND mine:%x them:%x BASE mine:%x them:%x\n",
+	fmt.Printf("\tPUB mine:%x them:%x REFBASE mine:%x them:%x BASE mine:%x them:%x\n",
 		q.MyPub[:4], q.TheirPub[:4], q.MyRefundPub[:4], q.TheirRefundPub[:4],
 		q.MyHAKDBase[:4], q.TheirHAKDBase[:4])
 	if q.State == nil || q.ElkRcv == nil {
@@ -288,9 +296,15 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 
 		fmt.Printf("\ta %d (them %d) state index %d\n",
 			q.State.MyAmt, q.Value-q.State.MyAmt, q.State.StateIdx)
+
 		fmt.Printf("\tdelta:%d HAKD:%x prevHAKD:%x elk@ %d\n",
 			q.State.Delta, q.State.ElkPoint[:4], q.State.PrevElkPoint[:4],
 			q.ElkRcv.UpTo())
+		elkp, _ := q.ElkPoint(false, q.State.StateIdx)
+		myRefPub := AddPubs(q.MyRefundPub, elkp)
+
+		theirRefPub := AddPubs(q.TheirRefundPub, q.State.ElkPoint)
+		fmt.Printf("\tMy Refund: %x Their Refund %x\n", myRefPub[:4], theirRefPub[:4])
 	}
 
 	if !q.CloseData.Closed { // still open, finish here

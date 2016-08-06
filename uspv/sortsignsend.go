@@ -352,14 +352,27 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 	var wit [][]byte
 	priv := new(btcec.PrivateKey)
 
-	// check if channel close PKH
+	// pick key
 	if u.PeerIdx == 0 {
 		priv = ts.GetWalletPrivkey(u.KeyIdx)
 	} else {
+		// non-zero peer, channel PKH refund; get channel info to add elkrem
+		qc, err := ts.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
+		if err != nil {
+			return nil, err
+		}
+		// get the current state sender elkrem hash
+		elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+		if err != nil {
+			return nil, err
+		}
+		// generate refund private key from indexes
 		priv = ts.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
+		// add elkrem sender hash for the state index
+		PrivKeyAddBytes(priv, elk.Bytes())
 	}
 	if priv == nil {
-		return nil, fmt.Errorf("SendOne: nil privkey")
+		return nil, fmt.Errorf("SendCoins: nil privkey")
 	}
 	hCache := txscript.NewTxSigHashes(tx)
 	if u.SpendLag > 1 { // time-delay p2wsh
@@ -404,7 +417,13 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 			return nil, err
 		}
 
-		// get my HAKD base scalar
+		// add elkrem point to ours for the timeout
+		err = PubKeyAddBytes(&myTimeoutPub, elk.Bytes())
+		if err != nil {
+			return nil, err
+		}
+
+		// get my HAKD base scalar; overwrite priv
 		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
 		// also, priv changes here (add their hash)
 		PrivKeyAddBytes(priv, elk.Bytes())
@@ -566,7 +585,7 @@ func (ts *TxStore) SendCoins(
 		if utxos[i].PeerIdx == 0 {
 			priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
 		} else {
-			// channel PKH refund; get channel info to add elkrem
+			// non-zero peer, channel PKH refund; get channel info to add elkrem
 			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
 			if err != nil {
 				return nil, err
@@ -585,10 +604,10 @@ func (ts *TxStore) SendCoins(
 			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
 
-		// sign into stash.  3 possibilities:  PKH, WPKH, timelock WSH
+		// sign into stash.  4 possibilities:  PKH, WPKH, elk-WPKH, timelock WSH
 		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
 		// (maybe too risky to allow those to be normal txins...)
-		if utxos[i].SpendLag == 0 { // non-witness PKH
+		if utxos[i].SpendLag == 0 { // legacy PKH
 			prevAdr, err := btcutil.NewAddressPubKeyHash(
 				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 			if err != nil {
@@ -604,7 +623,7 @@ func (ts *TxStore) SendCoins(
 				return nil, err
 			}
 		}
-		if utxos[i].SpendLag == 1 { // witness PKH
+		if utxos[i].SpendLag == 1 { // normal witness PKH
 			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
 				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 			if err != nil {
