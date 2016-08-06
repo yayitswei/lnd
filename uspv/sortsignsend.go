@@ -366,10 +366,13 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		if err != nil {
 			return nil, err
 		}
+		// not really R, but can't leave as the raw elk hash
+		elkHashR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
+
 		// generate refund private key from indexes
 		priv = ts.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
 		// add elkrem sender hash for the state index
-		PrivKeyAddBytes(priv, elk.Bytes())
+		PrivKeyAddBytes(priv, elkHashR.Bytes())
 	}
 	if priv == nil {
 		return nil, fmt.Errorf("SendCoins: nil privkey")
@@ -412,7 +415,7 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74))
+		elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
 
 		// get my HAKD base scalar; overwrite priv
 		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
