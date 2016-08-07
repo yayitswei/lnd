@@ -827,7 +827,14 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	// now that everything is chosen, build fancy script and pkh script
 	fancyScript, _ := CommitScript2(revPub, timePub, delay)
 	pkhScript := DirectWPKHScript(pkhPub) // p2wpkh-ify
-	fancyScript = P2WSHify(fancyScript)   // p2wsh-ify
+
+	fmt.Printf("> made SH script, state %d\n", s.StateIdx)
+	fmt.Printf("\t revPub %x timeout pub %x \n", revPub, timePub)
+	fmt.Printf("\t script %x ", fancyScript)
+
+	fancyScript = P2WSHify(fancyScript) // p2wsh-ify
+
+	fmt.Printf("\t scripthash %x\n", fancyScript)
 
 	// create txouts by assigning amounts
 	outFancy := wire.NewTxOut(fancyAmt, fancyScript)

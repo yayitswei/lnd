@@ -432,7 +432,7 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
 
 		// Construct the revokable pubkey by adding elkrem point R to their HAKD base
-		AddPubs(theirHAKDpub, elkPointR)
+		theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
 
 		// need the previous script. ignore builder error
 		prevScript, _ = CommitScript2(
@@ -682,7 +682,7 @@ func (ts *TxStore) SendCoins(
 			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
 
 			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
-			AddPubs(theirHAKDpub, elkPointR)
+			theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
 
 			// need the previous script. ignore builder error
 			prevScript, _ := CommitScript2(
