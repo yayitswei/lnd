@@ -428,11 +428,11 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 
 		// make pubkeys for the script
 		theirHAKDpub := qc.TheirHAKDBase
-		var myTimeoutPub [33]byte
-		copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
-
 		// Construct the revokable pubkey by adding elkrem point R to their HAKD base
 		theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
+
+		var myTimeoutPub [33]byte
+		copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
 
 		// need the previous script. ignore builder error
 		prevScript, _ = CommitScript2(
@@ -665,7 +665,7 @@ func (ts *TxStore) SendCoins(
 			if err != nil {
 				return nil, err
 			}
-			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74))
+			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
 
 			// get my HAKD base scalar; overwrite priv
 			priv = ts.GetHAKDBasePriv(utxos[i].PeerIdx, utxos[i].KeyIdx)
@@ -678,11 +678,11 @@ func (ts *TxStore) SendCoins(
 
 			// make pubkeys for the script
 			theirHAKDpub := qc.TheirHAKDBase
-			var myTimeoutPub [33]byte
-			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
-
 			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
 			theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
+
+			var myTimeoutPub [33]byte
+			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
 
 			// need the previous script. ignore builder error
 			prevScript, _ := CommitScript2(

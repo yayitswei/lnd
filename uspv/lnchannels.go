@@ -187,26 +187,26 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			txIdx, q.State.StateIdx)
 	}
 
-	// refund PKHs are not time elkrem points
-	theirElkPoint, err := q.ElkPoint(false, false, txIdx)
-	if err != nil {
-		return nil, err
-	}
-
-	myRefundArr := AddPubs(theirElkPoint, q.MyRefundPub)
-	myPKH := btcutil.Hash160(myRefundArr[:])
-
 	if txIdx == 0 || len(tx.TxOut) != 2 {
 		// must have been cooperative, or something else we don't recognize
 		// if simple close, still have a PKH output, find it.
 		// so far, assume 1 txo
+
+		// no txindx hint, so it's probably cooperative, so most recent
+		theirElkPointR, err := q.ElkPoint(false, false, q.State.StateIdx)
+		if err != nil {
+			return nil, err
+		}
+
+		myRefundArr := AddPubs(theirElkPointR, q.MyRefundPub)
+		myPKH := btcutil.Hash160(myRefundArr[:])
+
 		var pkhTxo Utxo
 		for i, out := range tx.TxOut {
 			if len(out.PkScript) < 22 {
 				continue // skip to prevent crash
 			}
-			if bytes.Equal(
-				out.PkScript[2:22], myPKH) {
+			if bytes.Equal(out.PkScript[2:22], myPKH) { // detected my refund
 				pkhTxo.Op.Hash = txid
 				pkhTxo.Op.Index = uint32(i)
 				pkhTxo.AtHeight = q.CloseData.CloseHeight
@@ -218,7 +218,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			}
 		}
 		// couldn't find anything... shouldn't happen
-		return nil, nil
+		return nil, fmt.Errorf("channel closed but we got nothing!")
 	}
 	var shIdx, pkhIdx uint32
 	cTxos := make([]Utxo, 1)
@@ -236,9 +236,19 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]Utxo, error) {
 			len(tx.TxOut[pkhIdx].PkScript))
 	}
 
+	// use the indicated state to generate refund pkh (it may be old)
+
+	// refund PKHs come from the refund base plus their elkrem point R.
+	theirElkPointR, err := q.ElkPoint(false, false, txIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	myRefundArr := AddPubs(theirElkPointR, q.MyRefundPub)
+	myPKH := btcutil.Hash160(myRefundArr[:])
+
 	// check if PKH is mine
-	if !bytes.Equal(
-		tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
+	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
 		// ------------pkh not mine; assume sh is mine
 		// note that this doesn't actually check that the SH script is correct.
 		// could add that in to double check.
@@ -347,7 +357,7 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 // keys and scripts it will return an error.
 func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	if u == nil {
-		return nil, fmt.Errorf("Grab error: nil utxo")
+		return nil, fmt.Errorf("GrabUtxo Grab error: nil utxo")
 	}
 	// this utxo is returned by PickUtxos() so should be ready to spend
 	// first get the channel data
@@ -362,11 +372,11 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 		return nil, err
 	}
 	if len(closeTx.TxOut) != 2 { // (could be more later; onehop is 2)
-		return nil, fmt.Errorf("close tx has %d outputs, can't grab",
+		return nil, fmt.Errorf("GrabUtxo close tx has %d outputs, can't grab",
 			len(closeTx.TxOut))
 	}
 	if len(closeTx.TxOut[u.Op.Index].PkScript) != 34 {
-		return nil, fmt.Errorf("grab txout pkscript length %d, expect 34",
+		return nil, fmt.Errorf("GrabUtxo grab txout pkscript length %d, expect 34",
 			len(closeTx.TxOut[u.Op.Index].PkScript))
 	}
 
@@ -377,28 +387,36 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	// find state index based on tx hints (locktime / sequence)
 	txIdx := GetStateIdxFromTx(closeTx, x)
 	if txIdx == 0 {
-		return nil, fmt.Errorf("no hint, can't recover")
+		return nil, fmt.Errorf("GrabUtxo no hint, can't recover")
 	}
 
 	//	t.GrabTx(qc, txIdx)
 	shOut := closeTx.TxOut[u.Op.Index]
 	// if hinted state is greater than elkrem state we can't recover
 	if txIdx > qc.ElkRcv.UpTo() {
-		return nil, fmt.Errorf("tx at state %d but elkrem only goes to %d",
+		return nil, fmt.Errorf("GrabUtxo tx at state %d but elkrem only goes to %d",
 			txIdx, qc.ElkRcv.UpTo())
 	}
 
+	// get elk T point for their timeout pubkey
+	elkT, err := qc.ElkPoint(true, true, txIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	// get raw elkrem hash
 	elk, err := qc.ElkRcv.AtIndex(txIdx)
 	if err != nil {
 		return nil, err
 	}
 	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
+	// hash elkrem into elkrem R scalar
 	elkR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
 
 	// get HAKD base scalar
 	priv := t.GetHAKDBasePriv(qc.PeerIdx, qc.KeyIdx)
 	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
-	// modify private key
+	// add HAKD base scalar and elkrem R scalar for R private key
 	PrivKeyAddBytes(priv, elkR.Bytes())
 
 	// serialize pubkey part for script generation
@@ -406,17 +424,15 @@ func (t *TxStore) GrabUtxo(u *Utxo) (*wire.MsgTx, error) {
 	copy(HAKDpubArr[:], priv.PubKey().SerializeCompressed())
 	fmt.Printf("made HAKD to recover from %x\n", HAKDpubArr)
 
-	// copy their base point
-	theirTimeoutPub := qc.TheirHAKDBase
-	// add the elk (point) to their base point for timeout pubkey
-	PubKeyArrAddBytes(&theirTimeoutPub, elk.Bytes())
+	// add the elkT point to their base point for timeout pubkey
+	theirTimeoutPub := AddPubs(qc.TheirHAKDBase, elkT)
 
 	// now that everything is chosen, build fancy script and pkh script
 	preScript, _ := CommitScript2(HAKDpubArr, theirTimeoutPub, qc.TimeOut)
 	fancyScript := P2WSHify(preScript) // p2wsh-ify
 	fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
 	if !bytes.Equal(fancyScript, shOut.PkScript) {
-		return nil, fmt.Errorf("script hash mismatch, generated %x expect %x",
+		return nil, fmt.Errorf("GrabUtxo script hash mismatch, generated %x expect %x",
 			fancyScript, shOut.PkScript)
 	}
 
@@ -612,20 +628,39 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 }
 
 // SimpleCloseTx produces a close tx based on the current state.
-// When
-func (q *Qchan) SimpleCloseTx() *wire.MsgTx {
+// The PKH addresses are my refund base with their r-elkrem point, and
+// their refund base with my r-elkrem point.  "Their" point means they have
+// the point but not the scalar.
+func (q *Qchan) SimpleCloseTx() (*wire.MsgTx, error) {
 	// sanity checks
 	if q == nil || q.State == nil {
-		fmt.Printf("SimpleCloseTx: nil chan / state")
-		return nil
+		return nil, fmt.Errorf("SimpleCloseTx: nil chan / state")
 	}
 	fee := int64(5000) // fixed fee for now (on both sides)
 
+	// get final elkrem points; both R, theirs and mine
+	theirElkPointR, err := q.ElkPoint(false, false, q.State.StateIdx)
+	if err != nil {
+		fmt.Printf("SimpleCloseTx: can't generate elkpoint.")
+		return nil, err
+	}
+
+	//	myElkPointR, err := q.ElkPoint(true, false, q.State.StateIdx)
+	//	if err != nil {
+	//		fmt.Printf("SimpleCloseTx: can't generate elkpoint.99 ")
+	//		return nil, err
+	//	}
+
+	// my pub is my base and "their" elk point which I have the scalar for
+	myRefundPub := AddPubs(q.MyRefundPub, theirElkPointR)
+	// their pub is their base and "my" elk point (which they gave me)
+	theirRefundPub := AddPubs(q.TheirRefundPub, q.State.ElkPointR)
+
 	// make my output
-	myScript := DirectWPKHScript(q.MyRefundPub)
+	myScript := DirectWPKHScript(myRefundPub)
 	myOutput := wire.NewTxOut(q.State.MyAmt-fee, myScript)
 	// make their output
-	theirScript := DirectWPKHScript(q.TheirRefundPub)
+	theirScript := DirectWPKHScript(theirRefundPub)
 	theirOutput := wire.NewTxOut((q.Value-q.State.MyAmt)-fee, theirScript)
 
 	// make tx with these outputs
@@ -636,15 +671,15 @@ func (q *Qchan) SimpleCloseTx() *wire.MsgTx {
 	tx.AddTxIn(wire.NewTxIn(&q.Op, nil, nil))
 	// sort and return
 	txsort.InPlaceSort(tx)
-	return tx
+	return tx, nil
 }
 
 // SignSimpleClose creates a close tx based on the current state and signs it,
 // returning that sig.  Also returns a bool; true means this sig goes second.
 func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
-	tx := q.SimpleCloseTx()
-	if tx == nil {
-		return nil, fmt.Errorf("SignSimpleClose: no tx")
+	tx, err := q.SimpleCloseTx()
+	if err != nil {
+		return nil, err
 	}
 	// make hash cache
 	hCache := txscript.NewTxSigHashes(tx)

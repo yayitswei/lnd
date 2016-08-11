@@ -107,7 +107,11 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 		return
 	}
 
-	tx := qc.SimpleCloseTx()
+	tx, err := qc.SimpleCloseTx()
+	if err != nil {
+		fmt.Printf("CloseReqHandler err %s", err.Error())
+		return
+	}
 
 	pre, swap, err := uspv.FundTxScript(qc.MyPub, qc.TheirPub)
 	if err != nil {
