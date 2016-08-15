@@ -33,6 +33,8 @@ cmd/cmd
 cmd/lncli/lncli
 cmd/lnshell/lnshell
 
+txoport/txofromhex/txofromhex
+
 sighash143/sighash143
 sighash143/*.hex
 
