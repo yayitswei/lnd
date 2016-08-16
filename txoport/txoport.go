@@ -9,7 +9,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-type TxoMode uint32
+type TxoMode uint8
 
 // Constants defining txo modes
 const (
@@ -39,6 +39,9 @@ const (
 	// witness script hash
 	TxoP2WSHUncomp = FlagTxoWitness | FlagTxoScript
 	TxoP2WSHComp   = FlagTxoWitness | FlagTxoScript | FlagTxoCompress
+
+	// unknown
+	TxoUnknownMode = 0xff
 )
 
 var modeStrings = map[TxoMode]string{
@@ -64,7 +67,7 @@ func (m TxoMode) String() string {
 	if ok {
 		return s
 	}
-	return fmt.Sprintf("unknown TxoMode %x", uint32(m))
+	return fmt.Sprintf("unknown TxoMode %x", uint8(m))
 }
 
 // KeyDerivationPath describes how to get to the key from the master / seed.
