@@ -60,10 +60,11 @@ var modeStrings = map[TxoMode]string{
 
 // String returns the InvType in human-readable form.
 func (m TxoMode) String() string {
-	if s, ok := modeStrings[m]; ok {
+	s, ok := modeStrings[m]
+	if ok {
 		return s
 	}
-	return fmt.Sprintf("unknown TxoMode %x", m)
+	return fmt.Sprintf("unknown TxoMode %x", uint32(m))
 }
 
 // KeyDerivationPath describes how to get to the key from the master / seed.
@@ -154,7 +155,10 @@ func (u *PortUtxo) Equal(z *PortUtxo) bool {
 func (u *PortUtxo) String() string {
 	var s string
 	var empty [32]byte
-	s += u.Op.String()
+	if u == nil {
+		return "nil utxo"
+	}
+	s = u.Op.String()
 	s += fmt.Sprintf("\n\ta:%d seq:%d %s\n", u.Amt, u.Seq, u.Mode.String())
 	if u.PrivKey == empty {
 		s += fmt.Sprintf("\tprivate key not available (zero)\n")

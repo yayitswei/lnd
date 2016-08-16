@@ -52,28 +52,28 @@ func SorceDescriptorFromBytes(b []byte) (SorceDescriptor, error) {
 	return sd, nil
 }
 
-// SorceMsgs are 148 bytes.
+// SorceMsgs are 132 bytes.
 // PKH 20
-// txid 32
+// txid 16
 // elk 32
 // sig 64
-// ToBytes turns a SorceMsg into 148 bytes
-func (sm *SorceMsg) ToBytes() (b [148]byte) {
+// ToBytes turns a SorceMsg into 132 bytes
+func (sm *StateMsg) ToBytes() (b [132]byte) {
 	var buf bytes.Buffer
 	buf.Write(sm.DestPKHScript[:])
-	buf.Write(sm.Txid.Bytes())
+	buf.Write(sm.Txid[:])
 	buf.Write(sm.Elk.Bytes())
 	buf.Write(sm.Sig[:])
 	copy(b[:], buf.Bytes())
 	return
 }
 
-// SorceMsgFromBytes turns 128 bytes into a SorceMsg
-func SorceMsgFromBytes(b [128]byte) SorceMsg {
-	var sm SorceMsg
-	copy(sm.Txid[:], b[32:])
-	copy(sm.Elk[:], b[32:64])
-	copy(sm.Sig[:], b[64:])
+// SorceMsgFromBytes turns 112 bytes into a SorceMsg
+func SorceMsgFromBytes(b [128]byte) StateMsg {
+	var sm StateMsg
+	copy(sm.Txid[:], b[:16])
+	copy(sm.Elk[:], b[16:48])
+	copy(sm.Sig[:], b[48:])
 	return sm
 }
 

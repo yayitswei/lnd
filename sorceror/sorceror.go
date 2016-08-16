@@ -34,11 +34,29 @@ type SorceDescriptor struct {
 }
 
 // the message describing the next state, sent from the client to the sorceror
-type SorceMsg struct {
-	DestPKHScript [20]byte     // identifier for channel; could be optimized
-	Txid          wire.ShaHash // txid of close tx
+type StateMsg struct {
+	DestPKHScript [20]byte     // identifier for channel; could be optimized away
+	Txid          [16]byte     // first half of txid of close tx
 	Elk           wire.ShaHash // elkrem for this state index
 	Sig           [64]byte     // sig for the grab tx
+}
+
+// HtlcEncMsg is an encrypted, stored message describing HTLC recovery
+type HtlcMsg struct {
+	DestPKHScript [20]byte // identifier for channel; could be optimized away
+	StateIdx      uint64   // state index (really uint48)
+	sig           [64]byte
+	EncData       [104]byte
+}
+
+// HtlcMsg is the decrypted message, which may decrypt previous htlc messages
+type HtlcSig struct {
+	PeerIdx  uint32 // channel Identifier
+	StateIdx uint64 // state index remaining from encrypted message
+	sig      [64]byte
+	LockTime uint32
+	Hash     [20]byte
+	DecKey   [16]byte
 }
 
 // 2 structs used in the DB: IdxSigs and ChanStatic

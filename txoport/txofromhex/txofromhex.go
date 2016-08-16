@@ -12,6 +12,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/txoport"
+	"github.com/roasbeef/btcutil"
 )
 
 /* idea here is to convert output from bitcoind / btcd into a portable utxo
@@ -23,15 +24,38 @@ P2PKH only for now.
 
 func usage() {
 	fmt.Printf("Usage:\n./txofromhex tx.file index compressed\n")
+	fmt.Printf("Usage:\n./txofromhex utxo.file WIF_Key\n")
 	fmt.Printf("example: ./txofromhex mytx.hex 1 1\n")
 }
 
-func main() {
-	if len(os.Args) < 4 {
-		usage()
-		return
+// insert a private key into a portable utxo
+func insert() {
+
+	uthexo, err := ioutil.ReadFile(os.Args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	uthexo = []byte(strings.TrimSpace(string(uthexo)))
+
+	utxbytes, err := hex.DecodeString(string(uthexo))
+	if err != nil {
+		log.Fatal(err)
 	}
 
+	u, err := txoport.PortUtxoFromBytes(utxbytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wif, err := btcutil.DecodeWIF(os.Args[2])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("insert wif: %s\n%s\n", wif.String(), u.String())
+}
+
+func extract() {
 	filename := os.Args[1]
 	idxint, err := strconv.ParseInt(os.Args[2], 10, 32)
 	if err != nil {
@@ -57,7 +81,7 @@ func main() {
 		log.Fatal(err)
 	}
 	txbuf := bytes.NewBuffer(txbytes)
-	fmt.Printf("txhex: %x\n index: %d comp: %v\n", txbytes, idx, comp)
+	//	fmt.Printf("index: %d comp: %v\n", idx, comp)
 	tx := wire.NewMsgTx()
 	err = tx.DeserializeWitness(txbuf)
 	if err != nil {
@@ -65,8 +89,8 @@ func main() {
 	}
 	fmt.Printf("%s has %d txouts\n", tx.TxSha().String(), len(tx.TxOut))
 
-	if idx > uint32(len(tx.TxOut)) {
-		log.Fatalf("txout %d selected, but only %d txouts\n", idx, len(tx.TxOut))
+	if idx > uint32(len(tx.TxOut)-1) {
+		log.Fatalf("txout:%d selected, but only %d txouts\n", idx, len(tx.TxOut))
 	}
 	fmt.Printf("amt: %d\n", tx.TxOut[idx].Value)
 
@@ -87,10 +111,29 @@ func main() {
 			u.Mode = txoport.TxoP2PKHUncomp
 		}
 	} else {
-		u.Mode = 0xaa
+		u.Mode = 0x000000aa
+	}
+	fmt.Println(u.String())
+	b, _ := u.Bytes()
+	fmt.Printf("utxo hex:\n%x\n", b)
+	return
+}
+
+func main() {
+	if len(os.Args) < 3 || len(os.Args) > 4 {
+		usage()
+		return
+	}
+	// insert key
+	if len(os.Args) == 3 {
+		insert()
+		return
 	}
 
-	fmt.Println(u.String())
-
+	// get txo from tx
+	if len(os.Args) == 4 {
+		extract()
+		return
+	}
 	return
 }

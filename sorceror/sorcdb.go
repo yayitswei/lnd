@@ -17,21 +17,26 @@ SorceDB has 3 top level buckets -- 2 small ones and one big one.
 PKHMapBucket is k:v
 channelIndex : PKH
 
-ChannelBucket is k:v
-PKH
+ChannelBucket is full of PKH sub-buckets
+PKH (lots)
   |
   |-KEYElkRcv : Serialized elkrem receiver (couple KB)
   |
   |-KEYIdx : channelIdx (4 bytes)
   |
   |-KEYStatic : ChanStatic (~100 bytes)
+  |
+  |-HTLC bucket
+	  |
+	  |- StateIdx : EncData (104 bytes)
+
 
 (could also add some metrics, like last write timestamp)
 
 the big one:
 
 TxidBucket is k:v
-Txid : IdxSig (74 bytes)
+Txid[:16] : IdxSig (74 bytes)
 
 Leave as is for now, but could modify the txid to make it smaller.  Could
 HMAC it with a local key to prevent collision attacks and get the txid size down
@@ -108,7 +113,7 @@ func (s *Sorceror) AddDesc(sd SorceDescriptor) error {
 	})
 }
 
-func (s *Sorceror) AddMsg(sm SorceMsg) error {
+func (s *Sorceror) AddMsg(sm StateMsg) error {
 	return s.SorceDB.Update(func(btx *bolt.Tx) error {
 
 		// first get the channel bucket, update the elkrem and read the idx
@@ -175,16 +180,16 @@ func (s *Sorceror) AddMsg(sm SorceMsg) error {
 // DB.  If there is, SorceMsgs are returned which can then be turned into txs.
 // can take the txid slice direct from a msgBlock after block has been
 // merkle-checked.
-func (s *Sorceror) CheckTxids(inTxids []wire.ShaHash) ([]SorceMsg, error) {
-	var hitTxids []SorceMsg
+func (s *Sorceror) CheckTxids(inTxids []wire.ShaHash) ([]StateMsg, error) {
+	var hitTxids []StateMsg
 	err := s.SorceDB.View(func(btx *bolt.Tx) error {
 		bkt := btx.Bucket(BUCKETTxid)
 		for _, txid := range inTxids {
 			idxsig := bkt.Get(txid[:8])
 			if idxsig != nil { // hit!!!!1 whoa!
 				// Call SorceMsg construction function here
-				var sm SorceMsg
-				sm.Txid = txid
+				var sm StateMsg
+				copy(sm.Txid[:], txid[:16])
 				// that wasn't it.  make a real function
 
 				hitTxids = append(hitTxids, sm)
