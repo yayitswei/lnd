@@ -117,10 +117,12 @@ modes need it, as the previous pkscript can be generated
 */
 
 type PortUtxo struct {
-	Op   wire.OutPoint // unique outpoint
-	Amt  int64         // higher is better
-	Seq  uint32        // used for relative timelock
-	Mode TxoMode
+	NetID  byte          // indicates what network / coin utxo is in
+	Op     wire.OutPoint // unique outpoint
+	Amt    int64         // higher is better
+	Height uint32        // block height of utxo (not needed? nice to know?)
+	Seq    uint32        // used for relative timelock
+	Mode   TxoMode
 
 	PrivKey [32]byte
 	KeyPath KeyDerivationPath
@@ -133,13 +135,17 @@ func (u *PortUtxo) Equal(z *PortUtxo) bool {
 	if u == nil || z == nil {
 		return false
 	}
+	if u.NetID != z.NetID {
+		return false
+	}
+
 	if !u.Op.Hash.IsEqual(&z.Op.Hash) {
 		return false
 	}
 	if u.Op.Index != z.Op.Index {
 		return false
 	}
-	if u.Amt != z.Amt || u.Seq != z.Seq || u.Mode != z.Mode {
+	if u.Amt != z.Amt || u.Seq != z.Seq || u.Mode != z.Mode || u.Height != z.Height {
 		return false
 	}
 	if u.PrivKey != z.PrivKey {
@@ -162,7 +168,9 @@ func (u *PortUtxo) String() string {
 		return "nil utxo"
 	}
 	s = u.Op.String()
-	s += fmt.Sprintf("\n\ta:%d seq:%d %s\n", u.Amt, u.Seq, u.Mode.String())
+	s += fmt.Sprintf("\n\tnet:%x a:%d h:%d seq:%d %s\n",
+		u.NetID, u.Amt, u.Height, u.Seq, u.Mode.String())
+
 	if u.PrivKey == empty {
 		s += fmt.Sprintf("\tprivate key not available (zero)\n")
 	} else {
@@ -185,27 +193,33 @@ func (u *PortUtxo) String() string {
 	return s
 }
 
-/* serialized (im/ex)Portable Utxos are 102 up to 357 bytes.
+/* serialized (im/ex)Portable Utxos are 103 up to 358 bytes.
+NetID 1
 Op 36
 Amt 8
+Height 4
 Seq 4
-Mode 4
+Mode 1
 Priv 32
 Path 21
-PKSLen 1
 Script (0 to 255) starts at byte 107, ends at 106+PKlen
 */
 
 func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
-	if len(b) < 106 {
-		return nil, errors.New("Slice too short (min 106 butes)")
+	if len(b) < 107 || len(b) > 362 {
+		return nil, fmt.Errorf("%d bytes, need 103-358", len(b))
 	}
 
 	buf := bytes.NewBuffer(b)
 
 	var u PortUtxo
+	var err error
 
-	err := u.Op.Hash.SetBytes(buf.Next(32))
+	u.NetID, err = buf.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	err = u.Op.Hash.SetBytes(buf.Next(32))
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +228,10 @@ func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
 		return nil, err
 	}
 	err = binary.Read(buf, binary.BigEndian, &u.Amt)
+	if err != nil {
+		return nil, err
+	}
+	err = binary.Read(buf, binary.BigEndian, &u.Height)
 	if err != nil {
 		return nil, err
 	}
@@ -231,9 +249,6 @@ func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
 	copy(kdparr[:], buf.Next(21))
 	u.KeyPath = KeyDerivationPathFromBytes(kdparr)
 
-	// skip length, redundant here since we already know the slice length
-	buf.Next(1)
-
 	u.PkScript = buf.Bytes()
 	return &u, nil
 }
@@ -244,8 +259,9 @@ func (u *PortUtxo) Bytes() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
+	err := buf.WriteByte(u.NetID)
 
-	_, err := buf.Write(u.Op.Hash.Bytes())
+	_, err = buf.Write(u.Op.Hash.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -259,34 +275,33 @@ func (u *PortUtxo) Bytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	err = binary.Write(&buf, binary.BigEndian, u.Height)
+	if err != nil {
+		return nil, err
+	}
 	err = binary.Write(&buf, binary.BigEndian, u.Seq)
 	if err != nil {
 		return nil, err
 	}
-
-	err = binary.Write(&buf, binary.BigEndian, u.Mode) // mode @ offset 44
+	err = binary.Write(&buf, binary.BigEndian, u.Mode) // mode
 	if err != nil {
 		return nil, err
 	}
-
-	_, err = buf.Write(u.PrivKey[:]) // privkey @ offset 69
+	_, err = buf.Write(u.PrivKey[:]) // privkey
 	if err != nil {
 		return nil, err
 	}
-
-	_, err = buf.Write(u.KeyPath.Bytes()) // keypath @ offset 48
+	_, err = buf.Write(u.KeyPath.Bytes()) // keypath
 	if err != nil {
 		return nil, err
 	}
-
 	if len(u.PkScript) > 255 {
 		return nil, errors.New("PkScript too long (255 byte max)")
 	}
-	err = binary.Write(&buf, binary.BigEndian, uint8(len(u.PkScript))) // PKlen @ 101
-	if err != nil {
-		return nil, err
-	}
+	//	err = binary.Write(&buf, binary.BigEndian, uint8(len(u.PkScript))) // PKlen @ 101
+	//	if err != nil {
+	//		return nil, err
+	//	}
 
 	_, err = buf.Write(u.PkScript)
 	return buf.Bytes(), nil

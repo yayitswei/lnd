@@ -11,6 +11,15 @@ import (
 func (u *PortUtxo) AddWIF(w btcutil.WIF) error {
 	var err error
 
+	// check that WIF and utxo net ID match
+
+	//... which is super annoying because the wif netID is not capitalized.
+	// so we'll capitalize it and be able to check just by matching bytes.
+
+	//	if u.NetID != w.netID {
+	//		return fmt.Errorf("utxo and wif key networks don't match")
+	//	}
+
 	// if TxoMode is set, check that compressed / uncompressed match
 	if u.Mode != TxoUnknownMode {
 		if w.CompressPubKey && u.Mode&FlagTxoCompress == 0 {

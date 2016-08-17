@@ -87,7 +87,10 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Printf("%s\n", u.String())
-	b, _ := u.Bytes()
+	b, err := u.Bytes()
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Printf("%x\n", b)
 	return
 }
