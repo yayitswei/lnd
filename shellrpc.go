@@ -9,7 +9,7 @@ import (
 	"sort"
 
 	"github.com/lightningnetwork/lnd/lndc"
-	"github.com/lightningnetwork/lnd/uspv"
+	"github.com/lightningnetwork/lnd/portxo"
 
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -104,10 +104,10 @@ func (r *LNRpc) Bal(args *NoArgs, reply *BalReply) error {
 	// iterate through utxos to figure out how much we have
 	for _, u := range allTxos {
 		reply.TxoTotal += u.Value
-		if u.SpendLag == 0 {
+		if u.Seq == 0 {
 			reply.SpendableNow += u.Value
 		} else {
-			if u.SpendLag == 1 || u.AtHeight+u.SpendLag > curHeight {
+			if u.Seq == 1 || u.Height+int32(u.Seq) > curHeight {
 				reply.SpendableNow += u.Value
 				reply.SpendableNowWitty += u.Value
 			}
@@ -137,10 +137,10 @@ func (r *LNRpc) TxoList(args *NoArgs, reply *TxoListReply) error {
 	reply.Txos = make([]TxoInfo, len(allTxos))
 	for i, u := range allTxos {
 		reply.Txos[i].Amt = u.Value
-		reply.Txos[i].Height = u.AtHeight
-		reply.Txos[i].KeyNum = u.KeyIdx
+		reply.Txos[i].Height = u.Height
+		reply.Txos[i].KeyNum = u.KeyGen.Step[4]
 		reply.Txos[i].OutPoint = u.Op.String()
-		reply.Txos[i].PeerNum = u.PeerIdx
+		reply.Txos[i].PeerNum = u.KeyGen.Step[3]
 	}
 	return nil
 }
@@ -221,7 +221,7 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 	}
 	nokori := args.NumTx
 
-	var allUtxos uspv.SortableUtxoSlice
+	var allUtxos portxo.TxoSliceByAmt
 	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
@@ -231,7 +231,7 @@ func (r *LNRpc) Sweep(args SweepArgs, reply *TxidsReply) error {
 	sort.Sort(sort.Reverse(allUtxos))
 
 	for i, u := range allUtxos {
-		if u.AtHeight != 0 && u.Value > 10000 {
+		if u.Height != 0 && u.Value > 10000 {
 			var txid wire.ShaHash
 			if args.Drop {
 				intx, outtx, err := SCon.TS.SendDrop(*allUtxos[i], adr)

@@ -42,7 +42,7 @@ func BreakChannel(args []string) error {
 		return err
 	}
 
-	fmt.Printf("breaking (%d,%d)\n", qc.PeerIdx, qc.KeyIdx)
+	fmt.Printf("breaking (%d,%d)\n", qc.KeyGen.Step[3], qc.KeyGen.Step[4])
 	z, err := qc.ElkSnd.AtIndex(0)
 	if err != nil {
 		return err
@@ -334,7 +334,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	}
 	if qc.CloseData.Closed {
 		fmt.Printf("RTSHandler err: %d, %d is closed.",
-			qc.PeerIdx, qc.KeyIdx)
+			qc.KeyGen.Step[3], qc.KeyGen.Step[4])
 		return
 	}
 	if RTSDelta < 1 {

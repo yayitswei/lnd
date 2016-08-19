@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -19,13 +20,15 @@ Channel refund keys are use 3, peer and index per peer / channel.
 */
 
 const (
-	UseWallet          = 0
-	UseChannelFund     = 2
-	UseChannelRefund   = 3
-	UseChannelHAKDBase = 4
-	UseChannelElkrem   = 8
-	UseChannelNonce    = 10 // links Id and channel. replaces UseChannelFund
-	UseIdKey           = 11
+	UseWallet          = 0 + hdkeychain.HardenedKeyStart
+	UseChannelFund     = 2 + hdkeychain.HardenedKeyStart
+	UseChannelRefund   = 3 + hdkeychain.HardenedKeyStart
+	UseChannelHAKDBase = 4 + hdkeychain.HardenedKeyStart
+	UseChannelElkrem   = 8 + hdkeychain.HardenedKeyStart
+	// links Id and channel. replaces UseChannelFund
+	UseChannelNonce = 10 + hdkeychain.HardenedKeyStart
+
+	UseIdKey = 11 + hdkeychain.HardenedKeyStart
 )
 
 // PrivKeyAddBytes adds bytes to a private key.
@@ -160,117 +163,163 @@ func IdToPub(idArr [32]byte) (*btcec.PublicKey, error) {
 	return btcec.ParsePubKey(append([]byte{0x02}, idArr[:]...), btcec.S256())
 }
 
-// GetPrivkey generates and returns a private key derived from the seed.
-// It will return nil if there's an error / problem, but there shouldn't be
-// unless the root key itself isn't there or something.
-// All other specialized derivation functions should call this.
-func (t *TxStore) GetPrivkey(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
-	multiRoot, err := t.rootPrivKey.Child(use + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		fmt.Printf("GetPrivkey err %s", err.Error())
+// =====================================================================
+// OK only use these now
+
+// PathPrivkey returns a private key by descending the given path
+// wrapper function for the utxo with checks
+func (t *TxStore) PathPrivkey(kg portxo.KeyGen) *btcec.PrivateKey {
+	// in uspv, we require path depth of 5
+	if kg.Depth != 5 {
 		return nil
 	}
-	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
+	priv, err := kg.DerivePrivateKey(t.rootPrivKey)
 	if err != nil {
-		fmt.Printf("GetPrivkey err %s", err.Error())
+		fmt.Printf("PathPrivkey err %s", err.Error())
 		return nil
 	}
-	multiChild, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
-	if err != nil {
-		fmt.Printf("GetPrivkey err %s", err.Error())
-		return nil
-	}
-	priv, err := multiChild.ECPrivKey()
-	if err != nil {
-		fmt.Printf("GetPrivkey err %s", err.Error())
-		return nil
-	}
-	//	pubbyte := priv.PubKey().SerializeCompressed()
-	//	fmt.Printf("- - -generated %d,%d,%d %x\n",
-	//		use, peerIdx, cIdx, pubbyte[:8])
 	return priv
 }
 
-// GetPubkey generates and returns the pubkey for a given path.
-// It will return nil if there's an error / problem.
-func (t *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
-	priv := t.GetPrivkey(use, peerIdx, cIdx)
-	if priv == nil {
-		fmt.Printf("GetPubkey peer %d idx %d failed", peerIdx, cIdx)
-		return nil
-	}
-	return priv.PubKey()
+// PathPrivkey returns a public key by descending the given path.
+func (t *TxStore) PathPubkey(kg portxo.KeyGen) *btcec.PublicKey {
+	return t.PathPrivkey(kg).PubKey()
 }
 
-// GetAddress generates and returns the pubkeyhash address for a given path.
-// It will return nil if there's an error / problem.
-func (t *TxStore) GetAddress(
-	use, peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
-	pub := t.GetPubkey(use, peerIdx, cIdx)
-	if pub == nil {
-		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
-		return nil
-	}
+// ------------- end of 2 main key deriv functions
+
+// get a private key from the regular wallet
+func (t *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
+	var kg portxo.KeyGen
+	kg.Step[0] = 44 + 0x80000000
+	kg.Step[1] = 0 + 0x80000000
+	kg.Step[2] = UseWallet
+	kg.Step[3] = 0 + 0x80000000
+	kg.Step[4] = 0 + 0x80000000
+	return t.PathPrivkey(kg)
+
+}
+
+// get a public key from the regular wallet
+func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash {
+	pub := t.GetWalletPrivkey(idx).PubKey()
 	adr, err := btcutil.NewAddressWitnessPubKeyHash(
 		btcutil.Hash160(pub.SerializeCompressed()), t.Param)
 	if err != nil {
-		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
+		fmt.Printf("GetAddress %d made nil pub\n", idx)
 		return nil
 	}
 	return adr
 }
 
-// IdKey returns the identity private key, which is child(0).child(0) from root
+// GetUsePrive generates a private key for the given use case & keypath
+func (t *TxStore) GetUsePriv(kg portxo.KeyGen, use uint32) *btcec.PrivateKey {
+	kg.Step[2] = use
+	return t.PathPrivkey(kg)
+}
+
+// GetUsePub generates a pubkey for the given use case & keypath
+func (t *TxStore) GetUsePub(kg portxo.KeyGen, use uint32) [33]byte {
+	var b [33]byte
+	pub := t.GetUsePriv(kg, use).PubKey()
+	if pub != nil {
+		copy(b[:], pub.SerializeCompressed())
+	}
+	return b
+}
+
+// GetElkremRoot gives the Elkrem sender root hash for a channel.
+func (t *TxStore) GetElkremRoot(kg portxo.KeyGen) wire.ShaHash {
+	kg.Step[2] = UseChannelElkrem
+	priv := t.PathPrivkey(kg)
+	return wire.DoubleSha256SH(priv.Serialize())
+}
+
+// IdKey returns the identity private key
 func (t *TxStore) IdKey() *btcec.PrivateKey {
-	return t.GetPrivkey(UseIdKey, 0, 0)
+	var kg portxo.KeyGen
+	kg.Step[0] = 44 + 0x80000000
+	kg.Step[1] = 0 + 0x80000000
+	kg.Step[2] = UseIdKey
+	kg.Step[3] = 0 + 0x80000000
+	kg.Step[4] = 0 + 0x80000000
+	return t.PathPrivkey(kg)
 }
 
 func (t *TxStore) IdPub() [33]byte {
 	var b [33]byte
-	k := t.GetPubkey(UseIdKey, 0, 0)
+	k := t.IdKey().PubKey()
 	if k != nil {
 		copy(b[:], k.SerializeCompressed())
 	}
 	return b
 }
 
-// get a private key from the regular wallet
-func (t *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
-	return t.GetPrivkey(UseWallet, 0, idx)
-}
+// END of use these now
+// =====================================================================
 
-// get a public key from the regular wallet
-func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash {
-	return t.GetAddress(UseWallet, 0, idx)
-}
+// GetAddress generates and returns the pubkeyhash address for a given path.
+// It will return nil if there's an error / problem.
+//func (t *TxStore) GetAddress(
+//	use, peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
+//	pub := t.GetPubkey(use, peerIdx, cIdx)
+//	if pub == nil {
+//		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
+//		return nil
+//	}
+//}
 
-// ----- Get fund priv/pub replaced with channel / CKDH? -------------------
-
-// GetFundPrivkey generates and returns the private key for a given peer, index.
+// GetPrivkey generates and returns a private key derived from the seed.
 // It will return nil if there's an error / problem, but there shouldn't be
 // unless the root key itself isn't there or something.
-func (t *TxStore) GetChanPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	return t.GetPrivkey(UseChannelFund, peerIdx, cIdx)
-}
+// All other specialized derivation functions should call this.
+//func (t *TxStore) GetPrivkeyx(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
+//	multiRoot, err := t.rootPrivKey.Child(use + hdkeychain.HardenedKeyStart)
+//	if err != nil {
+//		fmt.Printf("GetPrivkey err %s", err.Error())
+//		return nil
+//	}
+//	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
+//	if err != nil {
+//		fmt.Printf("GetPrivkey err %s", err.Error())
+//		return nil
+//	}
+//	multiChild, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
+//	if err != nil {
+//		fmt.Printf("GetPrivkey err %s", err.Error())
+//		return nil
+//	}
+//	priv, err := multiChild.ECPrivKey()
+//	if err != nil {
+//		fmt.Printf("GetPrivkey err %s", err.Error())
+//		return nil
+//	}
+//	//	pubbyte := priv.PubKey().SerializeCompressed()
+//	//	fmt.Printf("- - -generated %d,%d,%d %x\n",
+//	//		use, peerIdx, cIdx, pubbyte[:8])
+//	return priv
+//}
 
-// GetFundPubkey generates and returns the fund tx pubkey for a given index.
-// It will return nil if there's an error / problem
-func (t *TxStore) GetChanPubkey(peerIdx, cIdx uint32) [33]byte {
-	var b [33]byte
-	k := t.GetPubkey(UseChannelFund, peerIdx, cIdx)
-	if k != nil {
-		copy(b[:], k.SerializeCompressed())
-	}
-	return b
-}
+// GetPubkey generates and returns the pubkey for a given path.
+// It will return nil if there's an error / problem.
+//func (t *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
+//	priv := t.GetPrivkey(use, peerIdx, cIdx)
+//	if priv == nil {
+//		fmt.Printf("GetPubkey peer %d idx %d failed", peerIdx, cIdx)
+//		return nil
+//	}
+//	return priv.PubKey()
+//}
+
+// ----- Get fund priv/pub replaced with channel / CKDH? -------------------
 
 // ---------------------------------------------------------
 
 // CreateChannelNonce returns the channel nonce used to get a CKDH.
 // Maybe later this nonce can be the hash of some
 // provable info, or a merkle root or something.
-func (t *TxStore) CreateChanNonce(peerIdx, cIdx uint32) [20]byte {
-	priv := t.GetPrivkey(UseChannelNonce, peerIdx, cIdx)
+func (t *TxStore) CreateChanNonce(kg portxo.KeyGen) [20]byte {
+	priv := t.GetUsePriv(kg, UseChannelNonce)
 	var nonce [20]byte
 	copy(nonce[:], btcutil.Hash160(priv.Serialize()))
 	return nonce
@@ -303,39 +352,3 @@ func CalcChanPubs(f, r [33]byte, cn [20]byte) ([33]byte, [33]byte, error) {
 //	peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
 //	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
 //}
-
-// GetElkremRoot gives the Elkrem sender root hash for a channel.
-func (t *TxStore) GetElkremRoot(peerIdx, cIdx uint32) wire.ShaHash {
-	priv := t.GetPrivkey(UseChannelElkrem, peerIdx, cIdx)
-	return wire.DoubleSha256SH(priv.Serialize())
-}
-
-// GetRefundPrivkey gives the private key for PKH refunds
-func (t *TxStore) GetRefundPrivkey(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	return t.GetPrivkey(UseChannelRefund, peerIdx, cIdx)
-}
-
-// GetRefundPubkey gives the 33 byte serialized pubkey for PKH refunds
-func (t *TxStore) GetRefundPubkey(peerIdx, cIdx uint32) [33]byte {
-	var b [33]byte
-	k := t.GetPubkey(UseChannelRefund, peerIdx, cIdx)
-	if k != nil {
-		copy(b[:], k.SerializeCompressed())
-	}
-	return b
-}
-
-// GetRefundPrivkey gives the private key for HAKD operations
-func (t *TxStore) GetHAKDBasePriv(peerIdx, cIdx uint32) *btcec.PrivateKey {
-	return t.GetPrivkey(UseChannelHAKDBase, peerIdx, cIdx)
-}
-
-// GetHAKDBasePoint gives the 33 byte serialized point for HAKD operations
-func (t *TxStore) GetHAKDBasePoint(peerIdx, cIdx uint32) [33]byte {
-	var b [33]byte
-	k := t.GetPubkey(UseChannelHAKDBase, peerIdx, cIdx)
-	if k != nil {
-		copy(b[:], k.SerializeCompressed())
-	}
-	return b
-}

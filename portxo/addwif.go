@@ -1,4 +1,4 @@
-package txoport
+package portxo
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"github.com/roasbeef/btcutil"
 )
 
-func (u *PortUtxo) AddWIF(w btcutil.WIF) error {
+func (u *PorTxo) AddWIF(w btcutil.WIF) error {
 	var err error
 
 	// check that WIF and utxo net ID match
@@ -22,11 +22,11 @@ func (u *PortUtxo) AddWIF(w btcutil.WIF) error {
 
 	// if TxoMode is set, check that compressed / uncompressed match
 	if u.Mode != TxoUnknownMode {
-		if w.CompressPubKey && u.Mode&FlagTxoCompress == 0 {
+		if w.CompressPubKey && u.Mode&FlagTxoCompressed == 0 {
 			return fmt.Errorf("utxo %s uncompressed, but WIF key is compressed",
 				u.Op.String())
 		}
-		if !w.CompressPubKey && u.Mode&FlagTxoCompress != 0 {
+		if !w.CompressPubKey && u.Mode&FlagTxoCompressed != 0 {
 			return fmt.Errorf("utxo %s compressed, but WIF key is uncompressed",
 				u.Op.String())
 		}

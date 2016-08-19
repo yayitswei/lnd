@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/lightningnetwork/lnd/elkrem"
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
@@ -98,17 +99,17 @@ an exact timing for the payment.
 */
 
 // Do math, see if this curve thing works.
-func Math(args []string) error {
-	priv := SCon.TS.GetChanPrivkey(5, 5)
-	fmt.Printf("initial priv: %x\n", priv.Serialize())
+//func Math(args []string) error {
+//	priv := SCon.TS.GetChanPrivkey(5, 5)
+//	fmt.Printf("initial priv: %x\n", priv.Serialize())
 
-	pubArr := SCon.TS.GetChanPubkey(5, 5)
-	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
-	fmt.Printf("initial  pub: %x\n", pub.SerializeCompressed())
-	//	for i := 0; i < 10000; i++ {
+//	pubArr := SCon.TS.GetChanPubkey(5, 5)
+//	pub, _ := btcec.ParsePubKey(pubArr[:], btcec.S256())
+//	fmt.Printf("initial  pub: %x\n", pub.SerializeCompressed())
+//	//	for i := 0; i < 10000; i++ {
 
-	return nil
-}
+//	return nil
+//}
 
 func FundChannel(args []string) error {
 	if len(args) < 2 {
@@ -184,9 +185,18 @@ func PointReqHandler(from [16]byte, pointReqBytes []byte) {
 		fmt.Printf("PointReqHandler err %s", err.Error())
 		return
 	}
-	myChanPub := SCon.TS.GetChanPubkey(peerIdx, cIdx)
-	myRefundPub := SCon.TS.GetRefundPubkey(peerIdx, cIdx)
-	myHAKDbase := SCon.TS.GetHAKDBasePoint(peerIdx, cIdx)
+
+	var kg portxo.KeyGen
+	kg.Depth = 5
+	kg.Step[0] = 44 + 0x80000000
+	kg.Step[1] = 0 + 0x80000000
+	kg.Step[2] = uspv.UseChannelFund
+	kg.Step[3] = peerIdx + 0x80000000
+	kg.Step[4] = cIdx + 0x80000000
+
+	myChanPub := SCon.TS.GetUsePub(kg, uspv.UseChannelFund)
+	myRefundPub := SCon.TS.GetUsePub(kg, uspv.UseChannelRefund)
+	myHAKDbase := SCon.TS.GetUsePub(kg, uspv.UseChannelHAKDBase)
 	fmt.Printf("Generated pubkey %x\n", myChanPub)
 
 	msg := []byte{uspv.MSGID_POINTRESP}
@@ -462,7 +472,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// clear this channel from FundChanStash
 	// currently one per peer at a time
 	for i, stashChan := range FundChanStash {
-		if stashChan.PeerIdx == qc.PeerIdx {
+		if stashChan.PeerIdx == qc.KeyGen.Step[3] {
 			FundChanStash = append(FundChanStash[:i], FundChanStash[i+1:]...)
 		}
 	}

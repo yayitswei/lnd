@@ -15,6 +15,7 @@ import (
 	"github.com/roasbeef/btcutil"
 
 	"github.com/lightningnetwork/lnd/lndc"
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -75,7 +76,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 921500 // hardcoded; later base on keyfile date?
+		tip = 922500 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -255,13 +256,7 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	if cmd == "math" {
-		err = Math(args)
-		if err != nil {
-			fmt.Printf("math error: %s\n", err)
-		}
-		return nil
-	}
+
 	fmt.Printf("Command not recognized. type help for command list.\n")
 	return nil
 }
@@ -461,10 +456,11 @@ func Bal(args []string) error {
 			fmt.Printf("CHANNEL")
 		}
 		fmt.Printf(" %s h:%d (%d,%d) cap: %d\n",
-			q.Op.Hash.String(), q.AtHeight, q.PeerIdx, q.KeyIdx, q.Value)
+			q.Op.Hash.String(), q.Height,
+			q.KeyGen.Step[3], q.KeyGen.Step[4], q.Value)
 	}
 	fmt.Printf(" ----- utxos ----- \n")
-	var allUtxos uspv.SortableUtxoSlice
+	var allUtxos portxo.TxoSliceByAmt
 	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
@@ -475,16 +471,16 @@ func Bal(args []string) error {
 	var score, confScore int64
 	for i, u := range allUtxos {
 		fmt.Printf("utxo %d %s h:%d k:%d a %d",
-			i, u.Op.String(), u.AtHeight, u.KeyIdx, u.Value)
-		if u.SpendLag != 0 {
-			fmt.Printf(" s:%d", u.SpendLag)
+			i, u.Op.String(), u.Height, u.KeyGen.Step[3], u.KeyGen.Step[4])
+		if u.Seq != 0 {
+			fmt.Printf(" s:%d", u.Seq)
 		}
-		if u.PeerIdx != 0 {
-			fmt.Printf(" p:%d", u.PeerIdx)
+		if u.KeyGen.Step[3] != 0 {
+			fmt.Printf(" p:%d", u.KeyGen.Step[3])
 		}
 		fmt.Printf("\n")
 		score += u.Value
-		if u.AtHeight != 0 {
+		if u.Height != 0 {
 			confScore += u.Value
 		}
 	}
@@ -584,7 +580,7 @@ func Sweep(args []string) error {
 		return fmt.Errorf("can't send %d txs", numTxs)
 	}
 
-	var allUtxos uspv.SortableUtxoSlice
+	var allUtxos portxo.TxoSliceByAmt
 	allUtxos, err = SCon.TS.GetAllUtxos()
 	if err != nil {
 		return err
@@ -594,7 +590,7 @@ func Sweep(args []string) error {
 
 	if len(args) == 2 {
 		for i, u := range allUtxos {
-			if u.AtHeight != 0 && u.Value > 10000 {
+			if u.Height != 0 && u.Value > 10000 {
 				tx, err := SCon.TS.SendOne(*allUtxos[i], adr)
 				if err != nil {
 					return err
@@ -614,7 +610,7 @@ func Sweep(args []string) error {
 	}
 	// now do bigSig drop drop drop
 	for i, u := range allUtxos {
-		if u.AtHeight != 0 {
+		if u.Height != 0 {
 			intx, outtx, err := SCon.TS.SendDrop(*allUtxos[i], adr)
 			if err != nil {
 				return err

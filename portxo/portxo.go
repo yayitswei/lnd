@@ -1,4 +1,4 @@
-package txoport
+package portxo
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/btcsuite/btcd/wire"
+	"github.com/roasbeef/btcd/wire"
 )
 
 type TxoMode uint8
@@ -14,34 +14,35 @@ type TxoMode uint8
 // Constants defining txo modes
 const (
 	// Flags which combined can turn into full utxo modes
-	FlagTxoPubKeyHash TxoMode = 0x01
-	FlagTxoCompress   TxoMode = 0x02
-	FlagTxoScript     TxoMode = 0x04
-	FlagTxoWitness    TxoMode = 0x08
+	FlagTxoPubKeyHash   TxoMode = 0x01
+	FlagTxoScript       TxoMode = 0x02
+	FlagTxoWitness      TxoMode = 0x04
+	FlagTxoCompressed   TxoMode = 0x08
+	FlagTxoUncompressed TxoMode = 0x10
 
-	// selectable tx output modes
+	// fully specified tx output modes
 	// raw pubkey outputs (old school)
-	TxoP2PKUncomp = 0
-	TxoP2PKComp   = FlagTxoCompress
+	TxoP2PKUncomp = FlagTxoUncompressed
+	TxoP2PKComp   = FlagTxoCompressed
 
 	// pub key hash outputs, standard p2pkh (common)
-	TxoP2PKHUncomp = FlagTxoPubKeyHash
-	TxoP2PKHComp   = FlagTxoCompress | FlagTxoPubKeyHash
+	TxoP2PKHUncomp = FlagTxoPubKeyHash | FlagTxoUncompressed
+	TxoP2PKHComp   = FlagTxoCompressed | FlagTxoPubKeyHash
 
 	// script hash
-	TxoP2SHUncomp = FlagTxoScript
-	TxoP2SHComp   = FlagTxoScript | FlagTxoCompress
+	TxoP2SHUncomp = FlagTxoScript | FlagTxoUncompressed
+	TxoP2SHComp   = FlagTxoScript | FlagTxoCompressed
 
 	// witness p2wpkh modes
-	TxoP2WPKHUncomp = FlagTxoWitness | FlagTxoPubKeyHash
-	TxoP2WPKHComp   = FlagTxoWitness | FlagTxoPubKeyHash | FlagTxoCompress
+	TxoP2WPKHUncomp = FlagTxoWitness | FlagTxoPubKeyHash | FlagTxoUncompressed
+	TxoP2WPKHComp   = FlagTxoWitness | FlagTxoPubKeyHash | FlagTxoCompressed
 
 	// witness script hash
-	TxoP2WSHUncomp = FlagTxoWitness | FlagTxoScript
-	TxoP2WSHComp   = FlagTxoWitness | FlagTxoScript | FlagTxoCompress
+	TxoP2WSHUncomp = FlagTxoWitness | FlagTxoScript | FlagTxoUncompressed
+	TxoP2WSHComp   = FlagTxoWitness | FlagTxoScript | FlagTxoCompressed
 
 	// unknown
-	TxoUnknownMode = 0xff
+	TxoUnknownMode = 0x80
 )
 
 var modeStrings = map[TxoMode]string{
@@ -74,64 +75,69 @@ func (m TxoMode) String() string {
 // it can be used with bip44 or other custom schemes (up to 5 levels deep)
 // Depth must be 0 to 5 inclusive.  Child indexes of 0 are OK, so we can't just
 // terminate at the first 0.
-type KeyDerivationPath struct {
-	Depth uint8
-	Level [5]uint32
+type KeyGen struct {
+	Depth   uint8     // how many levels of the path to use
+	Step    [5]uint32 // bip 32 / 44 path numbers
+	PrivKey [32]byte  // private key
 }
 
-// Bytes returns the 21 byte serialized key derivation path.
+// Bytes returns the 53 byte serialized key derivation path.
 // always works
-func (k KeyDerivationPath) Bytes() []byte {
+func (k KeyGen) Bytes() []byte {
 	var buf bytes.Buffer
 	binary.Write(&buf, binary.BigEndian, k.Depth)
-	binary.Write(&buf, binary.BigEndian, k.Level[0])
-	binary.Write(&buf, binary.BigEndian, k.Level[1])
-	binary.Write(&buf, binary.BigEndian, k.Level[2])
-	binary.Write(&buf, binary.BigEndian, k.Level[3])
-	binary.Write(&buf, binary.BigEndian, k.Level[4])
+	binary.Write(&buf, binary.BigEndian, k.Step[0])
+	binary.Write(&buf, binary.BigEndian, k.Step[1])
+	binary.Write(&buf, binary.BigEndian, k.Step[2])
+	binary.Write(&buf, binary.BigEndian, k.Step[3])
+	binary.Write(&buf, binary.BigEndian, k.Step[4])
+	buf.Write(k.PrivKey[:])
 	return buf.Bytes()
 }
 
-// turns a 21 byte array into a key derivation path.  Always works
-// (note a depth > 5 path is invalid, but this just deserializes & doesn't check.
-func KeyDerivationPathFromBytes(b [21]byte) (k KeyDerivationPath) {
+// turns a 53 byte array into a key derivation path.  Always works
+// (note a depth > 5 path is invalid, but this just deserializes & doesn't check)
+func KeyGenFromBytes(b [53]byte) (k KeyGen) {
 	buf := bytes.NewBuffer(b[:])
 	binary.Read(buf, binary.BigEndian, &k.Depth)
-	binary.Read(buf, binary.BigEndian, &k.Level[0])
-	binary.Read(buf, binary.BigEndian, &k.Level[1])
-	binary.Read(buf, binary.BigEndian, &k.Level[2])
-	binary.Read(buf, binary.BigEndian, &k.Level[3])
-	binary.Read(buf, binary.BigEndian, &k.Level[4])
+	binary.Read(buf, binary.BigEndian, &k.Step[0])
+	binary.Read(buf, binary.BigEndian, &k.Step[1])
+	binary.Read(buf, binary.BigEndian, &k.Step[2])
+	binary.Read(buf, binary.BigEndian, &k.Step[3])
+	binary.Read(buf, binary.BigEndian, &k.Step[4])
+	copy(k.PrivKey[:], buf.Next(32))
 	return
 }
 
 /* Utxos specify a utxo, and all the information needed to spend it.
 The first 3 fields (Op, Amt, Mode) are required in all cases.
-If KeyPath.Depth != 0, that means no key path is supplied, and PrivKey
-is probably empty / ignored.  Having both a KeyPath and a PrivKey is redunant.
-Having neither KeyPath nor PrivKey means there's no private key, and no
+If KeyGen.Depth != 0, that means no key path is supplied, and PrivKey
+is probably empty / ignored.  Having both a KeyGen and a PrivKey is redunant.
+Having neither KeyGen nor PrivKey means there's no private key, and no
 indication of how to get it; in that case get the private key from somewhere else.
+
+If BOTH KeyGen AND PrivKey are filled in, add em up!  Add the two private keys,
+modulo the curve order.
 
 PkScript can also be left empty depending on the mode.  Basically only script-hash
 modes need it, as the previous pkscript can be generated
 */
 
-type PortUtxo struct {
+type PorTxo struct {
 	NetID  byte          // indicates what network / coin utxo is in
 	Op     wire.OutPoint // unique outpoint
-	Amt    int64         // higher is better
-	Height uint32        // block height of utxo (not needed? nice to know?)
+	Value  int64         // higher is better
+	Height int32         // block height of utxo (not needed? nice to know?)
 	Seq    uint32        // used for relative timelock
 	Mode   TxoMode
 
-	PrivKey [32]byte
-	KeyPath KeyDerivationPath
+	KeyGen
 
 	PkScript []byte // for script-hash
 }
 
 // Compare deep-compares two portable utxos, returning true if they're the same
-func (u *PortUtxo) Equal(z *PortUtxo) bool {
+func (u *PorTxo) Equal(z *PorTxo) bool {
 	if u == nil || z == nil {
 		return false
 	}
@@ -145,13 +151,13 @@ func (u *PortUtxo) Equal(z *PortUtxo) bool {
 	if u.Op.Index != z.Op.Index {
 		return false
 	}
-	if u.Amt != z.Amt || u.Seq != z.Seq || u.Mode != z.Mode || u.Height != z.Height {
+	if u.Value != z.Value || u.Seq != z.Seq || u.Mode != z.Mode || u.Height != z.Height {
 		return false
 	}
-	if u.PrivKey != z.PrivKey {
+	if u.KeyGen.PrivKey != z.KeyGen.PrivKey {
 		return false
 	}
-	if !bytes.Equal(u.KeyPath.Bytes(), z.KeyPath.Bytes()) {
+	if !bytes.Equal(u.KeyGen.Bytes(), z.KeyGen.Bytes()) {
 		return false
 	}
 	if !bytes.Equal(u.PkScript, z.PkScript) {
@@ -161,7 +167,20 @@ func (u *PortUtxo) Equal(z *PortUtxo) bool {
 	return true
 }
 
-func (u *PortUtxo) String() string {
+func (k KeyGen) String() string {
+	var s string
+	s = fmt.Sprintf("\tkey derivation path: m")
+	for i := uint8(0); i < k.Depth; i++ {
+		if k.Step[i]&0x80000000 != 0 { // high bit means hardened
+			s += fmt.Sprintf(" / %d'", k.Step[i]&0x7fffffff)
+		} else {
+			s += fmt.Sprintf(" / %d", k.Step[i])
+		}
+	}
+	return s
+}
+
+func (u *PorTxo) String() string {
 	var s string
 	var empty [32]byte
 	if u == nil {
@@ -169,31 +188,23 @@ func (u *PortUtxo) String() string {
 	}
 	s = u.Op.String()
 	s += fmt.Sprintf("\n\tnet:%x a:%d h:%d seq:%d %s\n",
-		u.NetID, u.Amt, u.Height, u.Seq, u.Mode.String())
+		u.NetID, u.Value, u.Height, u.Seq, u.Mode.String())
 
-	if u.PrivKey == empty {
+	if u.KeyGen.PrivKey == empty {
 		s += fmt.Sprintf("\tprivate key not available (zero)\n")
 	} else {
 		s += fmt.Sprintf("\tprivate key available (non-zero)\n")
 	}
-	if u.KeyPath.Depth == 0 || u.KeyPath.Depth > 5 {
+	if u.KeyGen.Depth == 0 || u.KeyGen.Depth > 5 {
 		s += fmt.Sprintf("\tno key derivation path\n")
 	} else {
-		s += fmt.Sprintf("\tkey derivation path: m")
-		for i := uint8(0); i < u.KeyPath.Depth; i++ {
-			if u.KeyPath.Level[i]&0x80000000 != 0 { // high bit means hardened
-				s += fmt.Sprintf(" / %d'", u.KeyPath.Level[i]&0x7fffffff)
-			} else {
-				s += fmt.Sprintf(" / %d", u.KeyPath.Level[i])
-			}
-		}
-		s += fmt.Sprintf("\n")
+		s += fmt.Sprintf("%s\n", u.KeyGen.String())
 	}
 	s += fmt.Sprintf("\tPkScript (len %d): %x\n", len(u.PkScript), u.PkScript)
 	return s
 }
 
-/* serialized (im/ex)Portable Utxos are 103 up to 358 bytes.
+/* serialized (im/ex)Portable Utxos are 107 up to 358 bytes.
 NetID 1
 Op 36
 Amt 8
@@ -202,17 +213,17 @@ Seq 4
 Mode 1
 Priv 32
 Path 21
-Script (0 to 255) starts at byte 107, ends at 106+PKlen
+Script (0 to 255) starts at byte 107, ends at 107+PKlen
 */
 
-func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
+func PorTxoFromBytes(b []byte) (*PorTxo, error) {
 	if len(b) < 107 || len(b) > 362 {
 		return nil, fmt.Errorf("%d bytes, need 103-358", len(b))
 	}
 
 	buf := bytes.NewBuffer(b)
 
-	var u PortUtxo
+	var u PorTxo
 	var err error
 
 	u.NetID, err = buf.ReadByte()
@@ -227,7 +238,7 @@ func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = binary.Read(buf, binary.BigEndian, &u.Amt)
+	err = binary.Read(buf, binary.BigEndian, &u.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -243,17 +254,16 @@ func PortUtxoFromBytes(b []byte) (*PortUtxo, error) {
 	if err != nil {
 		return nil, err
 	}
-	copy(u.PrivKey[:], buf.Next(32))
 
-	var kdparr [21]byte
-	copy(kdparr[:], buf.Next(21))
-	u.KeyPath = KeyDerivationPathFromBytes(kdparr)
+	var kgenarr [53]byte
+	copy(kgenarr[:], buf.Next(53))
+	u.KeyGen = KeyGenFromBytes(kgenarr)
 
 	u.PkScript = buf.Bytes()
 	return &u, nil
 }
 
-func (u *PortUtxo) Bytes() ([]byte, error) {
+func (u *PorTxo) Bytes() ([]byte, error) {
 	if u == nil {
 		return nil, errors.New("Can't serialize nil Utxo")
 	}
@@ -271,7 +281,7 @@ func (u *PortUtxo) Bytes() ([]byte, error) {
 		return nil, err
 	}
 
-	err = binary.Write(&buf, binary.BigEndian, u.Amt)
+	err = binary.Write(&buf, binary.BigEndian, u.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -287,11 +297,7 @@ func (u *PortUtxo) Bytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = buf.Write(u.PrivKey[:]) // privkey
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write(u.KeyPath.Bytes()) // keypath
+	_, err = buf.Write(u.KeyGen.Bytes()) // keypath
 	if err != nil {
 		return nil, err
 	}

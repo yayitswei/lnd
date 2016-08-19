@@ -1,12 +1,12 @@
 package uspv
 
 import (
-	"bytes"
 	"crypto/rand"
 	"fmt"
 	"log"
 	"sort"
 
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
@@ -55,7 +55,7 @@ func (s *SPVCon) GrabAll() error {
 	// currently grabs only confirmed txs.
 	nothin := true
 	for _, u := range utxos {
-		if u.SpendLag == -1 && u.AtHeight > 0 { // grabbable
+		if u.Seq == 1 && u.Height > 0 { // grabbable
 			tx, err := s.TS.GrabUtxo(u)
 			if err != nil {
 				return err
@@ -71,48 +71,6 @@ func (s *SPVCon) GrabAll() error {
 		fmt.Printf("Nothing to grab\n")
 	}
 	return nil
-}
-
-// make utxo slices sortable -- same as txsort
-type utxoSlice []Utxo
-
-// Sort utxos just like txins -- Len, Less, Swap
-func (s utxoSlice) Len() int      { return len(s) }
-func (s utxoSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-// outpoint sort; First input hash (reversed / rpc-style), then index.
-func (s utxoSlice) Less(i, j int) bool {
-	// Input hashes are the same, so compare the index.
-	ihash := s[i].Op.Hash
-	jhash := s[j].Op.Hash
-	if ihash == jhash {
-		return s[i].Op.Index < s[j].Op.Index
-	}
-	// At this point, the hashes are not equal, so reverse them to
-	// big-endian and return the result of the comparison.
-	const hashSize = wire.HashSize
-	for b := 0; b < hashSize/2; b++ {
-		ihash[b], ihash[hashSize-1-b] = ihash[hashSize-1-b], ihash[b]
-		jhash[b], jhash[hashSize-1-b] = jhash[hashSize-1-b], jhash[b]
-	}
-	return bytes.Compare(ihash[:], jhash[:]) == -1
-}
-
-type SortableUtxoSlice []*Utxo
-
-// utxoByAmts get sorted by utxo value. also put unconfirmed last
-func (s SortableUtxoSlice) Len() int      { return len(s) }
-func (s SortableUtxoSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-// height 0 means your lesser
-func (s SortableUtxoSlice) Less(i, j int) bool {
-	if s[i].AtHeight == 0 && s[j].AtHeight > 0 {
-		return true
-	}
-	if s[j].AtHeight == 0 && s[i].AtHeight > 0 {
-		return false
-	}
-	return s[i].Value < s[j].Value
 }
 
 // NewOutgoingTx runs a tx though the db first, then sends it out to the network.
@@ -141,14 +99,15 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 // PickUtxos Picks Utxos for spending.  Tell it how much money you want.
 // It returns a tx-sortable utxoslice, and the overshoot amount.  Also errors.
 // if "ow" is true, only gives witness utxos (for channel funding)
-func (ts *TxStore) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error) {
+func (ts *TxStore) PickUtxos(
+	amtWanted int64, ow bool) (portxo.TxoSliceByBip69, int64, error) {
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
 	curHeight, err := ts.GetDBSyncHeight()
 	if err != nil {
 		return nil, 0, err
 	}
 
-	var allUtxos SortableUtxoSlice
+	var allUtxos portxo.TxoSliceByAmt
 	allUtxos, err = ts.GetAllUtxos()
 	if err != nil {
 		return nil, 0, err
@@ -158,7 +117,7 @@ func (ts *TxStore) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error)
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
 
-	var rSlice utxoSlice
+	var rSlice portxo.TxoSliceByBip69
 	// add utxos until we've had enough
 	nokori := amtWanted // nokori is how much is needed on input side
 	for _, utxo := range allUtxos {
@@ -166,11 +125,11 @@ func (ts *TxStore) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error)
 		//		if utxo.AtHeight == 0 {
 		//			continue
 		//		}
-		if utxo.SpendLag > 1 &&
-			(utxo.AtHeight < 100 || utxo.AtHeight+utxo.SpendLag > curHeight) {
+		if utxo.Seq > 1 &&
+			(utxo.Height < 100 || utxo.Height+int32(utxo.Seq) > curHeight) {
 			continue // skip immature or unconfirmed time-locked sh outputs
 		}
-		if ow && utxo.SpendLag == 0 {
+		if ow && utxo.Seq == 0 {
 			continue // skip non-witness
 		}
 		// why are 0-value outputs a thing..?
@@ -184,7 +143,7 @@ func (ts *TxStore) PickUtxos(amtWanted int64, ow bool) (utxoSlice, int64, error)
 		if nokori < 0 {
 			var byteSize int64
 			for _, txo := range rSlice {
-				if txo.SpendLag > 0 {
+				if txo.Mode&portxo.FlagTxoWitness != 0 {
 					byteSize += 70 // vsize of wit inputs is ~68ish
 				} else {
 					byteSize += 130 // vsize of non-wit input is ~130
@@ -219,7 +178,8 @@ func (t *TxStore) GrabTx(qc *Qchan, idx uint64) (*wire.MsgTx, error) {
 // all it does is waste space.  Kindof useless.
 // Returns the 2nd, large tx's txid.
 // Probably doesn't work with time-locked.  Doesn't really matter.
-func (ts *TxStore) SendDrop(u Utxo, adr btcutil.Address) (*wire.MsgTx, *wire.MsgTx, error) {
+func (ts *TxStore) SendDrop(
+	u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, *wire.MsgTx, error) {
 	var err error
 	// fixed fee
 	fee := int64(5000)
@@ -245,17 +205,16 @@ func (ts *TxStore) SendDrop(u Utxo, adr btcutil.Address) (*wire.MsgTx, *wire.Msg
 
 	// build input
 	var prevPKs []byte
-	if u.SpendLag > 0 {
-		//		tx.Flags = 0x01
+	if u.Mode&portxo.FlagTxoWitness != 0 {
 		wa, err := btcutil.NewAddressWitnessPubKeyHash(
-			ts.Adrs[u.KeyIdx].PkhAdr.ScriptAddress(), ts.Param)
+			ts.Adrs[u.KeyGen.Step[4]].PkhAdr.ScriptAddress(), ts.Param)
 		prevPKs, err = txscript.PayToAddrScript(wa)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else { // otherwise generate directly
 		prevPKs, err = txscript.PayToAddrScript(
-			ts.Adrs[u.KeyIdx].PkhAdr)
+			ts.Adrs[u.KeyGen.Step[4]].PkhAdr)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -266,14 +225,14 @@ func (ts *TxStore) SendDrop(u Utxo, adr btcutil.Address) (*wire.MsgTx, *wire.Msg
 	var wit [][]byte
 	hCache := txscript.NewTxSigHashes(tx)
 
-	priv := ts.GetWalletPrivkey(u.KeyIdx)
+	priv := ts.PathPrivkey(u.KeyGen)
 	if priv == nil {
 		return nil, nil, fmt.Errorf("SendDrop: nil privkey")
 	}
 
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.SpendLag > 0 {
+	if u.Mode&portxo.FlagTxoWitness != 0 {
 		wit, err = txscript.WitnessScript(
 			tx, hCache, 0, u.Value, tx.TxIn[0].SignatureScript,
 			txscript.SigHashAll, priv, true)
@@ -330,7 +289,7 @@ func (ts *TxStore) SendDrop(u Utxo, adr btcutil.Address) (*wire.MsgTx, *wire.Msg
 
 // SendOne is for the sweep function, and doesn't do change.
 // Probably can get rid of this for real txs.
-func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
+func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, error) {
 	var prevScript []byte
 
 	// fixed fee
@@ -353,9 +312,10 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 	priv := new(btcec.PrivateKey)
 
 	// pick key
-	if u.PeerIdx == 0 {
-		priv = ts.GetWalletPrivkey(u.KeyIdx)
-	} else {
+	//	if u.KeyGen.Step[3]&0x7fffffff == 0 {
+	priv = ts.PathPrivkey(u.KeyGen)
+	// shouldn't need this anymore as elkrem is baked in
+	/*} else {
 		// non-zero peer, channel PKH refund; get channel info to add elkrem
 		qc, err := ts.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
 		if err != nil {
@@ -373,13 +333,14 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		priv = ts.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
 		// add elkrem sender hash for the state index
 		PrivKeyAddBytes(priv, elkHashR.Bytes())
-	}
+	}*/
+
 	if priv == nil {
 		return nil, fmt.Errorf("SendCoins: nil privkey")
 	}
 	hCache := txscript.NewTxSigHashes(tx)
-	if u.SpendLag > 1 { // time-delay p2wsh
-		if u.AtHeight < 100 {
+	if u.Seq > 1 { // time-delay p2wsh
+		if u.Height < 100 {
 			return nil, fmt.Errorf("Can't spend %s, timelocked and unconfirmed",
 				u.Op.String())
 		}
@@ -387,66 +348,71 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		if u.AtHeight+u.SpendLag > curHeight {
+		if u.Height+int32(u.Seq) > curHeight {
 			return nil, fmt.Errorf(
 				"Can't spend %s; spenable at height %d (%d + %d delay) but now %d",
 				u.Op.String(),
-				u.AtHeight+u.SpendLag, u.AtHeight, u.SpendLag, curHeight)
+				u.Height+int32(u.Seq), u.Height, u.Seq, curHeight)
 		}
 		// got here; possible to spend.  But need the previous script
 		// first get the channel data
-		qc, err := ts.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
-		if err != nil {
-			return nil, err
-		}
+
+		priv = ts.PathPrivkey(u.KeyGen)
+		// I think that's it and we don't need this stuff
+
 		// I need the pubkeys.  I haven't given them the revocation
 		// elkrem hash so they haven't been able to spend, and the delay is over.
 		// (this assumes the state matches the tx being spent.  It won't
 		// work if you're spending from an invalid close that you made.)
+		/*
+			qc, err := ts.GetQchanByIdx(u.KeyGen.Step[3], u.KeyGen.Step[4])
+			if err != nil {
+				return nil, err
+			}
+			// get the current state elkrem point R (their revocable point)
+			elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
+			if err != nil {
+				return nil, err
+			}
 
-		// get the current state elkrem point R (their revocable point)
-		elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
-		if err != nil {
-			return nil, err
-		}
+			// get my elkrem T-hash to add to my HAKD base for the timeout key
+			elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+			if err != nil {
+				return nil, err
+			}
+			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
 
-		// get my elkrem T-hash to add to my HAKD base for the timeout key
-		elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-		if err != nil {
-			return nil, err
-		}
-		elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
+			// get my HAKD base scalar; overwrite priv
+			// priv changes here (add their T hash)
+			// dont need anymore
+			// PrivKeyAddBytes(priv, elkHashT.Bytes())
+			// make sure priv is non-nil.  may be redundant
+			if priv == nil {
+				return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
+			}
 
-		// get my HAKD base scalar; overwrite priv
-		priv = ts.GetHAKDBasePriv(u.PeerIdx, u.KeyIdx)
-		// priv changes here (add their T hash)
-		PrivKeyAddBytes(priv, elkHashT.Bytes())
-		// make sure priv is non-nil.  may be redundant
-		if priv == nil {
-			return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
-		}
+			// make pubkeys for the script
+			theirHAKDpub := qc.TheirHAKDBase
+			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
+			theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
 
-		// make pubkeys for the script
-		theirHAKDpub := qc.TheirHAKDBase
-		// Construct the revokable pubkey by adding elkrem point R to their HAKD base
-		theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
+			var myTimeoutPub [33]byte
+			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
 
-		var myTimeoutPub [33]byte
-		copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
+			// need the previous script. ignore builder error
+			prevScript, _ = CommitScript2(
+				theirHAKDpub, myTimeoutPub, uint16(u.Seq))
 
-		// need the previous script. ignore builder error
-		prevScript, _ = CommitScript2(
-			theirHAKDpub, myTimeoutPub, uint16(u.SpendLag))
-
-		scriptHash := P2WSHify(prevScript) // p2wsh-ify to check
-		fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
+			scriptHash := P2WSHify(prevScript) // p2wsh-ify to check
+			fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
+		*/
 		// set the sequence field so the OP_CSV works
-		tx.TxIn[0].Sequence = uint32(u.SpendLag)
+		tx.TxIn[0].Sequence = u.Seq
 		// make new hash cache for this tx with sequence
 		hCache = txscript.NewTxSigHashes(tx)
 		// sign with channel refund key and prevScript
 		tsig, err := txscript.RawTxInWitnessSignature(
-			tx, hCache, 0, u.Value, prevScript, txscript.SigHashAll, priv)
+			tx, hCache, 0, u.Value, u.PkScript, txscript.SigHashAll, priv)
 		if err != nil {
 			return nil, err
 		}
@@ -459,7 +425,7 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 	}
 	// This is where witness based sighash types need to happen
 	// sign into stash
-	if u.SpendLag == 0 { // non-witness pkh
+	if u.Mode == portxo.TxoP2PKHComp { // non-witness pkh
 		prevAdr, err := btcutil.NewAddressPubKeyHash(
 			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 		if err != nil {
@@ -475,7 +441,7 @@ func (ts *TxStore) SendOne(u Utxo, adr btcutil.Address) (*wire.MsgTx, error) {
 			return nil, err
 		}
 	}
-	if u.SpendLag == 1 { // witness pkh
+	if u.Mode == portxo.TxoP2WPKHComp { // witness pkh
 		prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
 			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
 		if err != nil {
@@ -573,8 +539,8 @@ func (ts *TxStore) SendCoins(
 
 	// set the txin sequence field so the OP_CSV works. (always in blocks)
 	for i, u := range utxos {
-		if u.SpendLag > 1 {
-			tx.TxIn[i].Sequence = uint32(u.SpendLag)
+		if u.Seq > 1 {
+			tx.TxIn[i].Sequence = u.Seq
 		}
 	}
 
@@ -582,26 +548,28 @@ func (ts *TxStore) SendCoins(
 	hCache := txscript.NewTxSigHashes(tx)
 
 	for i, _ := range tx.TxIn {
-		// pick key
-		priv := new(btcec.PrivateKey)
-		if utxos[i].PeerIdx == 0 {
-			priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
-		} else {
-			// non-zero peer, channel PKH refund; get channel info to add elkrem
-			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			if err != nil {
-				return nil, err
-			}
-			// get the current state sender elkrem hash
-			elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-			if err != nil {
-				return nil, err
-			}
-			// generate refund private key from indexes
-			priv = ts.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			// add elkrem sender hash for the state index
-			PrivKeyAddBytes(priv, elk.Bytes())
-		}
+		// get key
+		priv := ts.PathPrivkey(utxos[i].KeyGen)
+
+		/*		if utxos[i].PeerIdx == 0 {
+					priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
+				} else {
+					// non-zero peer, channel PKH refund; get channel info to add elkrem
+					qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
+					if err != nil {
+						return nil, err
+					}
+					// get the current state sender elkrem hash
+					elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
+					if err != nil {
+						return nil, err
+					}
+					// generate refund private key from indexes
+					priv = ts.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
+					// add elkrem sender hash for the state index
+					PrivKeyAddBytes(priv, elk.Bytes())
+				}
+		*/
 		if priv == nil {
 			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
@@ -609,39 +577,32 @@ func (ts *TxStore) SendCoins(
 		// sign into stash.  4 possibilities:  PKH, WPKH, elk-WPKH, timelock WSH
 		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
 		// (maybe too risky to allow those to be normal txins...)
-		if utxos[i].SpendLag == 0 { // legacy PKH
-			prevAdr, err := btcutil.NewAddressPubKeyHash(
-				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
-			if err != nil {
-				return nil, err
-			}
-			prevScript, err := txscript.PayToAddrScript(prevAdr)
-			if err != nil {
-				return nil, err
-			}
+		if utxos[i].Mode == portxo.TxoP2PKHComp { // legacy PKH
 			sigStash[i], err = txscript.SignatureScript(tx, i,
-				prevScript, txscript.SigHashAll, priv, true)
+				utxos[i].PkScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
 		}
-		if utxos[i].SpendLag == 1 { // normal witness PKH
-			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
-			if err != nil {
-				return nil, err
-			}
-			prevScript, err := txscript.PayToAddrScript(prevAdr)
-			if err != nil {
-				return nil, err
-			}
+		if utxos[i].Mode&portxo.FlagTxoWitness != 0 { // witnessy
+			//			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
+			//				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
+			//			if err != nil {
+			//				return nil, err
+			//			}
+			//			prevScript, err := txscript.PayToAddrScript(prevAdr)
+			//			if err != nil {
+			//				return nil, err
+			//			}
 			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
-				utxos[i].Value, prevScript, txscript.SigHashAll, priv, true)
+				utxos[i].Value, utxos[i].PkScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
 		}
-		if utxos[i].SpendLag > 1 { // witness, time-locked SH
+
+		/* ==== can get rid of all this.  I think.
+		if utxos[i].Mode == portxo.TxoP2WSHComp { // witness, time-locked SH
 			// this utxo is returned by PickUtxos() so should be ready to spend
 			// first get the channel data
 			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
@@ -700,6 +661,7 @@ func (ts *TxStore) SendCoins(
 			witStash[i][1] = prevScript
 			// all set
 		}
+		*/
 	}
 	// swap sigs into sigScripts in txins
 	for i, txin := range tx.TxIn {

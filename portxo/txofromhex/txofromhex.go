@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/wire"
-	"github.com/lightningnetwork/lnd/txoport"
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcutil"
 )
 
@@ -35,7 +35,7 @@ func main() {
 	}
 
 	tx := wire.NewMsgTx()
-	u := new(txoport.PortUtxo)
+	u := new(portxo.PorTxo)
 
 	// load file from disk
 	filehex, err := ioutil.ReadFile(os.Args[1])
@@ -57,7 +57,7 @@ func main() {
 	err = tx.DeserializeWitness(txbuf)
 	if err != nil { // ok, didn't work as a tx, try a utxo
 
-		u, err = txoport.PortUtxoFromBytes(fileslice)
+		u, err = portxo.PorTxoFromBytes(fileslice)
 		if err != nil {
 			log.Fatal("file wasn't a tx, and wasn't a utxo! %s\n", err.Error())
 		}
@@ -82,7 +82,7 @@ func main() {
 	}
 	idx := uint32(idxint)
 
-	u, err = txoport.ExtractFromTx(tx, idx)
+	u, err = portxo.ExtractFromTx(tx, idx)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/lightningnetwork/lnd/elkrem"
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
@@ -185,7 +186,23 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		//		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
 		//		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
-		myChanPub := ts.GetChanPubkey(peerIdx, cIdx)
+		// make new Qchan
+		var qc Qchan
+		qc.TheirPub = theirPub
+		qc.TheirRefundPub = theirRefund
+		qc.TheirHAKDBase = theirHAKDbase
+		qc.Height = -1
+		qc.KeyGen.Depth = 5
+		qc.KeyGen.Step[0] = 44 + 0x80000000
+		qc.KeyGen.Step[1] = 0 + 0x80000000
+		qc.KeyGen.Step[2] = UseChannelFund
+		qc.KeyGen.Step[3] = peerIdx + 0x80000000
+		qc.KeyGen.Step[4] = cIdx + 0x80000000
+		qc.Value = amt
+		qc.Mode = portxo.TxoP2WSHComp
+		qc.Op = *op
+
+		myChanPub := ts.GetUsePub(qc.KeyGen, UseChannelFund)
 
 		// generate multisig output from two pubkeys
 		multiTxOut, err := FundTxOut(theirPub, myChanPub, amt)
@@ -213,18 +230,6 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 			return err
 		}
 
-		var mUtxo Utxo      // create new utxo and copy into it
-		mUtxo.AtHeight = -1 // not even broadcast yet
-		mUtxo.KeyIdx = cIdx
-		mUtxo.PeerIdx = peerIdx
-		mUtxo.Value = amt
-		mUtxo.SpendLag = 1 // multi/chan always wit
-		mUtxo.Op = *op
-		var qc Qchan
-		qc.Utxo = mUtxo
-		qc.TheirPub = theirPub
-		qc.TheirRefundPub = theirRefund
-		qc.TheirHAKDBase = theirHAKDbase
 		// serialize multiOut
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -279,7 +284,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		if peerIdxBytes == nil {
 			return fmt.Errorf("SaveMultiTx: peer %x has no index? db bad", peerArr)
 		}
-		pIdx := BtU32(peerIdxBytes)
+		//		pIdx := BtU32(peerIdxBytes)
 		// use key counter here?
 		cIdx = CountKeysInBucket(pr) + 1
 
@@ -289,22 +294,24 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 			return err
 		}
 
-		var cUtxo Utxo      // create new utxo and copy into it
-		cUtxo.AtHeight = -1 // not even broadcast yet
-		cUtxo.KeyIdx = cIdx
-		cUtxo.PeerIdx = BtU32(peerIdxBytes)
-		cUtxo.Value = amt
-		cUtxo.SpendLag = 1 // multi/chan always wit
-		cUtxo.Op = *op
+		qc.Height = -1
+		qc.KeyGen.Depth = 5
+		qc.KeyGen.Step[0] = 44 + 0x80000000
+		qc.KeyGen.Step[1] = 0 + 0x80000000
+		qc.KeyGen.Step[2] = UseChannelFund
+		qc.KeyGen.Step[3] = BtU32(peerIdxBytes) + 0x80000000
+		qc.KeyGen.Step[4] = cIdx + 0x80000000
+		qc.Value = amt
+		qc.Mode = portxo.TxoP2WSHComp
+		qc.Op = *op
 
-		qc.Utxo = cUtxo
-		qc.MyPub = ts.GetChanPubkey(pIdx, cIdx)
+		qc.MyPub = ts.GetUsePub(qc.KeyGen, UseChannelFund)
 		qc.TheirPub = theirChanPub
 		qc.PeerId = peerArr
 		qc.TheirRefundPub = theirRefund
 		qc.TheirHAKDBase = theirHAKDbase
-		qc.MyRefundPub = ts.GetRefundPubkey(qc.PeerIdx, cIdx)
-		qc.MyHAKDBase = ts.GetHAKDBasePoint(qc.PeerIdx, cIdx)
+		qc.MyRefundPub = ts.GetUsePub(qc.KeyGen, UseChannelRefund)
+		qc.MyHAKDBase = ts.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -439,14 +446,15 @@ func (ts *TxStore) RestoreQchanFromBucket(
 		return nil, err
 	}
 	// note that peerIndex is not set from deserialization!  set it here!
-	qc.PeerIdx = peerIdx
+	// I think it is now because the whole path is in there
+	//	qc.KeyGen.Step[3] = peerIdx
 	copy(qc.PeerId[:], peerPub)
 	// get my channel pubkey
-	qc.MyPub = ts.GetChanPubkey(qc.PeerIdx, qc.KeyIdx)
+	qc.MyPub = ts.GetUsePub(qc.KeyGen, UseChannelFund)
 
 	// derive my refund / base point from index
-	qc.MyRefundPub = ts.GetRefundPubkey(peerIdx, qc.KeyIdx)
-	qc.MyHAKDBase = ts.GetHAKDBasePoint(peerIdx, qc.KeyIdx)
+	qc.MyRefundPub = ts.GetUsePub(qc.KeyGen, UseChannelRefund)
+	qc.MyHAKDBase = ts.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
 	qc.State = new(StatCom)
 
 	// load state.  If it exists.
@@ -471,7 +479,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	}
 
 	// derive elkrem sender root from HD keychain
-	r := ts.GetElkremRoot(peerIdx, qc.KeyIdx)
+	r := ts.GetElkremRoot(qc.KeyGen)
 	// set sender
 	qc.ElkSnd = elkrem.NewElkremSender(r)
 
@@ -749,7 +757,7 @@ func (ts *TxStore) GetQGlobalIdFromIdx(
 					if err != nil {
 						return err
 					}
-					if nqc.KeyIdx == cIdx { // hit; done
+					if nqc.KeyGen.Step[4] == cIdx { // hit; done
 						pubBytes = idPub
 						opBytes = op
 					}
@@ -974,7 +982,7 @@ peeridx is inferred from position in db.
 func (q *Qchan) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	// first serialize the utxo part
-	uBytes, err := q.Utxo.ToBytes()
+	uBytes, err := q.PorTxo.Bytes()
 	if err != nil {
 		return nil, err
 	}
@@ -1010,20 +1018,20 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 159 {
+	if len(b) < 206 {
 		return q, fmt.Errorf("Got %d bytes for qchan, expect 159", len(b))
 	}
 
-	u, err := UtxoFromBytes(b[:60])
+	u, err := portxo.PorTxoFromBytes(b[:106])
 	if err != nil {
 		return q, err
 	}
 
-	q.Utxo = u // assign the utxo
+	q.PorTxo = *u // assign the utxo
 
-	copy(q.TheirPub[:], b[60:93])
-	copy(q.TheirRefundPub[:], b[93:126])
-	copy(q.TheirHAKDBase[:], b[126:])
+	copy(q.TheirPub[:], b[107:140])
+	copy(q.TheirRefundPub[:], b[140:173])
+	copy(q.TheirHAKDBase[:], b[173:])
 
 	return q, nil
 }

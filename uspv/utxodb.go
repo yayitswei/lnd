@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
@@ -177,8 +178,8 @@ func (ts *TxStore) GetDBSyncHeight() (int32, error) {
 }
 
 // GetAllUtxos returns a slice of all utxos known to the db. empty slice is OK.
-func (ts *TxStore) GetAllUtxos() ([]*Utxo, error) {
-	var utxos []*Utxo
+func (ts *TxStore) GetAllUtxos() ([]*portxo.PorTxo, error) {
+	var utxos []*portxo.PorTxo
 	err := ts.StateDB.View(func(btx *bolt.Tx) error {
 		duf := btx.Bucket(BKTUtxos)
 		if duf == nil {
@@ -192,12 +193,12 @@ func (ts *TxStore) GetAllUtxos() ([]*Utxo, error) {
 			x := make([]byte, len(k)+len(v))
 			copy(x, k)
 			copy(x[len(k):], v)
-			newU, err := UtxoFromBytes(x)
+			newU, err := portxo.PorTxoFromBytes(x)
 			if err != nil {
 				return err
 			}
 			// and add it to ram
-			utxos = append(utxos, &newU)
+			utxos = append(utxos, newU)
 			return nil
 		})
 	})
@@ -333,7 +334,7 @@ func (ts *TxStore) GetPendingInv() (*wire.MsgInv, error) {
 
 	// iterate through utxos, adding txids of anything with height 0
 	for _, utxo := range utxos {
-		if utxo.AtHeight == 0 {
+		if utxo.Height == 0 {
 			txidMap[utxo.Op.Hash] = struct{}{} // adds to map
 		}
 	}
@@ -455,21 +456,29 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		for j, out := range tx.TxOut {
 			for k, ascr := range aPKscripts {
 				// detect p2wpkh
-				spendableBy := int32(0)
+				var mode portxo.TxoMode
 				if bytes.Equal(out.PkScript, wPKscripts[k]) {
-					spendableBy = 1
+					mode = portxo.TxoP2WPKHComp
 				}
-				if bytes.Equal(out.PkScript, ascr) || spendableBy == 1 { // found one
-					var newu Utxo // create new utxo and copy into it
-					newu.AtHeight = height
-					newu.KeyIdx = ts.Adrs[k].KeyIdx
+				if bytes.Equal(out.PkScript, ascr) {
+					mode = portxo.TxoP2PKHComp
+				}
+				if mode != 0 { // found one
+					var newu portxo.PorTxo // create new utxo and copy into it
+					newu.Height = height
+					newu.KeyGen.Depth = 5
+					newu.KeyGen.Step[0] = 44 + 0x80000000
+					newu.KeyGen.Step[1] = 0 + 0x80000000
+					newu.KeyGen.Step[2] = UseWallet
+					newu.KeyGen.Step[3] = 0x80000000
+					newu.KeyGen.Step[4] = ts.Adrs[k].KeyIdx + 0x80000000
+
 					newu.Value = out.Value
-					newu.SpendLag = spendableBy // 1 for witness
-					var newop wire.OutPoint
-					newop.Hash = *cachedShas[i]
-					newop.Index = uint32(j)
-					newu.Op = newop
-					b, err := newu.ToBytes()
+					newu.Mode = mode
+					newu.Op.Hash = *cachedShas[i]
+					newu.Op.Index = uint32(j)
+
+					b, err := newu.Bytes()
 					if err != nil {
 						return hits, err
 					}
@@ -539,7 +548,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							// all we do is assign height and increment hits
 							// (which will save the tx)
 							hitTxs[i] = true
-							hitQChan.Utxo.AtHeight = height
+							hitQChan.Height = height
 							qcBytes, err := hitQChan.ToBytes()
 							if err != nil {
 								return err
@@ -569,9 +578,9 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							}
 
 							// need my pubkey too
-							// needed?
-							hitQChan.MyRefundPub = ts.GetRefundPubkey(
-								pIdx, hitQChan.KeyIdx)
+							// needed? already have this, right?
+							hitQChan.MyRefundPub = ts.GetUsePub(
+								hitQChan.KeyGen, UseChannelRefund)
 
 							// save to close bucket
 							err = qchanBucket.Put(KEYqclose, closeBytes)
@@ -585,7 +594,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 							}
 							// serialize utxos to save later
 							for _, ctxo := range ctxos {
-								b, err := ctxo.ToBytes()
+								b, err := ctxo.Bytes()
 								if err != nil {
 									return err
 								}
@@ -622,14 +631,14 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 				x := make([]byte, len(nOP)+len(v))
 				copy(x, nOP)
 				copy(x[len(nOP):], v)
-				lostTxo, err := UtxoFromBytes(x)
+				lostTxo, err := portxo.PorTxoFromBytes(x)
 				if err != nil {
 					return err
 				}
 
 				// after marking for deletion, save stxo to old bucket
 				var st Stxo                               // generate spent txo
-				st.Utxo = lostTxo                         // assign outpoint
+				st.PorTxo = *lostTxo                      // assign outpoint
 				st.SpendHeight = height                   // spent at height
 				st.SpendTxid = *cachedShas[spentTxIdx[i]] // spent by txid
 				stxb, err := st.ToBytes()                 // serialize

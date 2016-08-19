@@ -1,12 +1,12 @@
-package txoport
+package portxo
 
 import (
 	"fmt"
 
-	"github.com/btcsuite/btcd/wire"
+	"github.com/roasbeef/btcd/wire"
 )
 
-func ExtractFromTx(tx *wire.MsgTx, idx uint32) (*PortUtxo, error) {
+func ExtractFromTx(tx *wire.MsgTx, idx uint32) (*PorTxo, error) {
 	if tx == nil {
 		return nil, fmt.Errorf("nil tx")
 	}
@@ -15,12 +15,12 @@ func ExtractFromTx(tx *wire.MsgTx, idx uint32) (*PortUtxo, error) {
 			idx, len(tx.TxOut))
 	}
 
-	u := new(PortUtxo)
+	u := new(PorTxo)
 
 	u.Op.Hash = tx.TxSha()
 	u.Op.Index = idx
 
-	u.Amt = tx.TxOut[idx].Value
+	u.Value = tx.TxOut[idx].Value
 
 	/*
 		pks := tx.TxOut[idx].PkScript

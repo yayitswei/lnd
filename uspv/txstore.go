@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/boltdb/bolt"
+	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/wire"
@@ -29,7 +30,7 @@ type TxStore struct {
 	rootPrivKey *hdkeychain.ExtendedKey
 }
 
-type Utxo struct { // cash money.
+type Utxoz struct { // cash money.
 	Op wire.OutPoint // where
 
 	// all the info needed to spend
@@ -57,9 +58,9 @@ type Utxo struct { // cash money.
 
 // Stxo is a utxo that has moved on.
 type Stxo struct {
-	Utxo                     // when it used to be a utxo
-	SpendHeight int32        // height at which it met its demise
-	SpendTxid   wire.ShaHash // the tx that consumed it
+	portxo.PorTxo              // when it used to be a utxo
+	SpendHeight   int32        // height at which it met its demise
+	SpendTxid     wire.ShaHash // the tx that consumed it
 }
 
 type MyAdr struct { // an address I have the private key for
@@ -253,6 +254,7 @@ end len 	60
 // ToBytes turns a Utxo into some bytes.
 // note that the txid is the first 36 bytes and in our use cases will be stripped
 // off, but is left here for other applications
+/*
 func (u *Utxo) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
 	// write 32 byte txid of the utxo
@@ -344,7 +346,7 @@ func UtxoFromBytes(b []byte) (Utxo, error) {
 
 	return u, nil
 }
-
+*/
 /*----- serialization for stxos ------- */
 /* Stxo serialization:
 byte length   desc   at offset
@@ -360,8 +362,19 @@ end len 	89
 // prevUtxo serialization, then spendheight [4], spendtxid [32]
 func (s *Stxo) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
+
+	// write 4 byte height where the txo was spent
+	err := binary.Write(&buf, binary.BigEndian, s.SpendHeight)
+	if err != nil {
+		return nil, err
+	}
+	// write 32 byte txid of the spending transaction
+	_, err = buf.Write(s.SpendTxid.Bytes())
+	if err != nil {
+		return nil, err
+	}
 	// first serialize the utxo part
-	uBytes, err := s.Utxo.ToBytes()
+	uBytes, err := s.PorTxo.Bytes()
 	if err != nil {
 		return nil, err
 	}
@@ -371,37 +384,19 @@ func (s *Stxo) ToBytes() ([]byte, error) {
 		return nil, err
 	}
 
-	// write 4 byte height where the txo was spent
-	err = binary.Write(&buf, binary.BigEndian, s.SpendHeight)
-	if err != nil {
-		return nil, err
-	}
-	// write 32 byte txid of the spending transaction
-	_, err = buf.Write(s.SpendTxid.Bytes())
-	if err != nil {
-		return nil, err
-	}
 	return buf.Bytes(), nil
 }
 
 // StxoFromBytes turns bytes into a Stxo.
-// first take the first 60 bytes as a utxo, then the next 36 for how it's spent.
+// first 36 bytes are how it's spent, after that is portxo
 func StxoFromBytes(b []byte) (Stxo, error) {
 	var s Stxo
 	if len(b) < 96 {
 		return s, fmt.Errorf("Got %d bytes for stxo, expect 89", len(b))
 	}
-
-	u, err := UtxoFromBytes(b[:60])
-	if err != nil {
-		return s, err
-	}
-	s.Utxo = u // assign the utxo
-
-	buf := bytes.NewBuffer(b[60:]) // make buffer for spend data
-
+	buf := bytes.NewBuffer(b)
 	// read 4 byte spend height
-	err = binary.Read(buf, binary.BigEndian, &s.SpendHeight)
+	err := binary.Read(buf, binary.BigEndian, &s.SpendHeight)
 	if err != nil {
 		return s, err
 	}
@@ -410,5 +405,12 @@ func StxoFromBytes(b []byte) (Stxo, error) {
 	if err != nil {
 		return s, err
 	}
+
+	u, err := portxo.PorTxoFromBytes(buf.Bytes())
+	if err != nil {
+		return s, err
+	}
+	s.PorTxo = *u // assign the utxo
+
 	return s, nil
 }
