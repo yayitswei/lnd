@@ -278,11 +278,12 @@ func SendRTS(qc *uspv.Qchan) error {
 	fmt.Printf("will send RTS with delta:%d elkPR %x\n",
 		qc.State.Delta, elkPointR[:4])
 
+	opArr := uspv.OutPointToBytes(qc.Op)
 	// RTS is op (36), delta (4), ElkPointR (33), ElkPointT (33)
 	// total length 106
 	// could put index as well here but for now index just goes ++ each time.
 	msg := []byte{uspv.MSGID_RTS}
-	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, uspv.U32tB(uint32(-qc.State.Delta))...)
 	msg = append(msg, elkPointR[:]...)
 	msg = append(msg, elkPointT[:]...)
@@ -398,10 +399,11 @@ func SendACKSIG(qc *uspv.Qchan) error {
 		return err
 	}
 
+	opArr := uspv.OutPointToBytes(qc.Op)
 	// ACKSIG is op (36), ElkPointR (33), ElkPointT (33), sig (64)
 	// total length 166
 	msg := []byte{uspv.MSGID_ACKSIG}
-	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, theirElkPointR[:]...)
 	msg = append(msg, theirElkPointT[:]...)
 	msg = append(msg, sig[:]...)
@@ -500,10 +502,12 @@ func SendSIGREV(qc *uspv.Qchan) error {
 		return err
 	}
 
+	opArr := uspv.OutPointToBytes(qc.Op)
+
 	// SIGREV is op (36), elk (32), sig (64)
 	// total length ~132
 	msg := []byte{uspv.MSGID_SIGREV}
-	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
@@ -592,10 +596,12 @@ func SendREV(qc *uspv.Qchan) error {
 	if err != nil {
 		return err
 	}
+
+	opArr := uspv.OutPointToBytes(qc.Op)
 	// REV is just op (36), elk (32)
 	// total length 68
 	msg := []byte{uspv.MSGID_REVOKE}
-	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
 	_, err = RemoteCon.Write(msg)
 	return err

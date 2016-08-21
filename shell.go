@@ -76,7 +76,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 922500 // hardcoded; later base on keyfile date?
+		tip = 923333 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
@@ -470,15 +470,13 @@ func Bal(args []string) error {
 
 	var score, confScore int64
 	for i, u := range allUtxos {
-		fmt.Printf("utxo %d %s h:%d k:%d a %d",
-			i, u.Op.String(), u.Height, u.KeyGen.Step[3], u.KeyGen.Step[4])
+		fmt.Printf("utxo %d %s h:%d a:%d\n",
+			i, u.Op.String(), u.Height, u.Value)
 		if u.Seq != 0 {
-			fmt.Printf(" s:%d", u.Seq)
+			fmt.Printf("seq:%d", u.Seq)
 		}
-		if u.KeyGen.Step[3] != 0 {
-			fmt.Printf(" p:%d", u.KeyGen.Step[3])
-		}
-		fmt.Printf("\n")
+
+		fmt.Printf("\t%s %s\n", u.Mode.String(), u.KeyGen.String())
 		score += u.Value
 		if u.Height != 0 {
 			confScore += u.Value
@@ -504,7 +502,9 @@ func Bal(args []string) error {
 		if err != nil {
 			return err
 		}
+
 		fmt.Printf("address %d %s OR %s\n", i, oa.String(), a.PkhAdr.String())
+
 	}
 
 	fmt.Printf("Total known txs: %d\n", len(atx))

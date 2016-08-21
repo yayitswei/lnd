@@ -8,7 +8,6 @@ import (
 
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
-	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -290,13 +289,12 @@ func (ts *TxStore) SendDrop(
 // SendOne is for the sweep function, and doesn't do change.
 // Probably can get rid of this for real txs.
 func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, error) {
-	var prevScript []byte
 
 	// fixed fee
 	fee := int64(5000)
 
 	sendAmt := u.Value - fee
-	tx := wire.NewMsgTx() // make new tx
+
 	// add single output
 	outAdrScript, err := txscript.PayToAddrScript(adr)
 	if err != nil {
@@ -304,169 +302,75 @@ func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, e
 	}
 	// make user specified txout and add to tx
 	txout := wire.NewTxOut(sendAmt, outAdrScript)
-	tx.AddTxOut(txout)
-	tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
 
-	var sig []byte
-	var wit [][]byte
-	priv := new(btcec.PrivateKey)
+	return ts.BuildAndSign([]portxo.PorTxo{u}, []*wire.TxOut{txout})
+}
 
-	// pick key
-	//	if u.KeyGen.Step[3]&0x7fffffff == 0 {
-	priv = ts.PathPrivkey(u.KeyGen)
-	// shouldn't need this anymore as elkrem is baked in
-	/*} else {
-		// non-zero peer, channel PKH refund; get channel info to add elkrem
-		qc, err := ts.GetQchanByIdx(u.PeerIdx, u.KeyIdx)
-		if err != nil {
-			return nil, err
-		}
-		// get the current state sender elkrem hash
-		elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-		if err != nil {
-			return nil, err
-		}
-		// not really R, but can't leave as the raw elk hash
-		elkHashR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
-
-		// generate refund private key from indexes
-		priv = ts.GetRefundPrivkey(u.PeerIdx, u.KeyIdx)
-		// add elkrem sender hash for the state index
-		PrivKeyAddBytes(priv, elkHashR.Bytes())
-	}*/
-
-	if priv == nil {
-		return nil, fmt.Errorf("SendCoins: nil privkey")
+// Build and sign builds a tx from a slice of utxos and txOuts.
+// It then signs all the inputs and returns the tx.  Should
+// pretty much always work for any inputs.
+func (ts *TxStore) BuildAndSign(
+	utxos []portxo.PorTxo, txos []*wire.TxOut) (*wire.MsgTx, error) {
+	var err error
+	// make the tx
+	tx := wire.NewMsgTx()
+	// add all the txouts, direct from the argument slice
+	for _, txo := range txos {
+		tx.AddTxOut(txo)
 	}
+	// add all the txins, first refenecing the prev outPoints
+	for i, u := range utxos {
+		tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
+		// set sequence field if it's in the portxo
+		if u.Seq > 1 {
+			tx.TxIn[i].Sequence = u.Seq
+		}
+	}
+
+	// generate tx-wide hashCache for segwit stuff
 	hCache := txscript.NewTxSigHashes(tx)
-	if u.Seq > 1 { // time-delay p2wsh
-		if u.Height < 100 {
-			return nil, fmt.Errorf("Can't spend %s, timelocked and unconfirmed",
-				u.Op.String())
-		}
-		curHeight, err := ts.GetDBSyncHeight()
-		if err != nil {
-			return nil, err
-		}
-		if u.Height+int32(u.Seq) > curHeight {
-			return nil, fmt.Errorf(
-				"Can't spend %s; spenable at height %d (%d + %d delay) but now %d",
-				u.Op.String(),
-				u.Height+int32(u.Seq), u.Height, u.Seq, curHeight)
-		}
-		// got here; possible to spend.  But need the previous script
-		// first get the channel data
+	// make the stashes for signatures / witnesses
+	sigStash := make([][]byte, len(utxos))
+	witStash := make([][][]byte, len(utxos))
 
-		priv = ts.PathPrivkey(u.KeyGen)
-		// I think that's it and we don't need this stuff
+	for i, _ := range tx.TxIn {
+		// get key
+		priv := ts.PathPrivkey(utxos[i].KeyGen)
 
-		// I need the pubkeys.  I haven't given them the revocation
-		// elkrem hash so they haven't been able to spend, and the delay is over.
-		// (this assumes the state matches the tx being spent.  It won't
-		// work if you're spending from an invalid close that you made.)
-		/*
-			qc, err := ts.GetQchanByIdx(u.KeyGen.Step[3], u.KeyGen.Step[4])
+		if priv == nil {
+			return nil, fmt.Errorf("SendCoins: nil privkey")
+		}
+
+		// sign into stash.  4 possibilities:  PKH, WPKH, elk-WPKH, timelock WSH
+		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
+		// (maybe too risky to allow those to be normal txins...)
+		if utxos[i].Mode == portxo.TxoP2PKHComp { // legacy PKH
+			sigStash[i], err = txscript.SignatureScript(tx, i,
+				utxos[i].PkScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
-			// get the current state elkrem point R (their revocable point)
-			elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
+		}
+		if utxos[i].Mode&portxo.FlagTxoWitness != 0 { // witnessy
+			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
+				utxos[i].Value, utxos[i].PkScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
-
-			// get my elkrem T-hash to add to my HAKD base for the timeout key
-			elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-			if err != nil {
-				return nil, err
-			}
-			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
-
-			// get my HAKD base scalar; overwrite priv
-			// priv changes here (add their T hash)
-			// dont need anymore
-			// PrivKeyAddBytes(priv, elkHashT.Bytes())
-			// make sure priv is non-nil.  may be redundant
-			if priv == nil {
-				return nil, fmt.Errorf("nil privkey on timeout spend %s", u.Op.String())
-			}
-
-			// make pubkeys for the script
-			theirHAKDpub := qc.TheirHAKDBase
-			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
-			theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
-
-			var myTimeoutPub [33]byte
-			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
-
-			// need the previous script. ignore builder error
-			prevScript, _ = CommitScript2(
-				theirHAKDpub, myTimeoutPub, uint16(u.Seq))
-
-			scriptHash := P2WSHify(prevScript) // p2wsh-ify to check
-			fmt.Printf("prevscript: %x\np2wsh'd: %x\n", prevScript, scriptHash)
-		*/
-		// set the sequence field so the OP_CSV works
-		tx.TxIn[0].Sequence = u.Seq
-		// make new hash cache for this tx with sequence
-		hCache = txscript.NewTxSigHashes(tx)
-		// sign with channel refund key and prevScript
-		tsig, err := txscript.RawTxInWitnessSignature(
-			tx, hCache, 0, u.Value, u.PkScript, txscript.SigHashAll, priv)
-		if err != nil {
-			return nil, err
-		}
-
-		// witness stack is sig, prevScript
-		wit = make([][]byte, 2)
-		wit[0] = tsig
-		wit[1] = prevScript
-		// all set?
-	}
-	// This is where witness based sighash types need to happen
-	// sign into stash
-	if u.Mode == portxo.TxoP2PKHComp { // non-witness pkh
-		prevAdr, err := btcutil.NewAddressPubKeyHash(
-			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
-		if err != nil {
-			return nil, err
-		}
-		prevScript, err = txscript.PayToAddrScript(prevAdr)
-		if err != nil {
-			return nil, err
-		}
-		sig, err = txscript.SignatureScript(
-			tx, 0, prevScript, txscript.SigHashAll, priv, true)
-		if err != nil {
-			return nil, err
 		}
 	}
-	if u.Mode == portxo.TxoP2WPKHComp { // witness pkh
-		prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-			btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
-		if err != nil {
-			return nil, err
-		}
-		prevScript, err = txscript.PayToAddrScript(prevAdr)
-		if err != nil {
-			return nil, err
-		}
-		wit, err = txscript.WitnessScript(
-			tx, hCache, 0, u.Value, prevScript, txscript.SigHashAll, priv, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// swap sigs into sigScripts in txins
-	if sig != nil {
-		tx.TxIn[0].SignatureScript = sig
+	for i, txin := range tx.TxIn {
+		if sigStash[i] != nil {
+			txin.SignatureScript = sigStash[i]
+		}
+		if witStash[i] != nil {
+			txin.Witness = witStash[i]
+			txin.SignatureScript = nil
+		}
 	}
-	if wit != nil {
-		tx.TxIn[0].Witness = wit
-		tx.TxIn[0].SignatureScript = nil
-	}
-	fmt.Printf("%s", TxToString(tx))
+
+	fmt.Printf("tx: %s", TxToString(tx))
 	return tx, nil
 }
 
@@ -530,153 +434,7 @@ func (ts *TxStore) SendCoins(
 	// sort tx -- this only will change txouts since inputs are already sorted
 	txsort.InPlaceSort(tx)
 
-	// tx is ready for signing,
-	sigStash := make([][]byte, len(utxos))
-	witStash := make([][][]byte, len(utxos))
-
-	// if any of the utxos we're speding have time-locks, the txin sequence
-	// has to be set before the hCache is generated.
-
-	// set the txin sequence field so the OP_CSV works. (always in blocks)
-	for i, u := range utxos {
-		if u.Seq > 1 {
-			tx.TxIn[i].Sequence = u.Seq
-		}
-	}
-
-	// generate tx-wide hashCache for segwit stuff
-	hCache := txscript.NewTxSigHashes(tx)
-
-	for i, _ := range tx.TxIn {
-		// get key
-		priv := ts.PathPrivkey(utxos[i].KeyGen)
-
-		/*		if utxos[i].PeerIdx == 0 {
-					priv = ts.GetWalletPrivkey(utxos[i].KeyIdx)
-				} else {
-					// non-zero peer, channel PKH refund; get channel info to add elkrem
-					qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
-					if err != nil {
-						return nil, err
-					}
-					// get the current state sender elkrem hash
-					elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-					if err != nil {
-						return nil, err
-					}
-					// generate refund private key from indexes
-					priv = ts.GetRefundPrivkey(utxos[i].PeerIdx, utxos[i].KeyIdx)
-					// add elkrem sender hash for the state index
-					PrivKeyAddBytes(priv, elk.Bytes())
-				}
-		*/
-		if priv == nil {
-			return nil, fmt.Errorf("SendCoins: nil privkey")
-		}
-
-		// sign into stash.  4 possibilities:  PKH, WPKH, elk-WPKH, timelock WSH
-		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
-		// (maybe too risky to allow those to be normal txins...)
-		if utxos[i].Mode == portxo.TxoP2PKHComp { // legacy PKH
-			sigStash[i], err = txscript.SignatureScript(tx, i,
-				utxos[i].PkScript, txscript.SigHashAll, priv, true)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if utxos[i].Mode&portxo.FlagTxoWitness != 0 { // witnessy
-			//			prevAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-			//				btcutil.Hash160(priv.PubKey().SerializeCompressed()), ts.Param)
-			//			if err != nil {
-			//				return nil, err
-			//			}
-			//			prevScript, err := txscript.PayToAddrScript(prevAdr)
-			//			if err != nil {
-			//				return nil, err
-			//			}
-			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
-				utxos[i].Value, utxos[i].PkScript, txscript.SigHashAll, priv, true)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		/* ==== can get rid of all this.  I think.
-		if utxos[i].Mode == portxo.TxoP2WSHComp { // witness, time-locked SH
-			// this utxo is returned by PickUtxos() so should be ready to spend
-			// first get the channel data
-			qc, err := ts.GetQchanByIdx(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			if err != nil {
-				return nil, err
-			}
-
-			// I need the pubkeys.  I haven't given them the revocation
-			// elkrem hash so they haven't been able to spend, and the delay is over.
-			// (this assumes the state matches the tx being spent.  It won't
-			// work if you're spending from an invalid close that you made.)
-
-			// get the current state elkrem point R (their revocable point)
-			elkPointR, err := qc.ElkPoint(false, false, qc.State.StateIdx)
-			if err != nil {
-				return nil, err
-			}
-
-			// get my elkrem T-hash to add to my HAKD base for the timeout key
-			elkHash, err := qc.ElkSnd.AtIndex(qc.State.StateIdx)
-			if err != nil {
-				return nil, err
-			}
-			elkHashT := wire.DoubleSha256SH(append(elkHash.Bytes(), 0x74)) // 't'
-
-			// get my HAKD base scalar; overwrite priv
-			priv = ts.GetHAKDBasePriv(utxos[i].PeerIdx, utxos[i].KeyIdx)
-			// priv changes here (add their T hash)
-			PrivKeyAddBytes(priv, elkHashT.Bytes())
-			// make sure priv is non-nil.  may be redundant
-			if priv == nil {
-				return nil, fmt.Errorf("nil privkey on timeout spend %s", utxos[i].Op.String())
-			}
-
-			// make pubkeys for the script
-			theirHAKDpub := qc.TheirHAKDBase
-			// Construct the revokable pubkey by adding elkrem point R to their HAKD base
-			theirHAKDpub = AddPubs(theirHAKDpub, elkPointR)
-
-			var myTimeoutPub [33]byte
-			copy(myTimeoutPub[:], priv.PubKey().SerializeCompressed())
-
-			// need the previous script. ignore builder error
-			prevScript, _ := CommitScript2(
-				theirHAKDpub, myTimeoutPub, uint16(utxos[i].SpendLag))
-
-			// sign with channel refund key and prevScript
-			tsig, err := txscript.RawTxInWitnessSignature(
-				tx, hCache, i, utxos[i].Value, prevScript, txscript.SigHashAll, priv)
-			if err != nil {
-				return nil, err
-			}
-			// witness stack is sig, prevScript
-			witStash[i] = make([][]byte, 2)
-			witStash[i][0] = tsig
-			witStash[i][1] = prevScript
-			// all set
-		}
-		*/
-	}
-	// swap sigs into sigScripts in txins
-	for i, txin := range tx.TxIn {
-		if sigStash[i] != nil {
-			txin.SignatureScript = sigStash[i]
-		}
-		if witStash[i] != nil {
-			txin.Witness = witStash[i]
-			txin.SignatureScript = nil
-		}
-	}
-
-	fmt.Printf("tx: %s", TxToString(tx))
-
-	return tx, nil
+	return ts.BuildAndSign(utxos, tx.TxOut)
 }
 
 // EstFee gives a fee estimate based on a tx and a sat/Byte target.

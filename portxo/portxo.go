@@ -124,7 +124,10 @@ modes need it, as the previous pkscript can be generated
 */
 
 type PorTxo struct {
-	NetID  byte          // indicates what network / coin utxo is in
+	// got rid of NetID.  If you want to specify different networks / coins,
+	// use KeyGen.Step[1], that's what it's for.
+	// Heck, set KeyGen.Depth to 0 and still use Step[1] as the network / coin...
+	//	NetID  byte          // indicates what network / coin utxo is in
 	Op     wire.OutPoint // unique outpoint
 	Value  int64         // higher is better
 	Height int32         // block height of utxo (not needed? nice to know?)
@@ -139,9 +142,6 @@ type PorTxo struct {
 // Compare deep-compares two portable utxos, returning true if they're the same
 func (u *PorTxo) Equal(z *PorTxo) bool {
 	if u == nil || z == nil {
-		return false
-	}
-	if u.NetID != z.NetID {
 		return false
 	}
 
@@ -169,7 +169,7 @@ func (u *PorTxo) Equal(z *PorTxo) bool {
 
 func (k KeyGen) String() string {
 	var s string
-	s = fmt.Sprintf("\tkey derivation path: m")
+	//	s = fmt.Sprintf("\tkey derivation path: m")
 	for i := uint8(0); i < k.Depth; i++ {
 		if k.Step[i]&0x80000000 != 0 { // high bit means hardened
 			s += fmt.Sprintf(" / %d'", k.Step[i]&0x7fffffff)
@@ -187,8 +187,8 @@ func (u *PorTxo) String() string {
 		return "nil utxo"
 	}
 	s = u.Op.String()
-	s += fmt.Sprintf("\n\tnet:%x a:%d h:%d seq:%d %s\n",
-		u.NetID, u.Value, u.Height, u.Seq, u.Mode.String())
+	s += fmt.Sprintf("\n\ta:%d h:%d seq:%d %s\n",
+		u.Value, u.Height, u.Seq, u.Mode.String())
 
 	if u.KeyGen.PrivKey == empty {
 		s += fmt.Sprintf("\tprivate key not available (zero)\n")
@@ -204,8 +204,7 @@ func (u *PorTxo) String() string {
 	return s
 }
 
-/* serialized (im/ex)Portable Utxos are 107 up to 358 bytes.
-NetID 1
+/* serialized (im/ex)Portable Utxos are 106 up to 357 bytes.
 Op 36
 Amt 8
 Height 4
@@ -213,12 +212,12 @@ Seq 4
 Mode 1
 Priv 32
 Path 21
-Script (0 to 255) starts at byte 107, ends at 107+PKlen
+Script (0 to 255) starts at byte 106, ends at 106+PKlen
 */
 
 func PorTxoFromBytes(b []byte) (*PorTxo, error) {
-	if len(b) < 107 || len(b) > 362 {
-		return nil, fmt.Errorf("%d bytes, need 103-358", len(b))
+	if len(b) < 106 || len(b) > 361 {
+		return nil, fmt.Errorf("%d bytes, need 106-361", len(b))
 	}
 
 	buf := bytes.NewBuffer(b)
@@ -226,10 +225,6 @@ func PorTxoFromBytes(b []byte) (*PorTxo, error) {
 	var u PorTxo
 	var err error
 
-	u.NetID, err = buf.ReadByte()
-	if err != nil {
-		return nil, err
-	}
 	err = u.Op.Hash.SetBytes(buf.Next(32))
 	if err != nil {
 		return nil, err
@@ -269,9 +264,8 @@ func (u *PorTxo) Bytes() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	err := buf.WriteByte(u.NetID)
 
-	_, err = buf.Write(u.Op.Hash.Bytes())
+	_, err := buf.Write(u.Op.Hash.Bytes())
 	if err != nil {
 		return nil, err
 	}

@@ -109,6 +109,7 @@ func (ts *TxStore) NewAdr() (btcutil.Address, error) {
 	n := uint32(len(ts.Adrs))
 
 	nAdr := ts.GetWalletAddress(n)
+	fmt.Printf("adr %d %s\n", n, nAdr.String())
 
 	// total number of keys (now +1) into 4 bytes
 	var buf bytes.Buffer
@@ -366,6 +367,9 @@ func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 		var ma MyAdr
 		ma.PkhAdr = ts.GetWalletAddress(k)
 		ma.KeyIdx = k
+		if ma.PkhAdr == nil {
+			return fmt.Errorf("nil address")
+		}
 		ts.Adrs = append(ts.Adrs, ma)
 	}
 	return nil
@@ -397,7 +401,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 	hitTxs := make([]bool, len(txs)) // keep track of which txs to store
 
 	// not worth making a struct but these 2 go together
-	spentOPs := make([][]byte, 0, len(txs)) // at least 1 txin per tx
+	spentOPs := make([][36]byte, 0, len(txs)) // at least 1 txin per tx
 	// spendTxIdx tells which tx (in the txs slice) the utxo loss came from
 	spentTxIdx := make([]uint32, 0, len(txs))
 
@@ -477,6 +481,9 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					newu.Mode = mode
 					newu.Op.Hash = *cachedShas[i]
 					newu.Op.Index = uint32(j)
+
+					// copy PkScript here.  Redundant but not too big.
+					newu.PkScript = out.PkScript
 
 					b, err := newu.Bytes()
 					if err != nil {
@@ -564,7 +571,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					// there's some problem here as it doesn't always detect it
 					// properly...? still has this problem....
 					for i, spentOP := range spentOPs {
-						if bytes.Equal(spentOP, qcOpBytes) {
+						if bytes.Equal(spentOP[:], qcOpBytes) {
 							// this multixo is now spent.
 							hitTxs[spentTxIdx[i]] = true
 							// set qchan's spending txid and height
@@ -624,12 +631,12 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		// this makes us lose money, which is regrettable, but we need to know.
 		// could lose stuff we just gained, that's OK.
 		for i, nOP := range spentOPs {
-			v := duf.Get(nOP)
+			v := duf.Get(nOP[:])
 			if v != nil {
 				hitTxs[spentTxIdx[i]] = true
 				// do all this just to figure out value we lost
 				x := make([]byte, len(nOP)+len(v))
-				copy(x, nOP)
+				copy(x, nOP[:])
 				copy(x[len(nOP):], v)
 				lostTxo, err := portxo.PorTxoFromBytes(x)
 				if err != nil {
@@ -645,12 +652,11 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 				if err != nil {
 					return err
 				}
-				err = old.Put(nOP, stxb) // write nOP:v outpoint:stxo bytes
+				err = old.Put(nOP[:], stxb) // write nOP:v outpoint:stxo bytes
 				if err != nil {
 					return err
 				}
-
-				err = duf.Delete(nOP)
+				err = duf.Delete(nOP[:])
 				if err != nil {
 					return err
 				}

@@ -225,7 +225,8 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 			}
 		}
 		// make new bucket for this mutliout
-		qcBucket, err := pr.CreateBucket(OutPointToBytes(*op))
+		qcOP := OutPointToBytes(*op)
+		qcBucket, err := pr.CreateBucket(qcOP[:])
 		if err != nil {
 			return err
 		}
@@ -289,7 +290,8 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		cIdx = CountKeysInBucket(pr) + 1
 
 		// make new bucket for this mutliout
-		multiBucket, err := pr.CreateBucket(OutPointToBytes(*op))
+		qcOP := OutPointToBytes(*op)
+		multiBucket, err := pr.CreateBucket(qcOP[:])
 		if err != nil {
 			return err
 		}
@@ -360,8 +362,8 @@ func (ts *TxStore) SignFundTx(
 		if peerIdxBytes == nil {
 			return fmt.Errorf("SignMultiTx: peer %x has no index? db bad", peerArr)
 		}
-		opBytes := OutPointToBytes(*op)
-		multiBucket := pr.Bucket(opBytes)
+		opArr := OutPointToBytes(*op)
+		multiBucket := pr.Bucket(opArr[:])
 		if multiBucket == nil {
 			return fmt.Errorf("SignMultiTx: outpoint %s not in db", op.String())
 		}
@@ -376,7 +378,8 @@ func (ts *TxStore) SignFundTx(
 		hCache := txscript.NewTxSigHashes(tx)
 		// got tx, now figure out keys for the inputs and sign.
 		for i, txin := range tx.TxIn {
-			halfUtxo := duf.Get(OutPointToBytes(txin.PreviousOutPoint))
+			opArr := OutPointToBytes(txin.PreviousOutPoint)
+			halfUtxo := duf.Get(opArr[:])
 			if halfUtxo == nil {
 				return fmt.Errorf("SignMultiTx: input %d not in utxo set", i)
 			}
@@ -490,7 +493,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 // and state, but does not change qchan info itself.  Faster than GetQchan()
 func (ts *TxStore) ReloadQchan(q *Qchan) error {
 	var err error
-	opBytes := OutPointToBytes(q.Op)
+	opArr := OutPointToBytes(q.Op)
 
 	return ts.StateDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
@@ -501,7 +504,7 @@ func (ts *TxStore) ReloadQchan(q *Qchan) error {
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", q.PeerId[:])
 		}
-		qcBucket := pr.Bucket(opBytes)
+		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
 				q.Op.String(), q.PeerId[:])
@@ -539,8 +542,8 @@ func (ts *TxStore) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", q.PeerId)
 		}
-		opB := OutPointToBytes(q.Op)
-		qcBucket := pr.Bucket(opB)
+		opArr := OutPointToBytes(q.Op)
+		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
 				q.Op.String(), q.PeerId)
@@ -579,8 +582,8 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", q.PeerId)
 		}
-		opB := OutPointToBytes(q.Op)
-		qcBucket := pr.Bucket(opB)
+		opArr := OutPointToBytes(q.Op)
+		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
 				q.Op.String(), q.PeerId)

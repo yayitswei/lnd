@@ -63,9 +63,10 @@ func CloseChannel(args []string) error {
 	// Should save something, just so the UI marks it as closed, and
 	// we don't accept payments on this channel anymore.
 
+	opArr := uspv.OutPointToBytes(qc.Op)
 	// close request is just the op, sig
 	msg := []byte{uspv.MSGID_CLOSEREQ}
-	msg = append(msg, uspv.OutPointToBytes(qc.Op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, sig...)
 
 	_, err = RemoteCon.Write(msg)

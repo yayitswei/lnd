@@ -278,8 +278,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	fmt.Printf("tx:%s ", uspv.TxToString(tx))
 	// load qchan from DB (that we just saved) to generate elkrem / sig / etc
 	// this is kindof dumb; remove later.
-	var opArr [36]byte
-	copy(opArr[:], uspv.OutPointToBytes(*op))
+	opArr := uspv.OutPointToBytes(*op)
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
 		return err
@@ -310,7 +309,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	// initial payment (8), ElkPointR (33), ElkPointT (33), elk0 (32)
 	// total length 249
 	msg := []byte{uspv.MSGID_CHANDESC}
-	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, qc.MyPub[:]...)
 	msg = append(msg, qc.MyRefundPub[:]...)
 	msg = append(msg, qc.MyHAKDBase[:]...)
@@ -411,7 +410,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// ACK the channel address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), ElkPointR (33), ElkPointT (33), elk (32) and signature (64)
 	msg := []byte{uspv.MSGID_CHANACK}
-	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, theirElkPointR[:]...)
 	msg = append(msg, theirElkPointT[:]...)
 	msg = append(msg, elk.Bytes()...)
@@ -511,7 +510,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// it'll have an spv proof of the fund tx.
 	// but for now just send the sig.
 	msg := []byte{uspv.MSGID_SIGPROOF}
-	msg = append(msg, uspv.OutPointToBytes(*op)...)
+	msg = append(msg, opArr[:]...)
 	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
 	return

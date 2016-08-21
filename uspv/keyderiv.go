@@ -191,20 +191,28 @@ func (t *TxStore) PathPubkey(kg portxo.KeyGen) *btcec.PublicKey {
 // get a private key from the regular wallet
 func (t *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
 	var kg portxo.KeyGen
+	kg.Depth = 5
 	kg.Step[0] = 44 + 0x80000000
 	kg.Step[1] = 0 + 0x80000000
 	kg.Step[2] = UseWallet
 	kg.Step[3] = 0 + 0x80000000
-	kg.Step[4] = 0 + 0x80000000
+	kg.Step[4] = idx + 0x80000000
 	return t.PathPrivkey(kg)
-
 }
 
 // get a public key from the regular wallet
 func (t *TxStore) GetWalletAddress(idx uint32) *btcutil.AddressWitnessPubKeyHash {
-	pub := t.GetWalletPrivkey(idx).PubKey()
+	if t == nil {
+		fmt.Printf("GetAddress %d nil txstore\n", idx)
+		return nil
+	}
+	priv := t.GetWalletPrivkey(idx)
+	if priv == nil {
+		fmt.Printf("GetAddress %d made nil pub\n", idx)
+		return nil
+	}
 	adr, err := btcutil.NewAddressWitnessPubKeyHash(
-		btcutil.Hash160(pub.SerializeCompressed()), t.Param)
+		btcutil.Hash160(priv.PubKey().SerializeCompressed()), t.Param)
 	if err != nil {
 		fmt.Printf("GetAddress %d made nil pub\n", idx)
 		return nil
