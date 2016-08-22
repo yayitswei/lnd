@@ -319,9 +319,9 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// hash elkrem into elkrem R scalar (0x72 == 'r')
-	pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
-	elkPointR := PubFromHash(*elk)
+
+	elkHashR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
+	elkPointR := PubFromHash(elkHashR)
 	combined := AddPubs(elkPointR, q.MyRefundPub)
 	pkh := btcutil.Hash160(combined[:])
 	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:], pkh) {
@@ -338,6 +338,8 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	pkhTxo.KeyGen = q.KeyGen
 	// same keygen as underlying channel, but use is refund
 	pkhTxo.KeyGen.Step[2] = UseChannelRefund
+	// hash elkrem into elkrem R scalar (0x72 == 'r')
+	pkhTxo.PrivKey = elkHashR
 	pkhTxo.Mode = portxo.TxoP2WPKHComp
 	pkhTxo.Value = tx.TxOut[pkhIdx].Value
 	// PKH, so script is easy
