@@ -290,6 +290,16 @@ func (ts *TxStore) SendDrop(
 // Probably can get rid of this for real txs.
 func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, error) {
 
+	curHeight, err := ts.GetDBSyncHeight()
+	if err != nil {
+		return nil, err
+	}
+
+	if u.Seq > 1 &&
+		(u.Height < 100 || u.Height+int32(u.Seq) > curHeight) {
+		// skip immature or unconfirmed time-locked sh outputs
+		return nil, fmt.Errorf("Can't spend, immature")
+	}
 	// fixed fee
 	fee := int64(5000)
 

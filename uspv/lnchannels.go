@@ -208,14 +208,21 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 				continue // skip to prevent crash
 			}
 			if bytes.Equal(out.PkScript[2:22], myPKH) { // detected my refund
+				// use most recent elk, as cooperative
+				elk, err := q.ElkRcv.AtIndex(q.State.StateIdx)
+				if err != nil {
+					return nil, err
+				}
+				// hash elkrem into elkrem R scalar (0x72 == 'r')
+				pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
+
 				pkhTxo.Op.Hash = txid
 				pkhTxo.Op.Index = uint32(i)
 				pkhTxo.Height = q.CloseData.CloseHeight
 				// keypath is the same other than use
 				pkhTxo.KeyGen = q.KeyGen
 				pkhTxo.KeyGen.Step[2] = UseChannelRefund
-				//				KeyIdx = q.KeyIdx
-				//				pkhTxo.PeerIdx = q.PeerIdx
+
 				pkhTxo.Value = tx.TxOut[i].Value
 				pkhTxo.Mode = portxo.TxoP2WPKHComp // witness, non time locked, PKH
 				return []portxo.PorTxo{pkhTxo}, nil
@@ -224,15 +231,23 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		// couldn't find anything... shouldn't happen
 		return nil, fmt.Errorf("channel closed but we got nothing!")
 	}
+
+	// non-cooperative / break.
+
 	var shIdx, pkhIdx uint32
 	cTxos := make([]portxo.PorTxo, 1)
-	// still here, so not cooperative. sort outputs into PKH and SH
+	// sort outputs into PKH and SH
 	if len(tx.TxOut[0].PkScript) == 34 {
 		shIdx = 0
 		pkhIdx = 1
 	} else {
 		pkhIdx = 0
 		shIdx = 1
+	}
+	// make sure SH output is actually SH
+	if len(tx.TxOut[shIdx].PkScript) != 34 {
+		return nil, fmt.Errorf("non-p2sh output is length %d, expect 34",
+			len(tx.TxOut[shIdx].PkScript))
 	}
 	// make sure PKH output is actually PKH
 	if len(tx.TxOut[pkhIdx].PkScript) != 22 {
@@ -247,51 +262,105 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	if err != nil {
 		return nil, err
 	}
+	theirElkPointT, err := q.ElkPoint(false, true, txIdx)
+	if err != nil {
+		return nil, err
+	}
 
 	myRefundArr := AddPubs(theirElkPointR, q.MyRefundPub)
 	myPKH := btcutil.Hash160(myRefundArr[:])
 
 	// check if PKH is mine
 	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
-		// ------------pkh not mine; assume sh is mine
-		// note that this doesn't actually check that the SH script is correct.
-		// could add that in to double check.
+		// ------------pkh not mine; assume SH is mine
+		// build script to store in porTxo
+		timeoutPub := AddPubs(q.TheirHAKDBase, theirElkPointT)
+		revokePub := AddPubs(q.MyHAKDBase, theirElkPointR)
+
+		script, err := CommitScript2(revokePub, timeoutPub, q.TimeOut)
+		if err != nil {
+			return nil, err
+		}
 
 		var shTxo portxo.PorTxo // create new utxo and copy into it
+		// use txidx's elkrem as it may not be most recent
+		elk, err := q.ElkSnd.AtIndex(txIdx)
+		if err != nil {
+			return nil, err
+		}
+		// hash elkrem into elkrem T scalar (0x74 == 't')
+		shTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x74))
+
 		shTxo.Op.Hash = txid
 		shTxo.Op.Index = shIdx
 		shTxo.Height = q.CloseData.CloseHeight
 		// keypath is the same, except for use
 		shTxo.KeyGen = q.KeyGen
 		shTxo.KeyGen.Step[2] = UseChannelRefund
-		//TODO add elkrem in privkey array
+
 		shTxo.Mode = portxo.TxoP2WSHComp
 		//		shTxo.KeyIdx = q.KeyIdx
 		//		shTxo.PeerIdx = q.PeerIdx
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.Seq = uint32(q.TimeOut)
+
+		// TODO add script check
+		shTxo.PkScript = script
+
 		cTxos[0] = shTxo
 		// if SH is mine we're done
 		return cTxos, nil
 	}
+
 	// ---------- pkh is mine
 	var pkhTxo portxo.PorTxo // create new utxo and copy into it
+
+	// use txidx's elkrem as it may not be most recent
+	elk, err := q.ElkSnd.AtIndex(txIdx)
+	if err != nil {
+		return nil, err
+	}
+	// hash elkrem into elkrem R scalar (0x72 == 'r')
+	pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
+
 	pkhTxo.Op.Hash = txid
 	pkhTxo.Op.Index = pkhIdx
 	pkhTxo.Height = q.CloseData.CloseHeight
 	// keypath same, use different
 	pkhTxo.KeyGen = q.KeyGen
+	// same keygen as underlying channel, but use is refund
 	pkhTxo.KeyGen.Step[2] = UseChannelRefund
 	pkhTxo.Mode = portxo.TxoP2WPKHComp
-	//	pkhTxo.KeyIdx = q.KeyIdx
-	//	pkhTxo.PeerIdx = q.PeerIdx
 	pkhTxo.Value = tx.TxOut[pkhIdx].Value
-	//	pkhTxo.Seq = 1 // 1 for witness, non time locked
+	// PKH, so script is easy
+	pkhTxo.PkScript = tx.TxOut[pkhIdx].PkScript
 	cTxos[0] = pkhTxo
 
 	// OK, it's my PKH, but can I grab the SH???
 	if txIdx < q.State.StateIdx {
 		// invalid previous state, can be grabbed!
+		// make MY elk points
+		myElkPointR, err := q.ElkPoint(true, false, txIdx)
+		if err != nil {
+			return nil, err
+		}
+		myElkPointT, err := q.ElkPoint(true, true, txIdx)
+		if err != nil {
+			return nil, err
+		}
+		timeoutPub := AddPubs(q.TheirHAKDBase, myElkPointT)
+		revokePub := AddPubs(q.MyHAKDBase, myElkPointR)
+		script, err := CommitScript2(revokePub, timeoutPub, q.TimeOut)
+		if err != nil {
+			return nil, err
+		}
+
+		// myElkHashR added to HAKD private key
+		elk, err := q.ElkRcv.AtIndex(txIdx)
+		if err != nil {
+			return nil, err
+		}
+
 		var shTxo portxo.PorTxo // create new utxo and copy into it
 		shTxo.Op.Hash = txid
 		shTxo.Op.Index = shIdx
@@ -299,11 +368,14 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		// note that these key indexes are not sufficient to grab;
 		// the grabbable utxo is more of an indicator; the HAKD will need
 		// to be loaded from the DB to grab.
-		//TODO add elkrem in there
+		// TODO add elkrem in there
 		shTxo.KeyGen = q.KeyGen
 		shTxo.KeyGen.Step[2] = UseChannelRefund
-		//		shTxo.KeyIdx = q.KeyIdx
-		//		shTxo.PeerIdx = q.PeerIdx
+
+		pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
+
+		shTxo.PkScript = script
+
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.Seq = 1 // 1 means grab immediately
 		cTxos = append(cTxos, shTxo)
@@ -551,11 +623,6 @@ func (q *Qchan) ElkPoint(mine, time bool, idx uint64) (p [33]byte, err error) {
 	// turn the hash into a point
 	p = PubFromHash(*elk)
 	return
-}
-
-func MakeTimeoutFromHAKDx(base, hakd [33]byte) ([33]byte, error) {
-	err := PubKeyArrAddBytes(&base, wire.DoubleSha256(hakd[:]))
-	return base, err
 }
 
 // IngestElkrem takes in an elkrem hash, performing 2 checks:
