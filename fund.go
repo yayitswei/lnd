@@ -444,13 +444,13 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// load channel to save their refund address
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler GetQchan err %s", err.Error())
 		return
 	}
 
 	err = qc.IngestElkrem(revElk)
 	if err != nil { // this can't happen because it's the first elk... remove?
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler IngestElkrem err %s", err.Error())
 		return
 	}
 	qc.State.ElkPointR = myFirstElkPointR
@@ -458,14 +458,14 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 
 	err = qc.VerifySig(sig)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler VerifySig err %s", err.Error())
 		return
 	}
 
 	// verify worked; Save state 1 to DB
 	err = SCon.TS.SaveQchanState(qc)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler SaveQchanState err %s", err.Error())
 		return
 	}
 	// clear this channel from FundChanStash
@@ -479,7 +479,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// sign their com tx to send
 	sig, err = SCon.TS.SignState(qc)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler SignState err %s", err.Error())
 		return
 	}
 
@@ -487,14 +487,14 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	// sign multi tx
 	tx, err := SCon.TS.SignFundTx(op, peerArr)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler SignFundTx err %s", err.Error())
 		return
 	}
 
 	// add to bloom filter here for channel creator
 	filt, err := SCon.TS.GimmeFilter()
 	if err != nil {
-		fmt.Printf("QChanDescHandler RefilterLocal err %s", err.Error())
+		fmt.Printf("QChanDescHandler GimmeFilter err %s", err.Error())
 		return
 	}
 	SCon.Refilter(filt)
@@ -502,7 +502,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
 	err = SCon.NewOutgoingTx(tx)
 	if err != nil {
-		fmt.Printf("QChanAckHandler err %s", err.Error())
+		fmt.Printf("QChanAckHandler NewOutgoingTx err %s", err.Error())
 		return
 	}
 

@@ -128,7 +128,7 @@ func (ts *TxStore) PickUtxos(
 			(utxo.Height < 100 || utxo.Height+int32(utxo.Seq) > curHeight) {
 			continue // skip immature or unconfirmed time-locked sh outputs
 		}
-		if ow && utxo.Seq == 0 {
+		if ow && utxo.Mode&portxo.FlagTxoWitness == 0 {
 			continue // skip non-witness
 		}
 		// why are 0-value outputs a thing..?

@@ -3,7 +3,6 @@ package portxo
 import (
 	"testing"
 
-	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/wire"
 )
 
@@ -21,7 +20,6 @@ func TestHardCoded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	u2.NetID = chaincfg.TestNet3Params.PrivateKeyID
 	u2.Op.Hash = wire.DoubleSha256SH([]byte("test"))
 	u2.Op.Index = 3
 	u2.Value = 1234567890

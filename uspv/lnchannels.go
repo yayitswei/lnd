@@ -315,7 +315,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 // ChannelInfo prints info about a channel.
 func (t *TxStore) QchanInfo(q *Qchan) error {
 	// display txid instead of outpoint because easier to copy/paste
-	fmt.Printf("CHANNEL %s h:%d (%d,%d) cap: %d\n",
+	fmt.Printf("CHANNEL %s h:%d %s cap: %d\n",
 		q.Op.Hash.String(), q.Height, q.KeyGen.String(), q.Value)
 	fmt.Printf("\tPUB mine:%x them:%x REFBASE mine:%x them:%x BASE mine:%x them:%x\n",
 		q.MyPub[:4], q.TheirPub[:4], q.MyRefundPub[:4], q.TheirRefundPub[:4],

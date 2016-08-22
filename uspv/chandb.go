@@ -11,7 +11,6 @@ import (
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 	"github.com/roasbeef/btcutil/txsort"
 )
 
@@ -168,7 +167,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 	peerId, theirPub, theirRefund, theirHAKDbase [33]byte) (*wire.OutPoint, error) {
 
 	var err error
-	var op *wire.OutPoint
+	var qc Qchan
 
 	err = ts.StateDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
@@ -186,8 +185,6 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		//		peerIdx = BtU32(peerIdxBytes)       // store peer index for key creation
 		//		cIdx = (CountKeysInBucket(pr) << 1) // local, lsb 0
 
-		// make new Qchan
-		var qc Qchan
 		qc.TheirPub = theirPub
 		qc.TheirRefundPub = theirRefund
 		qc.TheirHAKDBase = theirHAKDbase
@@ -200,7 +197,6 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		qc.KeyGen.Step[4] = cIdx + 0x80000000
 		qc.Value = amt
 		qc.Mode = portxo.TxoP2WSHComp
-		qc.Op = *op
 
 		myChanPub := ts.GetUsePub(qc.KeyGen, UseChannelFund)
 
@@ -220,13 +216,13 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		// find index... it will actually be 1 or 0 but do this anyway
 		for i, out := range tx.TxOut {
 			if bytes.Equal(out.PkScript, outScript) {
-				op = wire.NewOutPoint(&txid, uint32(i))
+				qc.Op = *wire.NewOutPoint(&txid, uint32(i))
 				break // found it
 			}
 		}
 		// make new bucket for this mutliout
-		qcOP := OutPointToBytes(*op)
-		qcBucket, err := pr.CreateBucket(qcOP[:])
+		qcOPArr := OutPointToBytes(qc.Op)
+		qcBucket, err := pr.CreateBucket(qcOPArr[:])
 		if err != nil {
 			return err
 		}
@@ -259,7 +255,7 @@ func (ts *TxStore) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 		return nil, err
 	}
 
-	return op, nil
+	return &qc.Op, nil
 }
 
 // SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
@@ -379,30 +375,23 @@ func (ts *TxStore) SignFundTx(
 		// got tx, now figure out keys for the inputs and sign.
 		for i, txin := range tx.TxIn {
 			opArr := OutPointToBytes(txin.PreviousOutPoint)
-			halfUtxo := duf.Get(opArr[:])
-			if halfUtxo == nil {
+			v := duf.Get(opArr[:])
+			if v == nil {
 				return fmt.Errorf("SignMultiTx: input %d not in utxo set", i)
 			}
-
-			// key index is 4 bytes in to the val (36 byte outpoint is key)
-			kIdx := BtU32(halfUtxo[4:8])
-			// amt is 8 bytes in
-			amt := BtI64(halfUtxo[8:16])
-
-			priv := ts.GetWalletPrivkey(kIdx)
-
-			// gotta add subscripts to sign
-			witAdr, err := btcutil.NewAddressWitnessPubKeyHash(
-				ts.Adrs[kIdx].PkhAdr.ScriptAddress(), ts.Param)
+			// create a new utxo
+			x := make([]byte, 36+len(v))
+			copy(x, opArr[:])
+			copy(x[36:], v)
+			utxo, err := portxo.PorTxoFromBytes(x)
 			if err != nil {
 				return err
 			}
-			subScript, err := txscript.PayToAddrScript(witAdr)
-			if err != nil {
-				return err
-			}
+
+			priv := ts.PathPrivkey(utxo.KeyGen)
+
 			tx.TxIn[i].Witness, err = txscript.WitnessScript(
-				tx, hCache, i, amt, subScript,
+				tx, hCache, i, utxo.Value, utxo.PkScript,
 				txscript.SigHashAll, priv, true)
 			if err != nil {
 				return err
@@ -760,7 +749,7 @@ func (ts *TxStore) GetQGlobalIdFromIdx(
 					if err != nil {
 						return err
 					}
-					if nqc.KeyGen.Step[4] == cIdx { // hit; done
+					if nqc.KeyGen.Step[4] == cIdx|1<<31 { // hit; done
 						pubBytes = idPub
 						opBytes = op
 					}
@@ -984,18 +973,9 @@ peeridx is inferred from position in db.
 
 func (q *Qchan) ToBytes() ([]byte, error) {
 	var buf bytes.Buffer
-	// first serialize the utxo part
-	uBytes, err := q.PorTxo.Bytes()
-	if err != nil {
-		return nil, err
-	}
-	// write that into the buffer first
-	_, err = buf.Write(uBytes)
-	if err != nil {
-		return nil, err
-	}
+
 	// write their channel pubkey
-	_, err = buf.Write(q.TheirPub[:])
+	_, err := buf.Write(q.TheirPub[:])
 	if err != nil {
 		return nil, err
 	}
@@ -1010,31 +990,41 @@ func (q *Qchan) ToBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// then serialize the utxo part
+	uBytes, err := q.PorTxo.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	// and write that into the buffer
+	_, err = buf.Write(uBytes)
+	if err != nil {
+		return nil, err
+	}
 
 	// done
 	return buf.Bytes(), nil
 }
 
 // QchanFromBytes turns bytes into a Qchan.
-// the first 60 bytes are the utxo, then next 33 is the pubkey,
-// then their refund pubkey, then their HAKD base point.
+// the first 99 bytes are the 3 pubkeys: channel, refund, HAKD base
+// the rest is the utxo
 func QchanFromBytes(b []byte) (Qchan, error) {
 	var q Qchan
 
-	if len(b) < 206 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 159", len(b))
+	if len(b) < 205 {
+		return q, fmt.Errorf("Got %d bytes for qchan, expect 205+", len(b))
 	}
 
-	u, err := portxo.PorTxoFromBytes(b[:106])
+	copy(q.TheirPub[:], b[:33])
+	copy(q.TheirRefundPub[:], b[33:66])
+	copy(q.TheirHAKDBase[:], b[66:99])
+
+	u, err := portxo.PorTxoFromBytes(b[99:])
 	if err != nil {
 		return q, err
 	}
 
 	q.PorTxo = *u // assign the utxo
-
-	copy(q.TheirPub[:], b[107:140])
-	copy(q.TheirRefundPub[:], b[140:173])
-	copy(q.TheirHAKDBase[:], b[173:])
 
 	return q, nil
 }

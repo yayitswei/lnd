@@ -246,6 +246,7 @@ func (t *TxStore) GetElkremRoot(kg portxo.KeyGen) wire.ShaHash {
 // IdKey returns the identity private key
 func (t *TxStore) IdKey() *btcec.PrivateKey {
 	var kg portxo.KeyGen
+	kg.Depth = 5
 	kg.Step[0] = 44 + 0x80000000
 	kg.Step[1] = 0 + 0x80000000
 	kg.Step[2] = UseIdKey

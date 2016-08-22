@@ -457,7 +457,7 @@ func Bal(args []string) error {
 		}
 		fmt.Printf(" %s h:%d (%d,%d) cap: %d\n",
 			q.Op.Hash.String(), q.Height,
-			q.KeyGen.Step[3], q.KeyGen.Step[4], q.Value)
+			q.KeyGen.Step[3]&0x7fffffff, q.KeyGen.Step[4]&0x7fffffff, q.Value)
 	}
 	fmt.Printf(" ----- utxos ----- \n")
 	var allUtxos portxo.TxoSliceByAmt

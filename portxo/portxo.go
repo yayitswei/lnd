@@ -136,7 +136,7 @@ type PorTxo struct {
 
 	KeyGen
 
-	PkScript []byte // for script-hash
+	PkScript []byte // if empty, try to generate based on mode and priv key
 }
 
 // Compare deep-compares two portable utxos, returning true if they're the same
