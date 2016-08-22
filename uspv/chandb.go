@@ -294,11 +294,11 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 
 		qc.Height = -1
 		qc.KeyGen.Depth = 5
-		qc.KeyGen.Step[0] = 44 + 0x80000000
-		qc.KeyGen.Step[1] = 0 + 0x80000000
+		qc.KeyGen.Step[0] = 44 | 0x80000000
+		qc.KeyGen.Step[1] = 0 | 0x80000000
 		qc.KeyGen.Step[2] = UseChannelFund
-		qc.KeyGen.Step[3] = BtU32(peerIdxBytes) + 0x80000000
-		qc.KeyGen.Step[4] = cIdx + 0x80000000
+		qc.KeyGen.Step[3] = BtU32(peerIdxBytes) | 0x80000000
+		qc.KeyGen.Step[4] = cIdx | 0x80000000
 		qc.Value = amt
 		qc.Mode = portxo.TxoP2WSHComp
 		qc.Op = *op

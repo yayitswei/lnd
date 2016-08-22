@@ -270,7 +270,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	myRefundArr := AddPubs(theirElkPointR, q.MyRefundPub)
 	myPKH := btcutil.Hash160(myRefundArr[:])
 
-	// check if PKH is mine
+	// indirectly check if SH is mine
 	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
 		// ------------pkh not mine; assume SH is mine
 		// build script to store in porTxo
@@ -296,11 +296,10 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		shTxo.Height = q.CloseData.CloseHeight
 		// keypath is the same, except for use
 		shTxo.KeyGen = q.KeyGen
-		shTxo.KeyGen.Step[2] = UseChannelRefund
+		shTxo.KeyGen.Step[2] = UseChannelHAKDBase
 
 		shTxo.Mode = portxo.TxoP2WSHComp
-		//		shTxo.KeyIdx = q.KeyIdx
-		//		shTxo.PeerIdx = q.PeerIdx
+
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.Seq = uint32(q.TimeOut)
 
@@ -322,6 +321,15 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	}
 	// hash elkrem into elkrem R scalar (0x72 == 'r')
 	pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
+	elkPointR := PubFromHash(*elk)
+	combined := AddPubs(elkPointR, q.MyRefundPub)
+	pkh := btcutil.Hash160(combined[:])
+	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:], pkh) {
+		fmt.Printf("got different observed and generated pkh scripts.\n")
+		fmt.Printf("in %s : %d see %x\n", txid, pkhIdx, tx.TxOut[pkhIdx].PkScript)
+		fmt.Printf("generated %x from sender (/ their) elkR %d\n", pkh, txIdx)
+		fmt.Printf("base refund pub %x\n", q.MyRefundPub)
+	}
 
 	pkhTxo.Op.Hash = txid
 	pkhTxo.Op.Index = pkhIdx
@@ -365,12 +373,9 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		shTxo.Op.Hash = txid
 		shTxo.Op.Index = shIdx
 		shTxo.Height = q.CloseData.CloseHeight
-		// note that these key indexes are not sufficient to grab;
-		// the grabbable utxo is more of an indicator; the HAKD will need
-		// to be loaded from the DB to grab.
-		// TODO add elkrem in there
+
 		shTxo.KeyGen = q.KeyGen
-		shTxo.KeyGen.Step[2] = UseChannelRefund
+		shTxo.KeyGen.Step[2] = UseChannelHAKDBase
 
 		pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
 
@@ -728,12 +733,6 @@ func (q *Qchan) SimpleCloseTx() (*wire.MsgTx, error) {
 		return nil, err
 	}
 
-	//	myElkPointR, err := q.ElkPoint(true, false, q.State.StateIdx)
-	//	if err != nil {
-	//		fmt.Printf("SimpleCloseTx: can't generate elkpoint.99 ")
-	//		return nil, err
-	//	}
-
 	// my pub is my base and "their" elk point which I have the scalar for
 	myRefundPub := AddPubs(q.MyRefundPub, theirElkPointR)
 	// their pub is their base and "my" elk point (which they gave me)
@@ -925,10 +924,11 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 		revPub = AddPubs(q.TheirHAKDBase, theirElkPointR)
 		timePub = AddPubs(q.MyHAKDBase, theirElkPointT)
 
-		pkhPub = AddPubs(q.TheirRefundPub, s.ElkPointR) // received elkpoint
+		pkhPub = AddPubs(q.TheirRefundPub, s.ElkPointR) // my received elkpoint
 		pkhAmt = (q.Value - s.MyAmt) - fee
-
 		fancyAmt = s.MyAmt - fee
+
+		fmt.Printf("\t refund base %x, elkpointR %x\n", q.TheirRefundPub, s.ElkPointR)
 	} else { // build THEIR tx (to sign)
 		// Their tx that they store.  I get funds unencumbered.
 
@@ -938,8 +938,9 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 		fancyAmt = (q.Value - s.MyAmt) - fee
 
 		// PKH output
-		pkhPub = AddPubs(q.MyRefundPub, theirElkPointR)
+		pkhPub = AddPubs(q.MyRefundPub, theirElkPointR) // their (sent) elk point
 		pkhAmt = s.MyAmt - fee
+		fmt.Printf("\trefund base %x, elkpointR %x\n", q.MyRefundPub, theirElkPointR)
 	}
 
 	// now that everything is chosen, build fancy script and pkh script
@@ -957,6 +958,8 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	// create txouts by assigning amounts
 	outFancy := wire.NewTxOut(fancyAmt, fancyScript)
 	outPKH := wire.NewTxOut(pkhAmt, pkhScript)
+
+	fmt.Printf("\tcombined refund %x, pkh %x\n", pkhPub, outPKH.PkScript)
 
 	// make a new tx
 	tx := wire.NewMsgTx()
