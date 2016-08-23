@@ -274,8 +274,8 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:22], myPKH) {
 		// ------------pkh not mine; assume SH is mine
 		// build script to store in porTxo
-		timeoutPub := AddPubs(q.TheirHAKDBase, theirElkPointT)
-		revokePub := AddPubs(q.MyHAKDBase, theirElkPointR)
+		timeoutPub := AddPubs(q.MyHAKDBase, theirElkPointT)
+		revokePub := AddPubs(q.TheirHAKDBase, theirElkPointR)
 
 		script, err := CommitScript2(revokePub, timeoutPub, q.TimeOut)
 		if err != nil {
@@ -288,22 +288,29 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		if err != nil {
 			return nil, err
 		}
-		// hash elkrem into elkrem T scalar (0x74 == 't')
-		shTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x74))
+		// keypath is the same, except for use
+		shTxo.KeyGen = q.KeyGen
 
 		shTxo.Op.Hash = txid
 		shTxo.Op.Index = shIdx
 		shTxo.Height = q.CloseData.CloseHeight
-		// keypath is the same, except for use
-		shTxo.KeyGen = q.KeyGen
 		shTxo.KeyGen.Step[2] = UseChannelHAKDBase
+		// hash elkrem into elkrem T scalar (0x74 == 't')
+		shTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x74))
 
 		shTxo.Mode = portxo.TxoP2WSHComp
 
 		shTxo.Value = tx.TxOut[shIdx].Value
 		shTxo.Seq = uint32(q.TimeOut)
 
-		// TODO add script check
+		// script check
+		genSH := fastsha256.Sum256(script)
+		if !bytes.Equal(genSH[:], tx.TxOut[shIdx].PkScript[2:34]) {
+			fmt.Printf("got different observed and generated SH scripts.\n")
+			fmt.Printf("in %s:%d, see %x\n", txid, shIdx, tx.TxOut[shIdx].PkScript)
+			fmt.Printf("generated %x \n", genSH)
+			fmt.Printf("revokable pub %x\ntimeout pub %x\n", revokePub, timeoutPub)
+		}
 		shTxo.PkScript = script
 
 		cTxos[0] = shTxo
@@ -324,7 +331,9 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 	elkPointR := PubFromHash(elkHashR)
 	combined := AddPubs(elkPointR, q.MyRefundPub)
 	pkh := btcutil.Hash160(combined[:])
+	// check if re-created script matches observed script (hash)
 	if !bytes.Equal(tx.TxOut[pkhIdx].PkScript[2:], pkh) {
+		// probably should error out here
 		fmt.Printf("got different observed and generated pkh scripts.\n")
 		fmt.Printf("in %s : %d see %x\n", txid, pkhIdx, tx.TxOut[pkhIdx].PkScript)
 		fmt.Printf("generated %x from sender (/ their) elkR %d\n", pkh, txIdx)
@@ -364,6 +373,14 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		if err != nil {
 			return nil, err
 		}
+		// script check
+		genSH := fastsha256.Sum256(script)
+		if !bytes.Equal(genSH[:], tx.TxOut[shIdx].PkScript[2:34]) {
+			fmt.Printf("got different observed and generated SH scripts.\n")
+			fmt.Printf("in %s:%d, see %x\n", txid, shIdx, tx.TxOut[shIdx].PkScript)
+			fmt.Printf("generated %x \n", genSH)
+			fmt.Printf("revokable pub %x\ntimeout pub %x\n", revokePub, timeoutPub)
+		}
 
 		// myElkHashR added to HAKD private key
 		elk, err := q.ElkRcv.AtIndex(txIdx)
@@ -372,11 +389,11 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		}
 
 		var shTxo portxo.PorTxo // create new utxo and copy into it
+		shTxo.KeyGen = q.KeyGen
 		shTxo.Op.Hash = txid
 		shTxo.Op.Index = shIdx
 		shTxo.Height = q.CloseData.CloseHeight
 
-		shTxo.KeyGen = q.KeyGen
 		shTxo.KeyGen.Step[2] = UseChannelHAKDBase
 
 		pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
@@ -384,6 +401,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		shTxo.PkScript = script
 
 		shTxo.Value = tx.TxOut[shIdx].Value
+		shTxo.Mode = portxo.TxoP2WSHComp
 		shTxo.Seq = 1 // 1 means grab immediately
 		cTxos = append(cTxos, shTxo)
 	}

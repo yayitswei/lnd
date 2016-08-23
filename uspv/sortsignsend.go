@@ -338,6 +338,7 @@ func (ts *TxStore) BuildAndSign(
 	}
 
 	// generate tx-wide hashCache for segwit stuff
+	// might not be needed (non-witness) but make it anyway
 	hCache := txscript.NewTxSigHashes(tx)
 	// make the stashes for signatures / witnesses
 	sigStash := make([][]byte, len(utxos))
@@ -351,9 +352,7 @@ func (ts *TxStore) BuildAndSign(
 			return nil, fmt.Errorf("SendCoins: nil privkey")
 		}
 
-		// sign into stash.  4 possibilities:  PKH, WPKH, elk-WPKH, timelock WSH
-		// HAKD-SH txs are not covered here; those are insta-grabbed for now.
-		// (maybe too risky to allow those to be normal txins...)
+		// sign into stash.  3 possibilities:  legacy PKH, WPKH, WSH
 		if utxos[i].Mode == portxo.TxoP2PKHComp { // legacy PKH
 			sigStash[i], err = txscript.SignatureScript(tx, i,
 				utxos[i].PkScript, txscript.SigHashAll, priv, true)
@@ -361,13 +360,25 @@ func (ts *TxStore) BuildAndSign(
 				return nil, err
 			}
 		}
-		if utxos[i].Mode&portxo.FlagTxoWitness != 0 { // witnessy
+		if utxos[i].Mode == portxo.TxoP2WPKHComp { // witness PKH
 			witStash[i], err = txscript.WitnessScript(tx, hCache, i,
 				utxos[i].Value, utxos[i].PkScript, txscript.SigHashAll, priv, true)
 			if err != nil {
 				return nil, err
 			}
 		}
+		if utxos[i].Mode == portxo.TxoP2WSHComp { // witness script hash
+			sig, err := txscript.RawTxInWitnessSignature(tx, hCache, i,
+				utxos[i].Value, utxos[i].PkScript, txscript.SigHashAll, priv)
+			if err != nil {
+				return nil, err
+			}
+			// witness stack has the signature, then the previous full script
+			witStash[i] = make([][]byte, 2)
+			witStash[i][0] = sig
+			witStash[i][1] = utxos[i].PkScript
+		}
+
 	}
 	// swap sigs into sigScripts in txins
 	for i, txin := range tx.TxIn {
