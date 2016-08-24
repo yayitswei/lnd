@@ -396,7 +396,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 
 		shTxo.KeyGen.Step[2] = UseChannelHAKDBase
 
-		pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
+		shTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
 
 		shTxo.PkScript = script
 
@@ -469,9 +469,10 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 // This function assumes a recovery is possible; if it can't construct the right
 // keys and scripts it will return an error.
 func (t *TxStore) GrabUtxo(u *portxo.PorTxo) (*wire.MsgTx, error) {
-	if u == nil {
-		return nil, fmt.Errorf("GrabUtxo Grab error: nil utxo")
+	if u == nil || t == nil {
+		return nil, fmt.Errorf("GrabUtxo Grab error: nil utxo / txstore")
 	}
+
 	// this utxo is returned by PickUtxos() so should be ready to spend
 	// first get the channel data
 	qc, err := t.GetQchanByIdx(u.KeyGen.Step[3], u.KeyGen.Step[4])

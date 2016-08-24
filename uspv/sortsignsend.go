@@ -55,7 +55,12 @@ func (s *SPVCon) GrabAll() error {
 	nothin := true
 	for _, u := range utxos {
 		if u.Seq == 1 && u.Height > 0 { // grabbable
-			tx, err := s.TS.GrabUtxo(u)
+			fmt.Printf("found %s to grab!\n", u.String())
+			adr, err := s.TS.NewAdr()
+			if err != nil {
+				return err
+			}
+			tx, err := s.TS.SendOne(*u, adr)
 			if err != nil {
 				return err
 			}

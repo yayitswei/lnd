@@ -281,7 +281,7 @@ func (s *SPVCon) AskForHeaders() error {
 		return err
 	}
 
-	log.Printf("suk to offset %d (should be near the end\n", ns)
+	log.Printf("sought to offset %d (should be near the end\n", ns)
 
 	// get header from last 80 bytes of file
 	err = hdr.Deserialize(s.headerFile)
