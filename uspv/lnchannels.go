@@ -194,37 +194,39 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 		// so far, assume 1 txo
 
 		// no txindx hint, so it's probably cooperative, so most recent
-		theirElkPointR, err := q.ElkPoint(false, false, q.State.StateIdx)
+		elk, err := q.ElkSnd.AtIndex(q.State.StateIdx)
 		if err != nil {
 			return nil, err
 		}
+		// hash elkrem into elkrem R scalar (0x72 == 'r')
+		theirElkHashR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
+		theirElkPointR := PubFromHash(theirElkHashR)
 
 		myRefundArr := AddPubs(theirElkPointR, q.MyRefundPub)
 		myPKH := btcutil.Hash160(myRefundArr[:])
 
-		var pkhTxo portxo.PorTxo
 		for i, out := range tx.TxOut {
 			if len(out.PkScript) < 22 {
 				continue // skip to prevent crash
 			}
 			if bytes.Equal(out.PkScript[2:22], myPKH) { // detected my refund
-				// use most recent elk, as cooperative
-				elk, err := q.ElkRcv.AtIndex(q.State.StateIdx)
-				if err != nil {
-					return nil, err
-				}
-				// hash elkrem into elkrem R scalar (0x72 == 'r')
-				pkhTxo.PrivKey = wire.DoubleSha256SH(append(elk.Bytes(), 0x72))
+				var pkhTxo portxo.PorTxo
 
 				pkhTxo.Op.Hash = txid
 				pkhTxo.Op.Index = uint32(i)
 				pkhTxo.Height = q.CloseData.CloseHeight
-				// keypath is the same other than use
+
 				pkhTxo.KeyGen = q.KeyGen
+
+				pkhTxo.PrivKey = theirElkHashR
+
+				// keypath is the same other than use
 				pkhTxo.KeyGen.Step[2] = UseChannelRefund
 
 				pkhTxo.Value = tx.TxOut[i].Value
-				pkhTxo.Mode = portxo.TxoP2WPKHComp // witness, non time locked, PKH
+				pkhTxo.Mode = portxo.TxoP2WPKHComp // witness, normal PKH
+				pkhTxo.PkScript = tx.TxOut[i].PkScript
+
 				return []portxo.PorTxo{pkhTxo}, nil
 			}
 		}
@@ -777,13 +779,9 @@ func (q *Qchan) SimpleCloseTx() (*wire.MsgTx, error) {
 	return tx, nil
 }
 
-// SignSimpleClose creates a close tx based on the current state and signs it,
-// returning that sig.  Also returns a bool; true means this sig goes second.
-func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
-	tx, err := q.SimpleCloseTx()
-	if err != nil {
-		return nil, err
-	}
+// SignSimpleClose signs the given simpleClose tx, given the other signature
+// Tx is modified in place.
+func (t TxStore) SignSimpleClose(q *Qchan, tx *wire.MsgTx) ([]byte, error) {
 	// make hash cache
 	hCache := txscript.NewTxSigHashes(tx)
 
@@ -795,13 +793,13 @@ func (t TxStore) SignSimpleClose(q *Qchan) ([]byte, error) {
 	// get private signing key
 	priv := t.GetUsePriv(q.KeyGen, UseChannelFund)
 	// generate sig
-	sig, err := txscript.RawTxInWitnessSignature(
+	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
 	if err != nil {
 		return nil, err
 	}
 
-	return sig, nil
+	return mySig, nil
 }
 
 // SignNextState generates your signature for their state.

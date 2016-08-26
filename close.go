@@ -54,7 +54,12 @@ func CloseChannel(args []string) error {
 		return err
 	}
 
-	sig, err := SCon.TS.SignSimpleClose(qc)
+	tx, err := qc.SimpleCloseTx()
+	if err != nil {
+		return err
+	}
+
+	sig, err := SCon.TS.SignSimpleClose(qc, tx)
 	if err != nil {
 		return err
 	}
@@ -96,27 +101,27 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	// get channel
 	qc, err := SCon.TS.GetQchan(peerArr, opArr)
 	if err != nil {
-		fmt.Printf("CloseReqHandler err %s", err.Error())
+		fmt.Printf("CloseReqHandler GetQchan err %s", err.Error())
 		return
 	}
 	// verify their sig?  should do that before signing our side just to be safe
 
-	// sign close
-	mySig, err := SCon.TS.SignSimpleClose(qc)
-	if err != nil {
-		fmt.Printf("CloseReqHandler err %s", err.Error())
-		return
-	}
-
+	// build close tx
 	tx, err := qc.SimpleCloseTx()
 	if err != nil {
-		fmt.Printf("CloseReqHandler err %s", err.Error())
+		fmt.Printf("CloseReqHandler SimpleCloseTx err %s", err.Error())
 		return
 	}
 
+	// sign close
+	mySig, err := SCon.TS.SignSimpleClose(qc, tx)
+	if err != nil {
+		fmt.Printf("CloseReqHandler SignSimpleClose err %s", err.Error())
+		return
+	}
 	pre, swap, err := uspv.FundTxScript(qc.MyPub, qc.TheirPub)
 	if err != nil {
-		fmt.Printf("CloseReqHandler err %s", err.Error())
+		fmt.Printf("CloseReqHandler FundTxScript err %s", err.Error())
 		return
 	}
 
@@ -126,10 +131,11 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	} else {
 		tx.TxIn[0].Witness = uspv.SpendMultiSigWitStack(pre, mySig, theirSig)
 	}
-	//	fmt.Printf("%s", uspv.TxToString(tx))
+	fmt.Printf(uspv.TxToString(tx))
+	// broadcast
 	err = SCon.NewOutgoingTx(tx)
 	if err != nil {
-		fmt.Printf("CloseReqHandler err %s", err.Error())
+		fmt.Printf("CloseReqHandler NewOutgoingTx err %s", err.Error())
 		return
 	}
 
