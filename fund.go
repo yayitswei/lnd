@@ -6,6 +6,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/portxo"
+	"github.com/lightningnetwork/lnd/qln"
 	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
@@ -153,7 +154,7 @@ func FundChannel(args []string) error {
 
 	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
-	peerIdx, cIdx, err := SCon.TS.NextIdxForPeer(peerArr)
+	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
 	if err != nil {
 		return err
 	}
@@ -166,7 +167,7 @@ func FundChannel(args []string) error {
 	//TODO freeze utxos here
 
 	FundChanStash = append(FundChanStash, fr)
-	msg := []byte{uspv.MSGID_POINTREQ}
+	msg := []byte{qln.MSGID_POINTREQ}
 	_, err = RemoteCon.Write(msg)
 	return err
 }
@@ -180,7 +181,7 @@ func PointReqHandler(from [16]byte, pointReqBytes []byte) {
 	var peerArr [33]byte
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
-	peerIdx, cIdx, err := SCon.TS.NextIdxForPeer(peerArr)
+	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
 	if err != nil {
 		fmt.Printf("PointReqHandler err %s", err.Error())
 		return
@@ -199,7 +200,7 @@ func PointReqHandler(from [16]byte, pointReqBytes []byte) {
 	myHAKDbase := SCon.TS.GetUsePub(kg, uspv.UseChannelHAKDBase)
 	fmt.Printf("Generated pubkey %x\n", myChanPub)
 
-	msg := []byte{uspv.MSGID_POINTRESP}
+	msg := []byte{qln.MSGID_POINTRESP}
 	msg = append(msg, myChanPub[:]...)
 	msg = append(msg, myRefundPub[:]...)
 	msg = append(msg, myHAKDbase[:]...)
@@ -266,7 +267,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
 
 	// save partial tx to db; populate output, get their channel pubkey
-	op, err := SCon.TS.MakeFundTx(tx, fr.Cap, fr.PeerIdx, fr.ChanIdx,
+	op, err := LNode.MakeFundTx(tx, fr.Cap, fr.PeerIdx, fr.ChanIdx,
 		peerArr, theirPub, theirRefundPub, theirHAKDbase)
 	if err != nil {
 		return err
@@ -279,7 +280,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	// load qchan from DB (that we just saved) to generate elkrem / sig / etc
 	// this is kindof dumb; remove later.
 	opArr := uspv.OutPointToBytes(*op)
-	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	qc, err := LNode.GetQchan(peerArr, opArr)
 	if err != nil {
 		return err
 	}
@@ -288,7 +289,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	qc.State.StateIdx = 1
 	qc.State.MyAmt = qc.Value - fr.InitSend
 
-	err = SCon.TS.SaveQchanState(qc)
+	err = LNode.SaveQchanState(qc)
 	if err != nil {
 		return err
 	}
@@ -308,7 +309,7 @@ func PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	// myHAKDbase(33), capacity (8),
 	// initial payment (8), ElkPointR (33), ElkPointT (33), elk0 (32)
 	// total length 249
-	msg := []byte{uspv.MSGID_CHANDESC}
+	msg := []byte{qln.MSGID_CHANDESC}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, qc.MyPub[:]...)
 	msg = append(msg, qc.MyRefundPub[:]...)
@@ -353,7 +354,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	// save to db
 	// it should go into the next bucket and get the right key index.
 	// but we can't actually check that.
-	qc, err := SCon.TS.SaveFundTx(
+	qc, err := LNode.SaveFundTx(
 		op, amt, peerArr, theirPub, theirRefundPub, theirHAKDbase)
 	if err != nil {
 		fmt.Printf("QChanDescHandler SaveFundTx err %s", err.Error())
@@ -362,7 +363,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	fmt.Printf("got multisig output %s amt %d\n", op.String(), amt)
 
 	// create initial state
-	qc.State = new(uspv.StatCom)
+	qc.State = new(qln.StatCom)
 	// similar to SIGREV in pushpull
 	qc.State.MyAmt = initPay
 	qc.State.StateIdx = 1
@@ -378,13 +379,13 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 
-	err = SCon.TS.SaveQchanState(qc)
+	err = LNode.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("QChanDescHandler SaveQchanState err %s", err.Error())
 		return
 	}
 	// load ... the thing I just saved.  ugly.
-	qc, err = SCon.TS.GetQchan(peerArr, opArr)
+	qc, err = LNode.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("QChanDescHandler GetQchan err %s", err.Error())
 		return
@@ -396,7 +397,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 		return
 	}
 
-	sig, err := SCon.TS.SignState(qc)
+	sig, err := LNode.SignState(qc)
 	if err != nil {
 		fmt.Printf("QChanDescHandler SignState err %s", err.Error())
 		return
@@ -409,7 +410,7 @@ func QChanDescHandler(from [16]byte, descbytes []byte) {
 	}
 	// ACK the channel address, which causes the funder to sign / broadcast
 	// ACK is outpoint (36), ElkPointR (33), ElkPointT (33), elk (32) and signature (64)
-	msg := []byte{uspv.MSGID_CHANACK}
+	msg := []byte{qln.MSGID_CHANACK}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, theirElkPointR[:]...)
 	msg = append(msg, theirElkPointT[:]...)
@@ -439,10 +440,10 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	revElk, _ := wire.NewShaHash(ackbytes[102:134])
 	copy(sig[:], ackbytes[134:])
 
-	op := uspv.OutPointFromBytes(opArr)
+	//	op := uspv.OutPointFromBytes(opArr)
 
 	// load channel to save their refund address
-	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	qc, err := LNode.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("QChanAckHandler GetQchan err %s", err.Error())
 		return
@@ -463,7 +464,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	}
 
 	// verify worked; Save state 1 to DB
-	err = SCon.TS.SaveQchanState(qc)
+	err = LNode.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("QChanAckHandler SaveQchanState err %s", err.Error())
 		return
@@ -477,7 +478,7 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 	}
 
 	// sign their com tx to send
-	sig, err = SCon.TS.SignState(qc)
+	sig, err = LNode.SignState(qc)
 	if err != nil {
 		fmt.Printf("QChanAckHandler SignState err %s", err.Error())
 		return
@@ -485,31 +486,31 @@ func QChanAckHandler(from [16]byte, ackbytes []byte) {
 
 	// verify is all OK so fund away.
 	// sign multi tx
-	tx, err := SCon.TS.SignFundTx(op, peerArr)
-	if err != nil {
-		fmt.Printf("QChanAckHandler SignFundTx err %s", err.Error())
-		return
-	}
+	//	tx, err := LNode.SignFundTx(op, peerArr)
+	//	if err != nil {
+	//		fmt.Printf("QChanAckHandler SignFundTx err %s", err.Error())
+	//		return
+	//	}
 
 	// add to bloom filter here for channel creator
-	filt, err := SCon.TS.GimmeFilter()
-	if err != nil {
-		fmt.Printf("QChanDescHandler GimmeFilter err %s", err.Error())
-		return
-	}
-	SCon.Refilter(filt)
+	//	filt, err := SCon.TS.GimmeFilter()
+	//	if err != nil {
+	//		fmt.Printf("QChanDescHandler GimmeFilter err %s", err.Error())
+	//		return
+	//	}
+	//	SCon.Refilter(filt)
 
-	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
-	err = SCon.NewOutgoingTx(tx)
-	if err != nil {
-		fmt.Printf("QChanAckHandler NewOutgoingTx err %s", err.Error())
-		return
-	}
+	//	fmt.Printf("tx to broadcast: %s ", uspv.TxToString(tx))
+	//	err = SCon.NewOutgoingTx(tx)
+	//	if err != nil {
+	//		fmt.Printf("QChanAckHandler NewOutgoingTx err %s", err.Error())
+	//		return
+	//	}
 
 	// sig proof should be sent later once there are confirmations.
 	// it'll have an spv proof of the fund tx.
 	// but for now just send the sig.
-	msg := []byte{uspv.MSGID_SIGPROOF}
+	msg := []byte{qln.MSGID_SIGPROOF}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, sig[:]...)
 	_, err = RemoteCon.Write(msg)
@@ -530,7 +531,7 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 	copy(opArr[:], sigproofbytes[:36])
 	copy(sig[:], sigproofbytes[36:])
 
-	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	qc, err := LNode.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return
@@ -543,7 +544,7 @@ func SigProofHandler(from [16]byte, sigproofbytes []byte) {
 	}
 
 	// sig OK, save
-	err = SCon.TS.SaveQchanState(qc)
+	err = LNode.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("SigProofHandler err %s", err.Error())
 		return

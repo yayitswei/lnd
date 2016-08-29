@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/lightningnetwork/lnd/qln"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -40,7 +41,7 @@ func CloseChannel(args []string) error {
 	cIdx := uint32(cIdx64)
 
 	// find the peer index of who we're connected to
-	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	currentPeerIdx, err := LNode.GetPeerIdx(RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
@@ -49,7 +50,7 @@ func CloseChannel(args []string) error {
 			peerIdx, currentPeerIdx)
 	}
 
-	qc, err := SCon.TS.GetQchanByIdx(peerIdx, cIdx)
+	qc, err := LNode.GetQchanByIdx(peerIdx, cIdx)
 	if err != nil {
 		return err
 	}
@@ -59,7 +60,7 @@ func CloseChannel(args []string) error {
 		return err
 	}
 
-	sig, err := SCon.TS.SignSimpleClose(qc, tx)
+	sig, err := LNode.SignSimpleClose(qc, tx)
 	if err != nil {
 		return err
 	}
@@ -70,7 +71,7 @@ func CloseChannel(args []string) error {
 
 	opArr := uspv.OutPointToBytes(qc.Op)
 	// close request is just the op, sig
-	msg := []byte{uspv.MSGID_CLOSEREQ}
+	msg := []byte{qln.MSGID_CLOSEREQ}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, sig...)
 
@@ -99,7 +100,7 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	theirSig := reqbytes[36:]
 
 	// get channel
-	qc, err := SCon.TS.GetQchan(peerArr, opArr)
+	qc, err := LNode.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("CloseReqHandler GetQchan err %s", err.Error())
 		return
@@ -114,12 +115,12 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 	}
 
 	// sign close
-	mySig, err := SCon.TS.SignSimpleClose(qc, tx)
+	mySig, err := LNode.SignSimpleClose(qc, tx)
 	if err != nil {
 		fmt.Printf("CloseReqHandler SignSimpleClose err %s", err.Error())
 		return
 	}
-	pre, swap, err := uspv.FundTxScript(qc.MyPub, qc.TheirPub)
+	pre, swap, err := qln.FundTxScript(qc.MyPub, qc.TheirPub)
 	if err != nil {
 		fmt.Printf("CloseReqHandler FundTxScript err %s", err.Error())
 		return
@@ -127,9 +128,9 @@ func CloseReqHandler(from [16]byte, reqbytes []byte) {
 
 	// swap if needed
 	if swap {
-		tx.TxIn[0].Witness = uspv.SpendMultiSigWitStack(pre, theirSig, mySig)
+		tx.TxIn[0].Witness = qln.SpendMultiSigWitStack(pre, theirSig, mySig)
 	} else {
-		tx.TxIn[0].Witness = uspv.SpendMultiSigWitStack(pre, mySig, theirSig)
+		tx.TxIn[0].Witness = qln.SpendMultiSigWitStack(pre, mySig, theirSig)
 	}
 	fmt.Printf(uspv.TxToString(tx))
 	// broadcast

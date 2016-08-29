@@ -10,7 +10,7 @@ import (
 )
 
 // SignBreak signs YOUR tx, which you already have a sig for
-func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
+func (nd *LnNode) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	tx, err := q.BuildStateTx(true)
 	if err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 	}
 
 	// get private signing key
-	priv := t.PathPrivkey(q.KeyGen)
+	priv := nd.GetPriv(q.KeyGen)
 	// generate sig.
 	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
@@ -47,7 +47,7 @@ func (t TxStore) SignBreakTx(q *Qchan) (*wire.MsgTx, error) {
 
 // SignSimpleClose signs the given simpleClose tx, given the other signature
 // Tx is modified in place.
-func (t TxStore) SignSimpleClose(q *Qchan, tx *wire.MsgTx) ([]byte, error) {
+func (nd *LnNode) SignSimpleClose(q *Qchan, tx *wire.MsgTx) ([]byte, error) {
 	// make hash cache
 	hCache := txscript.NewTxSigHashes(tx)
 
@@ -57,7 +57,7 @@ func (t TxStore) SignSimpleClose(q *Qchan, tx *wire.MsgTx) ([]byte, error) {
 		return nil, err
 	}
 	// get private signing key
-	priv := t.GetUsePriv(q.KeyGen, UseChannelFund)
+	priv := nd.GetPriv(q.KeyGen)
 	// generate sig
 	mySig, err := txscript.RawTxInWitnessSignature(
 		tx, hCache, 0, q.Value, pre, txscript.SigHashAll, priv)
@@ -69,7 +69,7 @@ func (t TxStore) SignSimpleClose(q *Qchan, tx *wire.MsgTx) ([]byte, error) {
 }
 
 // SignNextState generates your signature for their state.
-func (t TxStore) SignState(q *Qchan) ([64]byte, error) {
+func (nd *LnNode) SignState(q *Qchan) ([64]byte, error) {
 	var sig [64]byte
 	// build transaction for next state
 	tx, err := q.BuildStateTx(false) // their tx, as I'm signing
@@ -87,7 +87,7 @@ func (t TxStore) SignState(q *Qchan) ([64]byte, error) {
 	}
 
 	// get private signing key
-	priv := t.PathPrivkey(q.KeyGen)
+	priv := nd.GetPriv(q.KeyGen)
 
 	// generate sig.
 	bigSig, err := txscript.RawTxInWitnessSignature(

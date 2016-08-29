@@ -4,14 +4,65 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/btcsuite/fastsha256"
 	"github.com/lightningnetwork/lnd/lnutil"
 
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 	"github.com/roasbeef/btcutil/txsort"
 )
+
+// GetStateIdxFromTx returns the state index from a commitment transaction.
+// No errors; returns 0 if there is no retrievable index.
+// Takes the xor input X which is derived from the 0th elkrems.
+func GetStateIdxFromTx(tx *wire.MsgTx, x uint64) uint64 {
+	// no tx, so no index
+	if tx == nil {
+		return 0
+	}
+	// more than 1 input, so not a close tx
+	if len(tx.TxIn) != 1 {
+		return 0
+	}
+	if x >= 1<<48 {
+		return 0
+	}
+	// check that indicating high bytes are correct
+	if tx.TxIn[0].Sequence>>24 != 0xff || tx.LockTime>>24 != 0x21 {
+		//		fmt.Printf("sequence byte %x, locktime byte %x\n",
+		//			tx.TxIn[0].Sequence>>24, tx.LockTime>>24 != 0x21)
+		return 0
+	}
+	// high 24 bits sequence, low 24 bits locktime
+	seqBits := uint64(tx.TxIn[0].Sequence & 0x00ffffff)
+	timeBits := uint64(tx.LockTime & 0x00ffffff)
+
+	return (seqBits<<24 | timeBits) ^ x
+}
+
+// SetStateIdxBits modifies the tx in place, setting the sequence and locktime
+// fields to indicate the given state index.
+func SetStateIdxBits(tx *wire.MsgTx, idx, x uint64) error {
+	if tx == nil {
+		return fmt.Errorf("SetStateIdxBits: nil tx")
+	}
+	if len(tx.TxIn) != 1 {
+		return fmt.Errorf("SetStateIdxBits: tx has %d inputs", len(tx.TxIn))
+	}
+	if idx >= 1<<48 {
+		return fmt.Errorf(
+			"SetStateIdxBits: index %d greater than max %d", idx, uint64(1<<48)-1)
+	}
+
+	idx = idx ^ x
+	// high 24 bits sequence, low 24 bits locktime
+	seqBits := uint32(idx >> 24)
+	timeBits := uint32(idx & 0x00ffffff)
+
+	tx.TxIn[0].Sequence = seqBits | seqMask
+	tx.LockTime = timeBits | timeMask
+
+	return nil
+}
 
 // SimpleCloseTx produces a close tx based on the current state.
 // The PKH addresses are my refund base with their r-elkrem point, and
@@ -37,10 +88,10 @@ func (q *Qchan) SimpleCloseTx() (*wire.MsgTx, error) {
 	theirRefundPub := lnutil.AddPubs(q.TheirRefundPub, q.State.ElkPointR)
 
 	// make my output
-	myScript := DirectWPKHScript(myRefundPub)
+	myScript := lnutil.DirectWPKHScript(myRefundPub)
 	myOutput := wire.NewTxOut(q.State.MyAmt-fee, myScript)
 	// make their output
-	theirScript := DirectWPKHScript(theirRefundPub)
+	theirScript := lnutil.DirectWPKHScript(theirRefundPub)
 	theirOutput := wire.NewTxOut((q.Value-q.State.MyAmt)-fee, theirScript)
 
 	// make tx with these outputs
@@ -120,13 +171,13 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 
 	// now that everything is chosen, build fancy script and pkh script
 	fancyScript, _ := CommitScript2(revPub, timePub, delay)
-	pkhScript := DirectWPKHScript(pkhPub) // p2wpkh-ify
+	pkhScript := lnutil.DirectWPKHScript(pkhPub) // p2wpkh-ify
 
 	fmt.Printf("> made SH script, state %d\n", s.StateIdx)
 	fmt.Printf("\t revPub %x timeout pub %x \n", revPub, timePub)
 	fmt.Printf("\t script %x ", fancyScript)
 
-	fancyScript = P2WSHify(fancyScript) // p2wsh-ify
+	fancyScript = lnutil.P2WSHify(fancyScript) // p2wsh-ify
 
 	fmt.Printf("\t scripthash %x\n", fancyScript)
 
@@ -156,13 +207,6 @@ func (q *Qchan) BuildStateTx(mine bool) (*wire.MsgTx, error) {
 	// sort outputs
 	txsort.InPlaceSort(tx)
 	return tx, nil
-}
-
-func DirectWPKHScript(pub [33]byte) []byte {
-	builder := txscript.NewScriptBuilder()
-	builder.AddOp(txscript.OP_0).AddData(btcutil.Hash160(pub[:]))
-	b, _ := builder.Script()
-	return b
 }
 
 // CommitScript2 doesn't use hashes, but a modified pubkey.
@@ -199,7 +243,7 @@ func FundTxOut(pubA, puB [33]byte, amt int64) (*wire.TxOut, error) {
 	if err != nil {
 		return nil, err
 	}
-	scriptBytes = P2WSHify(scriptBytes)
+	scriptBytes = lnutil.P2WSHify(scriptBytes)
 
 	return wire.NewTxOut(amt, scriptBytes), nil
 }
@@ -239,13 +283,4 @@ func SpendMultiSigWitStack(pre, sigA, sigB []byte) [][]byte {
 	witStack[3] = pre
 
 	return witStack
-}
-
-func P2WSHify(scriptBytes []byte) []byte {
-	bldr := txscript.NewScriptBuilder()
-	bldr.AddOp(txscript.OP_0)
-	wsh := fastsha256.Sum256(scriptBytes)
-	bldr.AddData(wsh[:])
-	b, _ := bldr.Script() // ignore script errors
-	return b
 }

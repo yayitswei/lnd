@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/txscript"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/portxo"
+	"github.com/lightningnetwork/lnd/qln"
 	"github.com/lightningnetwork/lnd/uspv"
 )
 
@@ -34,8 +36,11 @@ const (
 )
 
 var (
-	Params         = &chaincfg.TestNet3Params
-	SCon           uspv.SPVCon   // global here for now
+	Params = &chaincfg.TestNet3Params
+	SCon   uspv.SPVCon // global here for now
+
+	LNode qln.LnNode
+
 	GlobalOmniChan chan []byte   // channel for omnihandler
 	RemoteCon      *lndc.LNDConn // one because simple
 
@@ -329,7 +334,7 @@ func Con(args []string) error {
 		return err
 	}
 	// store this peer
-	_, err = SCon.TS.NewPeer(RemoteCon.RemotePub)
+	_, err = LNode.NewPeer(RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
@@ -356,7 +361,7 @@ func Say(args []string) error {
 	for _, s := range args {
 		chat += s + " "
 	}
-	msg := append([]byte{uspv.MSGID_TEXTCHAT}, []byte(chat)...)
+	msg := append([]byte{qln.MSGID_TEXTCHAT}, []byte(chat)...)
 
 	_, err := RemoteCon.Write(msg)
 	return err
@@ -434,16 +439,16 @@ func Bal(args []string) error {
 			return err
 		}
 
-		qc, err := SCon.TS.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
+		qc, err := LNode.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
 		if err != nil {
 			return err
 		}
-		return SCon.TS.QchanInfo(qc)
+		return LNode.QchanInfo(qc)
 	}
 
 	fmt.Printf(" ----- Account Balance ----- \n")
 	fmt.Printf(" ----- Channels ----- \n")
-	qcs, err := SCon.TS.GetAllQchans()
+	qcs, err := LNode.GetAllQchans()
 	if err != nil {
 		return err
 	}

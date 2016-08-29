@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/lightningnetwork/lnd/uspv"
+	"github.com/lightningnetwork/lnd/qln"
 )
 
 // handles stuff that comes in over the wire.  Not user-initiated.
@@ -21,42 +21,42 @@ func OmniHandler(OmniChan chan []byte) {
 		msgid := msg[0]
 
 		// TEXT MESSAGE.  SIMPLE
-		if msgid == uspv.MSGID_TEXTCHAT { //it's text
+		if msgid == qln.MSGID_TEXTCHAT { //it's text
 			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
 		}
 		// POINT REQUEST
-		if msgid == uspv.MSGID_POINTREQ {
+		if msgid == qln.MSGID_POINTREQ {
 			fmt.Printf("Got point request from %x\n", from)
 			PointReqHandler(from, msg[1:])
 			continue
 		}
 		// POINT RESPONSE
-		if msgid == uspv.MSGID_POINTRESP {
+		if msgid == qln.MSGID_POINTRESP {
 			fmt.Printf("Got point response from %x\n", from)
 			PointRespHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL DESCRIPTION
-		if msgid == uspv.MSGID_CHANDESC {
+		if msgid == qln.MSGID_CHANDESC {
 			fmt.Printf("Got channel description from %x\n", from)
 			QChanDescHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL ACKNOWLEDGE
-		if msgid == uspv.MSGID_CHANACK {
+		if msgid == qln.MSGID_CHANACK {
 			fmt.Printf("Got channel acknowledgement from %x\n", from)
 			QChanAckHandler(from, msg[1:])
 			continue
 		}
 		// HERE'S YOUR CHANNEL
-		if msgid == uspv.MSGID_SIGPROOF {
+		if msgid == qln.MSGID_SIGPROOF {
 			fmt.Printf("Got channel proof from %x\n", from)
 			SigProofHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE REQ
-		if msgid == uspv.MSGID_CLOSEREQ {
+		if msgid == qln.MSGID_CLOSEREQ {
 			fmt.Printf("Got close request from %x\n", from)
 			CloseReqHandler(from, msg[1:])
 			continue
@@ -68,25 +68,25 @@ func OmniHandler(OmniChan chan []byte) {
 		//			continue
 		//		}
 		// REQUEST TO SEND
-		if msgid == uspv.MSGID_RTS {
+		if msgid == qln.MSGID_RTS {
 			fmt.Printf("Got RTS from %x\n", from)
 			RTSHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL UPDATE ACKNOWLEDGE AND SIGNATURE
-		if msgid == uspv.MSGID_ACKSIG {
+		if msgid == qln.MSGID_ACKSIG {
 			fmt.Printf("Got ACKSIG from %x\n", from)
 			ACKSIGHandler(from, msg[1:])
 			continue
 		}
 		// SIGNATURE AND REVOCATION
-		if msgid == uspv.MSGID_SIGREV {
+		if msgid == qln.MSGID_SIGREV {
 			fmt.Printf("Got SIGREV from %x\n", from)
 			SIGREVHandler(from, msg[1:])
 			continue
 		}
 		// REVOCATION
-		if msgid == uspv.MSGID_REVOKE {
+		if msgid == qln.MSGID_REVOKE {
 			fmt.Printf("Got REVOKE from %x\n", from)
 			REVHandler(from, msg[1:])
 			continue
@@ -101,7 +101,7 @@ func OmniHandler(OmniChan chan []byte) {
 // to the OmniHandler via omnichan
 func LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
 	// first store peer in DB if not yet known
-	_, err := SCon.TS.NewPeer(RemoteCon.RemotePub)
+	_, err := LNode.NewPeer(RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}

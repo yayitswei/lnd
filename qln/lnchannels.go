@@ -9,7 +9,6 @@ import (
 	"github.com/lightningnetwork/lnd/portxo"
 
 	"github.com/btcsuite/fastsha256"
-	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 )
@@ -81,59 +80,6 @@ type QCloseData struct {
 	CloseTxid   wire.ShaHash
 	CloseHeight int32
 	Closed      bool // if channel is closed; if CloseTxid != -1
-}
-
-// GetStateIdxFromTx returns the state index from a commitment transaction.
-// No errors; returns 0 if there is no retrievable index.
-// Takes the xor input X which is derived from the 0th elkrems.
-func GetStateIdxFromTx(tx *wire.MsgTx, x uint64) uint64 {
-	// no tx, so no index
-	if tx == nil {
-		return 0
-	}
-	// more than 1 input, so not a close tx
-	if len(tx.TxIn) != 1 {
-		return 0
-	}
-	if x >= 1<<48 {
-		return 0
-	}
-	// check that indicating high bytes are correct
-	if tx.TxIn[0].Sequence>>24 != 0xff || tx.LockTime>>24 != 0x21 {
-		//		fmt.Printf("sequence byte %x, locktime byte %x\n",
-		//			tx.TxIn[0].Sequence>>24, tx.LockTime>>24 != 0x21)
-		return 0
-	}
-	// high 24 bits sequence, low 24 bits locktime
-	seqBits := uint64(tx.TxIn[0].Sequence & 0x00ffffff)
-	timeBits := uint64(tx.LockTime & 0x00ffffff)
-
-	return (seqBits<<24 | timeBits) ^ x
-}
-
-// SetStateIdxBits modifies the tx in place, setting the sequence and locktime
-// fields to indicate the given state index.
-func SetStateIdxBits(tx *wire.MsgTx, idx, x uint64) error {
-	if tx == nil {
-		return fmt.Errorf("SetStateIdxBits: nil tx")
-	}
-	if len(tx.TxIn) != 1 {
-		return fmt.Errorf("SetStateIdxBits: tx has %d inputs", len(tx.TxIn))
-	}
-	if idx >= 1<<48 {
-		return fmt.Errorf(
-			"SetStateIdxBits: index %d greater than max %d", idx, uint64(1<<48)-1)
-	}
-
-	idx = idx ^ x
-	// high 24 bits sequence, low 24 bits locktime
-	seqBits := uint32(idx >> 24)
-	timeBits := uint32(idx & 0x00ffffff)
-
-	tx.TxIn[0].Sequence = seqBits | seqMask
-	tx.LockTime = timeBits | timeMask
-
-	return nil
 }
 
 // GetCloseTxos takes in a tx and sets the QcloseTXO feilds based on the tx.
@@ -385,7 +331,7 @@ func (q *Qchan) GetCloseTxos(tx *wire.MsgTx) ([]portxo.PorTxo, error) {
 }
 
 // ChannelInfo prints info about a channel.
-func (t *TxStore) QchanInfo(q *Qchan) error {
+func (nd *LnNode) QchanInfo(q *Qchan) error {
 	// display txid instead of outpoint because easier to copy/paste
 	fmt.Printf("CHANNEL %s h:%d %s cap: %d\n",
 		q.Op.Hash.String(), q.Height, q.KeyGen.String(), q.Value)
@@ -415,141 +361,28 @@ func (t *TxStore) QchanInfo(q *Qchan) error {
 
 	fmt.Printf("\tCLOSED at height %d by tx: %s\n",
 		q.CloseData.CloseHeight, q.CloseData.CloseTxid.String())
-	clTx, err := t.GetTx(&q.CloseData.CloseTxid)
-	if err != nil {
-		return err
-	}
-	ctxos, err := q.GetCloseTxos(clTx)
-	if err != nil {
-		return err
-	}
+	//	clTx, err := t.GetTx(&q.CloseData.CloseTxid)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	ctxos, err := q.GetCloseTxos(clTx)
+	//	if err != nil {
+	//		return err
+	//	}
 
-	if len(ctxos) == 0 {
-		fmt.Printf("\tcooperative close.\n")
-		return nil
-	}
+	//	if len(ctxos) == 0 {
+	//		fmt.Printf("\tcooperative close.\n")
+	//		return nil
+	//	}
 
-	fmt.Printf("\tClose resulted in %d spendable txos\n", len(ctxos))
-	if len(ctxos) == 2 {
-		fmt.Printf("\t\tINVALID CLOSE!!!11\n")
-	}
-	for i, u := range ctxos {
-		fmt.Printf("\t\t%d) amt: %d spendable: %d\n", i, u.Value, u.Seq)
-	}
+	//	fmt.Printf("\tClose resulted in %d spendable txos\n", len(ctxos))
+	//	if len(ctxos) == 2 {
+	//		fmt.Printf("\t\tINVALID CLOSE!!!11\n")
+	//	}
+	//	for i, u := range ctxos {
+	//		fmt.Printf("\t\t%d) amt: %d spendable: %d\n", i, u.Value, u.Seq)
+	//	}
 	return nil
-}
-
-// GrabTx produces the "remedy" transaction to get all the money if they
-// broadcast an old state which they invalidated.
-// This function assumes a recovery is possible; if it can't construct the right
-// keys and scripts it will return an error.
-func (t *TxStore) GrabUtxo(u *portxo.PorTxo) (*wire.MsgTx, error) {
-	if u == nil || t == nil {
-		return nil, fmt.Errorf("GrabUtxo Grab error: nil utxo / txstore")
-	}
-
-	// this utxo is returned by PickUtxos() so should be ready to spend
-	// first get the channel data
-	qc, err := t.GetQchanByIdx(u.KeyGen.Step[3], u.KeyGen.Step[4])
-	if err != nil {
-		return nil, err
-	}
-
-	// load closing tx
-	closeTx, err := t.GetTx(&qc.CloseData.CloseTxid)
-	if err != nil {
-		return nil, err
-	}
-	if len(closeTx.TxOut) != 2 { // (could be more later; onehop is 2)
-		return nil, fmt.Errorf("GrabUtxo close tx has %d outputs, can't grab",
-			len(closeTx.TxOut))
-	}
-	if len(closeTx.TxOut[u.Op.Index].PkScript) != 34 {
-		return nil, fmt.Errorf("GrabUtxo grab txout pkscript length %d, expect 34",
-			len(closeTx.TxOut[u.Op.Index].PkScript))
-	}
-
-	x := qc.GetElkZeroOffset()
-	if x >= 1<<48 {
-		return nil, fmt.Errorf("GrabUtxo elkrem error, x= %x", x)
-	}
-	// find state index based on tx hints (locktime / sequence)
-	txIdx := GetStateIdxFromTx(closeTx, x)
-	if txIdx == 0 {
-		return nil, fmt.Errorf("GrabUtxo no hint, can't recover")
-	}
-
-	//	t.GrabTx(qc, txIdx)
-	shOut := closeTx.TxOut[u.Op.Index]
-	// if hinted state is greater than elkrem state we can't recover
-	if txIdx > qc.ElkRcv.UpTo() {
-		return nil, fmt.Errorf("GrabUtxo tx at state %d but elkrem only goes to %d",
-			txIdx, qc.ElkRcv.UpTo())
-	}
-
-	// get elk T point for their timeout pubkey
-	elkT, err := qc.ElkPoint(true, true, txIdx)
-	if err != nil {
-		return nil, err
-	}
-
-	// get raw elkrem hash
-	elk, err := qc.ElkRcv.AtIndex(txIdx)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Printf("made elk %s at index %d\n", elk.String(), txIdx)
-	// hash elkrem into elkrem R scalar
-	elkR := wire.DoubleSha256SH(append(elk.Bytes(), 0x72)) // 'r'
-
-	// get HAKD base scalar
-	priv := t.GetUsePriv(qc.KeyGen, UseChannelHAKDBase)
-	fmt.Printf("made chan pub %x\n", priv.PubKey().SerializeCompressed())
-	// add HAKD base scalar and elkrem R scalar for R private key
-	lnutil.PrivKeyAddBytes(priv, elkR.Bytes())
-
-	// serialize pubkey part for script generation
-	var HAKDpubArr [33]byte
-	copy(HAKDpubArr[:], priv.PubKey().SerializeCompressed())
-	fmt.Printf("made HAKD to recover from %x\n", HAKDpubArr)
-
-	// add the elkT point to their base point for timeout pubkey
-	theirTimeoutPub := lnutil.AddPubs(qc.TheirHAKDBase, elkT)
-
-	// now that everything is chosen, build fancy script and pkh script
-	preScript, _ := CommitScript2(HAKDpubArr, theirTimeoutPub, qc.TimeOut)
-	fancyScript := P2WSHify(preScript) // p2wsh-ify
-	fmt.Printf("prescript: %x\np2wshd: %x\n", preScript, fancyScript)
-	if !bytes.Equal(fancyScript, shOut.PkScript) {
-		return nil, fmt.Errorf("GrabUtxo script hash mismatch, generated %x expect %x",
-			fancyScript, shOut.PkScript)
-	}
-
-	// build tx and sign.
-	sweepTx := wire.NewMsgTx()
-	destTxOut, err := t.NewChangeOut(shOut.Value - 5000) // fixed fee for now
-	if err != nil {
-		return nil, err
-	}
-	sweepTx.AddTxOut(destTxOut)
-
-	// add unsigned input
-	sweepIn := wire.NewTxIn(&u.Op, nil, nil)
-	sweepTx.AddTxIn(sweepIn)
-
-	// make hash cache for this tx
-	hCache := txscript.NewTxSigHashes(sweepTx)
-
-	// sign
-	sig, err := txscript.RawTxInWitnessSignature(
-		sweepTx, hCache, 0, shOut.Value, preScript, txscript.SigHashAll, priv)
-
-	sweepTx.TxIn[0].Witness = make([][]byte, 2)
-	sweepTx.TxIn[0].Witness[0] = sig
-	sweepTx.TxIn[0].Witness[1] = preScript
-	// that's it...?
-
-	return sweepTx, nil
 }
 
 // GetElkZeroOffset returns a 48-bit uint (cast up to 8 bytes) based on the sender

@@ -1,9 +1,6 @@
 package qln
 
-import (
-	"github.com/lightningnetwork/lnd/portxo"
-	"github.com/roasbeef/btcutil/hdkeychain"
-)
+import "github.com/roasbeef/btcutil/hdkeychain"
 
 const (
 	// high 3 bytes are in sequence, low 3 bytes are in time
@@ -41,8 +38,3 @@ const (
 
 	UseIdKey = 11 + hdkeychain.HardenedKeyStart
 )
-
-func (nd *LnNode) GetUsePub(k portxo.KeyGen, use uint32) [33]byte {
-	k.Step[2] = use
-	return nd.BaseWallet.GetPub(k)
-}

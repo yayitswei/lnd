@@ -115,7 +115,7 @@ func (r *LNRpc) Bal(args *NoArgs, reply *BalReply) error {
 	}
 
 	// get all channel states
-	qcs, err := SCon.TS.GetAllQchans()
+	qcs, err := LNode.GetAllQchans()
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (r *LNRpc) TxoList(args *NoArgs, reply *TxoListReply) error {
 // ChannelList sends back a list of every (open?) channel with some
 // info for each.
 func (r *LNRpc) ChannelList(args *NoArgs, reply *ChannelListReply) error {
-	qcs, err := SCon.TS.GetAllQchans()
+	qcs, err := LNode.GetAllQchans()
 	if err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func (r *LNRpc) Connect(args ConnectArgs, reply *StatusReply) error {
 	}
 
 	// store this peer in the db
-	_, err = SCon.TS.NewPeer(RemoteCon.RemotePub)
+	_, err = LNode.NewPeer(RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
@@ -392,7 +392,7 @@ func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
 	}
 
 	// find the peer index of who we're connected to
-	currentPeerIdx, err := SCon.TS.GetPeerIdx(RemoteCon.RemotePub)
+	currentPeerIdx, err := LNode.GetPeerIdx(RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
@@ -403,7 +403,7 @@ func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
 	fmt.Printf("push %d to (%d,%d) %d times\n",
 		args.Amt, args.PeerIdx, args.QChanIdx)
 
-	qc, err := SCon.TS.GetQchanByIdx(args.PeerIdx, args.QChanIdx)
+	qc, err := LNode.GetQchanByIdx(args.PeerIdx, args.QChanIdx)
 	if err != nil {
 		return err
 	}

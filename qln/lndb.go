@@ -7,10 +7,10 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/lightningnetwork/lnd/elkrem"
+	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
-	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil/txsort"
 )
@@ -131,7 +131,7 @@ func (nd *LnNode) NextIdxForPeer(peerBytes [33]byte) (uint32, uint32, error) {
 		if peerIdxBytes == nil {
 			return fmt.Errorf("NextIdxForPeer: peer %x has no index? db bad", peerBytes)
 		}
-		peerIdx = BtU32(peerIdxBytes) // store for key creation
+		peerIdx = lnutil.BtU32(peerIdxBytes) // store for key creation
 		// can't use keyN.  Use BucketN.  So we start at 1.  Also this means
 		// NO SUB-BUCKETS in peers.  If we want to add sub buckets we'll need
 		// to count or track a different way.
@@ -149,7 +149,7 @@ func (nd *LnNode) NextIdxForPeer(peerBytes [33]byte) (uint32, uint32, error) {
 // GetPeerIdx returns the peer index given a pubkey.
 func (nd *LnNode) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	var idx uint32
-	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+	err := nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("GetPeerIdx: No peers evar")
@@ -159,7 +159,7 @@ func (nd *LnNode) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 			return fmt.Errorf("GetPeerIdx: Peer %x has no index saved",
 				pub.SerializeCompressed())
 		}
-		idx = BtU32(pr.Get(KEYIdx))
+		idx = lnutil.BtU32(pr.Get(KEYIdx))
 		return nil
 	})
 	return idx, err
@@ -235,7 +235,7 @@ func (nd *LnNode) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 			}
 		}
 		// make new bucket for this mutliout
-		qcOPArr := OutPointToBytes(qc.Op)
+		qcOPArr := lnutil.OutPointToBytes(qc.Op)
 		qcBucket, err := pr.CreateBucket(qcOPArr[:])
 		if err != nil {
 			return err
@@ -275,13 +275,13 @@ func (nd *LnNode) MakeFundTx(tx *wire.MsgTx, amt int64, peerIdx, cIdx uint32,
 // SaveFundTx saves the data in a multiDesc to DB.  We know the outpoint
 // but that's about it.  Do detection, verification, and capacity check
 // once the outpoint is seen on 8333.
-func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
+func (nd *LnNode) SaveFundTx(op *wire.OutPoint, amt int64,
 	peerArr, theirChanPub, theirRefund, theirHAKDbase [33]byte) (*Qchan, error) {
 
 	var cIdx uint32
 	qc := new(Qchan)
 
-	err := ts.StateDB.Update(func(btx *bolt.Tx) error {
+	err := nd.LnDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
 		if prs == nil {
 			return fmt.Errorf("SaveMultiTx: no peers")
@@ -300,7 +300,7 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		cIdx = CountKeysInBucket(pr) + 1
 
 		// make new bucket for this mutliout
-		qcOP := OutPointToBytes(*op)
+		qcOP := lnutil.OutPointToBytes(*op)
 		multiBucket, err := pr.CreateBucket(qcOP[:])
 		if err != nil {
 			return err
@@ -311,19 +311,19 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 		qc.KeyGen.Step[0] = 44 | 0x80000000
 		qc.KeyGen.Step[1] = 0 | 0x80000000
 		qc.KeyGen.Step[2] = UseChannelFund
-		qc.KeyGen.Step[3] = BtU32(peerIdxBytes) | 0x80000000
+		qc.KeyGen.Step[3] = lnutil.BtU32(peerIdxBytes) | 0x80000000
 		qc.KeyGen.Step[4] = cIdx | 0x80000000
 		qc.Value = amt
 		qc.Mode = portxo.TxoP2WSHComp
 		qc.Op = *op
 
-		qc.MyPub = ts.GetUsePub(qc.KeyGen, UseChannelFund)
+		qc.MyPub = nd.GetUsePub(qc.KeyGen, UseChannelFund)
 		qc.TheirPub = theirChanPub
 		qc.PeerId = peerArr
 		qc.TheirRefundPub = theirRefund
 		qc.TheirHAKDBase = theirHAKDbase
-		qc.MyRefundPub = ts.GetUsePub(qc.KeyGen, UseChannelRefund)
-		qc.MyHAKDBase = ts.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
+		qc.MyRefundPub = nd.GetUsePub(qc.KeyGen, UseChannelRefund)
+		qc.MyHAKDBase = nd.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
 		// serialize qchan
 		qcBytes, err := qc.ToBytes()
 		if err != nil {
@@ -348,12 +348,13 @@ func (ts *TxStore) SaveFundTx(op *wire.OutPoint, amt int64,
 // returns it.  Presumably you send this tx out to the network once it's returned.
 // this function itself doesn't modify height, so it'll still be at -1 untill
 // Ingest() makes it 0 or an acutal block height.
-func (ts *TxStore) SignFundTx(
+/*
+func (nd *LnNode) SignFundTx(
 	op *wire.OutPoint, peerArr [33]byte) (*wire.MsgTx, error) {
 
 	tx := wire.NewMsgTx()
 
-	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+	err := nd.LnDB.View(func(btx *bolt.Tx) error {
 		duf := btx.Bucket(BKTUtxos)
 		if duf == nil {
 			return fmt.Errorf("SignMultiTx: no duffel bag")
@@ -420,6 +421,7 @@ func (ts *TxStore) SignFundTx(
 
 	return tx, nil
 }
+*/
 
 // RestoreQchanFromBucket loads the full qchan into memory from the
 // bucket where it's stored.  Loads the channel info, the elkrems,
@@ -436,7 +438,7 @@ func (ts *TxStore) SignFundTx(
 // state index 1.  Data errors within the db will return errors, but having
 // *no* data for states or elkrem receiver is not considered an error, and will
 // populate with a state 0 / empty elkrem receiver and return that.
-func (ts *TxStore) RestoreQchanFromBucket(
+func (nd *LnNode) RestoreQchanFromBucket(
 	peerIdx uint32, peerPub []byte, bkt *bolt.Bucket) (*Qchan, error) {
 	if bkt == nil { // can't do anything without a bucket
 		return nil, fmt.Errorf("empty qchan bucket from peer %d", peerIdx)
@@ -456,11 +458,11 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	//	qc.KeyGen.Step[3] = peerIdx
 	copy(qc.PeerId[:], peerPub)
 	// get my channel pubkey
-	qc.MyPub = ts.GetUsePub(qc.KeyGen, UseChannelFund)
+	qc.MyPub = nd.GetUsePub(qc.KeyGen, UseChannelFund)
 
 	// derive my refund / base point from index
-	qc.MyRefundPub = ts.GetUsePub(qc.KeyGen, UseChannelRefund)
-	qc.MyHAKDBase = ts.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
+	qc.MyRefundPub = nd.GetUsePub(qc.KeyGen, UseChannelRefund)
+	qc.MyHAKDBase = nd.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
 	qc.State = new(StatCom)
 
 	// load state.  If it exists.
@@ -485,7 +487,7 @@ func (ts *TxStore) RestoreQchanFromBucket(
 	}
 
 	// derive elkrem sender root from HD keychain
-	r := ts.GetElkremRoot(qc.KeyGen)
+	r := nd.GetElkremRoot(qc.KeyGen)
 	// set sender
 	qc.ElkSnd = elkrem.NewElkremSender(r)
 
@@ -494,11 +496,11 @@ func (ts *TxStore) RestoreQchanFromBucket(
 
 // ReloadQchan loads updated data from the db into the qchan.  Loads elkrem
 // and state, but does not change qchan info itself.  Faster than GetQchan()
-func (ts *TxStore) ReloadQchan(q *Qchan) error {
+func (nd *LnNode) ReloadQchan(q *Qchan) error {
 	var err error
-	opArr := OutPointToBytes(q.Op)
+	opArr := lnutil.OutPointToBytes(q.Op)
 
-	return ts.StateDB.View(func(btx *bolt.Tx) error {
+	return nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -535,8 +537,8 @@ func (ts *TxStore) ReloadQchan(q *Qchan) error {
 
 // SetQchanRefund overwrites "theirrefund" and "theirHAKDbase" in a qchan.
 //   This is needed after getting a chanACK.
-func (ts *TxStore) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
-	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+func (nd *LnNode) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
+	return nd.LnDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -545,7 +547,7 @@ func (ts *TxStore) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", q.PeerId)
 		}
-		opArr := OutPointToBytes(q.Op)
+		opArr := lnutil.OutPointToBytes(q.Op)
 		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
@@ -575,8 +577,8 @@ func (ts *TxStore) SetQchanRefund(q *Qchan, refund, hakdBase [33]byte) error {
 // the descent into the qchan bucket is boilerplate and it'd be nice
 // if we can make that it's own function.  Get channel bucket maybe?  But then
 // you have to close it...
-func (ts *TxStore) SaveQchanState(q *Qchan) error {
-	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+func (nd *LnNode) SaveQchanState(q *Qchan) error {
+	return nd.LnDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -585,7 +587,7 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 		if pr == nil {
 			return fmt.Errorf("peer %x not in db", q.PeerId)
 		}
-		opArr := OutPointToBytes(q.Op)
+		opArr := lnutil.OutPointToBytes(q.Op)
 		qcBucket := pr.Bucket(opArr[:])
 		if qcBucket == nil {
 			return fmt.Errorf("outpoint %s not in db under peer %x",
@@ -613,9 +615,9 @@ func (ts *TxStore) SaveQchanState(q *Qchan) error {
 }
 
 // GetAllQchans returns a slice of all Multiouts. empty slice is OK.
-func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
+func (nd *LnNode) GetAllQchans() ([]*Qchan, error) {
 	var qChans []*Qchan
-	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+	err := nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return nil
@@ -637,8 +639,8 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 					return nil // nothing stored
 				}
 
-				pIdx := BtU32(pr.Get(KEYIdx))
-				newQc, err := ts.RestoreQchanFromBucket(pIdx, idPub, qcBucket)
+				pIdx := lnutil.BtU32(pr.Get(KEYIdx))
+				newQc, err := nd.RestoreQchanFromBucket(pIdx, idPub, qcBucket)
 				if err != nil {
 					return err
 				}
@@ -649,18 +651,19 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 			})
 			return nil
 		})
-		for _, qc := range qChans {
-			if qc.CloseData.Closed {
-				clTx, err := ts.GetTx(&qc.CloseData.CloseTxid)
-				if err != nil {
-					return err
-				}
-				_, err = qc.GetCloseTxos(clTx)
-				if err != nil {
-					return err
-				}
-			}
-		}
+		//TODO deal with close txs
+		//		for _, qc := range qChans {
+		//			if qc.CloseData.Closed {
+		//				clTx, err := nd.GetTx(&qc.CloseData.CloseTxid)
+		//				if err != nil {
+		//					return err
+		//				}
+		//				_, err = qc.GetCloseTxos(clTx)
+		//				if err != nil {
+		//					return err
+		//				}
+		//			}
+		//		}
 		return nil
 	})
 	if err != nil {
@@ -671,13 +674,13 @@ func (ts *TxStore) GetAllQchans() ([]*Qchan, error) {
 
 // GetQchan returns a single multi out.  You need to specify the peer
 // pubkey and outpoint bytes.
-func (ts *TxStore) GetQchan(
+func (nd *LnNode) GetQchan(
 	peerArr [33]byte, opArr [36]byte) (*Qchan, error) {
 
 	qc := new(Qchan)
 	var err error
-	op := OutPointFromBytes(opArr)
-	err = ts.StateDB.View(func(btx *bolt.Tx) error {
+	op := lnutil.OutPointFromBytes(opArr)
+	err = nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -692,9 +695,9 @@ func (ts *TxStore) GetQchan(
 				op.String(), peerArr)
 		}
 
-		pIdx := BtU32(pr.Get(KEYIdx))
+		pIdx := lnutil.BtU32(pr.Get(KEYIdx))
 
-		qc, err = ts.RestoreQchanFromBucket(pIdx, peerArr[:], qcBucket)
+		qc, err = nd.RestoreQchanFromBucket(pIdx, peerArr[:], qcBucket)
 		if err != nil {
 			return err
 		}
@@ -704,16 +707,17 @@ func (ts *TxStore) GetQchan(
 		return nil, err
 	}
 	// decode close tx, if channel is closed
-	if qc.CloseData.Closed {
-		clTx, err := ts.GetTx(&qc.CloseData.CloseTxid)
-		if err != nil {
-			return nil, err
-		}
-		_, err = qc.GetCloseTxos(clTx)
-		if err != nil {
-			return nil, err
-		}
-	}
+	//TODO closechans
+	//	if qc.CloseData.Closed {
+	//		clTx, err := ts.GetTx(&qc.CloseData.CloseTxid)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//		_, err = qc.GetCloseTxos(clTx)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//	}
 	return qc, nil
 }
 
@@ -722,13 +726,13 @@ func (ts *TxStore) GetQchan(
 // If the UI does it's job well you shouldn't really need this.
 // the unique identifiers are returned as []bytes because
 // they're probably going right back in to GetQchan()
-func (ts *TxStore) GetQGlobalIdFromIdx(
+func (nd *LnNode) GetQGlobalIdFromIdx(
 	peerIdx, cIdx uint32) ([]byte, []byte, error) {
 	var err error
 	var pubBytes, opBytes []byte
 
 	// go into the db
-	err = ts.StateDB.View(func(btx *bolt.Tx) error {
+	err = nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -743,7 +747,7 @@ func (ts *TxStore) GetQGlobalIdFromIdx(
 				return nil
 			}
 			pr := prs.Bucket(idPub) // go into this peer's bucket
-			if BtU32(pr.Get(KEYIdx)) == peerIdx {
+			if lnutil.BtU32(pr.Get(KEYIdx)) == peerIdx {
 				return pr.ForEach(func(op, nthin []byte) error {
 					if nthin != nil {
 						return nil // non-bucket / outpoint
@@ -786,8 +790,8 @@ func (ts *TxStore) GetQGlobalIdFromIdx(
 
 // GetQchanByIdx is a gets the channel when you don't know the peer bytes and
 // outpoint.  Probably shouldn't have to use this if the UI is done right though.
-func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
-	pubBytes, opBytes, err := ts.GetQGlobalIdFromIdx(peerIdx, cIdx)
+func (nd *LnNode) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
+	pubBytes, opBytes, err := nd.GetQGlobalIdFromIdx(peerIdx, cIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -795,7 +799,7 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 	copy(op[:], opBytes)
 	var peerArr [33]byte
 	copy(peerArr[:], pubBytes)
-	qc, err := ts.GetQchan(peerArr, op)
+	qc, err := nd.GetQchan(peerArr, op)
 	if err != nil {
 		return nil, err
 	}
@@ -803,10 +807,10 @@ func (ts *TxStore) GetQchanByIdx(peerIdx, cIdx uint32) (*Qchan, error) {
 }
 
 // SetChanClose sets the address to close to.
-func (ts *TxStore) SetChanClose(
+func (nd *LnNode) SetChanClose(
 	peerBytes []byte, opArr [36]byte, adrArr [20]byte) error {
 
-	return ts.StateDB.Update(func(btx *bolt.Tx) error {
+	return nd.LnDB.Update(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -830,10 +834,10 @@ func (ts *TxStore) SetChanClose(
 
 // GetChanClose recalls the address the multisig/channel has been requested to
 // close to.  If there's nothing there it returns a nil slice and an error.
-func (ts *TxStore) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error) {
+func (nd *LnNode) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error) {
 	adrBytes := make([]byte, 20)
 
-	err := ts.StateDB.View(func(btx *bolt.Tx) error {
+	err := nd.LnDB.View(func(btx *bolt.Tx) error {
 		prs := btx.Bucket(BKTPeers)
 		if prs == nil {
 			return fmt.Errorf("no peers")
@@ -861,225 +865,109 @@ func (ts *TxStore) GetChanClose(peerBytes []byte, opArr [36]byte) ([]byte, error
 	return adrBytes, nil
 }
 
-/*----- serialization for StatCom ------- */
 /*
-bytes   desc   ends at
-8	StateIdx		8
-8	MyAmt		16
-4	Delta		20
-33	MyRev		53
-33	MyPrevRev	86
-64	Sig			150
+	if prs != nil { // there are peers, check this TX for chan/mult
+		err = prs.ForEach(func(idPub, nothin []byte) error {
+			if nothin != nil {
+				return nil // non-bucket
+			}
+			pr := prs.Bucket(idPub) // go into this peer's bucket
+			pIdx := BtU32(pr.Get(KEYIdx))
+			if pIdx == 0 {
+				return fmt.Errorf("Peer %x has no index", idPub)
+			}
+			//TODO optimization: could only check 0conf channels,
+			// or ignore 0conf and only accept spv proofs.
+			// Then we could only look for the spentOP hash, so that
+			// Ingest() only detects channel closes.
+			return pr.ForEach(func(qcOpBytes, nthin []byte) error {
+				if nthin != nil {
+					//	fmt.Printf("val %x\n", nthin)
+					return nil // non-bucket / outpoint
+				}
+				qchanBucket := pr.Bucket(qcOpBytes)
+				if qchanBucket == nil {
+					return nil // nothing stored / not a bucket
+				}
+				// load everything about the channel from the bucket
+				hitQChan, err := ts.RestoreQchanFromBucket(pIdx, idPub, qchanBucket)
+				if err != nil {
+					return err
+				}
 
+				//					hitQChan.PeerIdx = pIdx
+				// will need state to see if grabbable
+				//					hitQChan.State, err = StatComFromBytes(qchanBucket.Get(KEYState))
+				//					if err != nil {
+				//						return err
+				//					}
 
-note that sigs are truncated and don't have the sighash type byte at the end.
+				// check if we gain a known txid but unknown tx
+				for i, txid := range cachedShas {
+					if txid.IsEqual(&hitQChan.Op.Hash) {
+						// hit; ingesting tx which matches chan/multi
+						// all we do is assign height and increment hits
+						// (which will save the tx)
+						hitTxs[i] = true
+						hitQChan.Height = height
+						qcBytes, err := hitQChan.ToBytes()
+						if err != nil {
+							return err
+						}
+						// save multiout in the bucket
+						err = qchanBucket.Put(KEYutxo, qcBytes)
+						if err != nil {
+							return err
+						}
+					}
+				}
+				// check if it's spending the multiout
+				// there's some problem here as it doesn't always detect it
+				// properly...? still has this problem....
+				for i, spentOP := range spentOPs {
+					if bytes.Equal(spentOP[:], qcOpBytes) {
+						// this multixo is now spent.
+						hitTxs[spentTxIdx[i]] = true
+						// set qchan's spending txid and height
+						hitQChan.CloseData.CloseTxid = *cachedShas[spentTxIdx[i]]
+						hitQChan.CloseData.CloseHeight = height
+						hitQChan.CloseData.Closed = true
+						// serialize
+						closeBytes, err := hitQChan.CloseData.ToBytes()
+						if err != nil {
+							return err
+						}
 
-their rev hash can be derived from the elkrem sender
-and the stateidx.  hash160(elkremsend(sIdx)[:16])
+						// need my pubkey too
+						// needed? already have this, right?
+						// hitQChan.MyRefundPub = ts.GetUsePub(
+						// hitQChan.KeyGen, UseChannelRefund)
 
-*/
-
-// ToBytes turns a StatCom into 106ish bytes
-func (s *StatCom) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	var err error
-
-	// write 8 byte state index
-	err = binary.Write(&buf, binary.BigEndian, s.StateIdx)
-	if err != nil {
-		return nil, err
-	}
-	// write 8 byte amount of my allocation in the channel
-	err = binary.Write(&buf, binary.BigEndian, s.MyAmt)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte delta.  At steady state it's 0.
-	err = binary.Write(&buf, binary.BigEndian, s.Delta)
-	if err != nil {
-		return nil, err
-	}
-	// write 33 byte my elk point R
-	_, err = buf.Write(s.ElkPointR[:])
-	if err != nil {
-		return nil, err
-	}
-	// write 33 byte my previous elk point R
-	// at steady state it's 0s.
-	_, err = buf.Write(s.PrevElkPointR[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// write 33 byte elk point T
-	_, err = buf.Write(s.ElkPointT[:])
-	if err != nil {
-		return nil, err
-	}
-	// write 33 byte previous elk point T
-	// at steady state it's 0s.
-	_, err = buf.Write(s.PrevElkPointT[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// write their sig
-	_, err = buf.Write(s.sig[:])
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// StatComFromBytes turns 216 bytes into a StatCom
-func StatComFromBytes(b []byte) (*StatCom, error) {
-	var s StatCom
-	if len(b) < 216 || len(b) > 216 {
-		return nil, fmt.Errorf("StatComFromBytes got %d bytes, expect 150\n",
-			len(b))
-	}
-	buf := bytes.NewBuffer(b)
-	// read 8 byte state index
-	err := binary.Read(buf, binary.BigEndian, &s.StateIdx)
-	if err != nil {
-		return nil, err
-	}
-	// read 8 byte amount of my allocation in the channel
-	err = binary.Read(buf, binary.BigEndian, &s.MyAmt)
-	if err != nil {
-		return nil, err
-	}
-	// read 4 byte delta.
-	err = binary.Read(buf, binary.BigEndian, &s.Delta)
-	if err != nil {
-		return nil, err
-	}
-	// read 33 byte elk point R
-	copy(s.ElkPointR[:], buf.Next(33))
-	// read 33 byte previous elk point R
-	copy(s.PrevElkPointR[:], buf.Next(33))
-	// read 33 byte elk point T
-	copy(s.ElkPointT[:], buf.Next(33))
-	// read 33 byte previous elk point T
-	copy(s.PrevElkPointT[:], buf.Next(33))
-
-	// the rest is their sig
-	copy(s.sig[:], buf.Next(64))
-
-	return &s, nil
-}
-
-/*----- serialization for QChannels ------- */
-
-/* Qchan serialization:
-bytes   desc   at offset
-
-60	utxo		0
-33	nonce	60
-33	thrref	93
-
-length 126
-
-peeridx is inferred from position in db.
-*/
-//TODO !!! don't store the outpoint!  it's redundant!!!!!
-// it's just a nonce and a refund, that's it! 40 bytes!
-
-func (q *Qchan) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-
-	// write their channel pubkey
-	_, err := buf.Write(q.TheirPub[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// write their refund pubkey
-	_, err = buf.Write(q.TheirRefundPub[:])
-	if err != nil {
-		return nil, err
-	}
-	// write their HAKD base
-	_, err = buf.Write(q.TheirHAKDBase[:])
-	if err != nil {
-		return nil, err
-	}
-	// then serialize the utxo part
-	uBytes, err := q.PorTxo.Bytes()
-	if err != nil {
-		return nil, err
-	}
-	// and write that into the buffer
-	_, err = buf.Write(uBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	// done
-	return buf.Bytes(), nil
-}
-
-// QchanFromBytes turns bytes into a Qchan.
-// the first 99 bytes are the 3 pubkeys: channel, refund, HAKD base
-// the rest is the utxo
-func QchanFromBytes(b []byte) (Qchan, error) {
-	var q Qchan
-
-	if len(b) < 205 {
-		return q, fmt.Errorf("Got %d bytes for qchan, expect 205+", len(b))
-	}
-
-	copy(q.TheirPub[:], b[:33])
-	copy(q.TheirRefundPub[:], b[33:66])
-	copy(q.TheirHAKDBase[:], b[66:99])
-
-	u, err := portxo.PorTxoFromBytes(b[99:])
-	if err != nil {
-		return q, err
-	}
-
-	q.PorTxo = *u // assign the utxo
-
-	return q, nil
-}
-
-/*----- serialization for CloseTXOs -------
-
-  serialization:
-closetxid	32
-closeheight	4
-
-only closeTxid needed, I think
-
-*/
-
-func (c *QCloseData) ToBytes() ([]byte, error) {
-	if c == nil {
-		return nil, fmt.Errorf("nil qclose")
-	}
-	b := make([]byte, 36)
-	copy(b[:32], c.CloseTxid.Bytes())
-	copy(b[32:], I32tB(c.CloseHeight))
-	return b, nil
-}
-
-// QCloseFromBytes deserializes a Qclose.  Note that a nil slice
-// gives an empty / non closed qclose.
-func QCloseFromBytes(b []byte) (QCloseData, error) {
-	var c QCloseData
-	if len(b) == 0 { // empty is OK
-		return c, nil
-
-	}
-	if len(b) < 36 {
-		return c, fmt.Errorf("close data %d bytes, expect 36", len(b))
-	}
-	var empty wire.ShaHash
-	c.CloseTxid.SetBytes(b[:32])
-	if !c.CloseTxid.IsEqual(&empty) {
-		c.Closed = true
-	}
-	c.CloseHeight = BtI32(b[32:36])
-
-	return c, nil
-}
+						// save to close bucket
+						err = qchanBucket.Put(KEYqclose, closeBytes)
+						if err != nil {
+							return err
+						}
+						// generate utxos from the close tx, if any.
+						ctxos, err := hitQChan.GetCloseTxos(txs[spentTxIdx[i]])
+						if err != nil {
+							return err
+						}
+						// serialize utxos to save later
+						for _, ctxo := range ctxos {
+							b, err := ctxo.Bytes()
+							if err != nil {
+								return err
+							}
+							nUtxoBytes = append(nUtxoBytes, b)
+						}
+					}
+				}
+				return nil
+			})
+		})
+		if err != nil {
+			return err
+		}
+		// end of peer checking
+	}*/

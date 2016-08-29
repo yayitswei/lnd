@@ -1,11 +1,11 @@
-package main
+package qln
 
 import (
 	"fmt"
 	"strconv"
-	"time"
 
-	"github.com/lightningnetwork/lnd/qln"
+	"github.com/lightningnetwork/lnd/lnutil"
+
 	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
@@ -15,15 +15,15 @@ const minBal = 10000 // channels have to have 10K sat in them; can make variable
 
 // Grab the coins that are rightfully yours! Plus some more.
 // For right now, spend all outputs from channel close.
-func Grab(args []string) error {
-	return SCon.GrabAll()
-}
+//func Grab(args []string) error {
+//	return SCon.GrabAll()
+//}
 
 // BreakChannel closes the channel without the other party's involvement.
 // The user causing the channel Break has to wait for the OP_CSV timeout
 // before funds can be recovered.  Break output addresses are already in the
 // DB so you can't specify anything other than which channel to break.
-func BreakChannel(args []string) error {
+func (nd LnNode) BreakChannel(args []string) error {
 	// need args, fail
 	if len(args) < 2 {
 		return fmt.Errorf("need args: break peerIdx chanIdx")
@@ -38,7 +38,7 @@ func BreakChannel(args []string) error {
 		return err
 	}
 
-	qc, err := LNode.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
+	qc, err := nd.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
 	if err != nil {
 		return err
 	}
@@ -56,54 +56,13 @@ func BreakChannel(args []string) error {
 	fmt.Printf("elk recv 0: %s\n", z.String())
 	// set delta to 0...
 	qc.State.Delta = 0
-	tx, err := LNode.SignBreakTx(qc)
+	tx, err := nd.SignBreakTx(qc)
 	if err != nil {
 		return err
 	}
 
 	// broadcast
-	return SCon.NewOutgoingTx(tx)
-}
-
-// Resume is a shell command which resumes a message exchange for channels that
-// are in a non-final state.  If the channel is in a final state it will send
-// a REV (which it already sent, and should be ignored)
-func Resume(args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("need args: fix peerIdx chanIdx")
-	}
-	if RemoteCon == nil || RemoteCon.RemotePub == nil {
-		return fmt.Errorf("Not connected to anyone, can't fix\n")
-	}
-	// this stuff is all the same as in cclose, should put into a function...
-	peerIdx64, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil {
-		return err
-	}
-	cIdx64, err := strconv.ParseInt(args[1], 10, 32)
-	if err != nil {
-		return err
-	}
-	peerIdx := uint32(peerIdx64)
-	cIdx := uint32(cIdx64)
-
-	// find the peer index of who we're connected to
-	currentPeerIdx, err := LNode.GetPeerIdx(RemoteCon.RemotePub)
-	if err != nil {
-		return err
-	}
-	if uint32(peerIdx) != currentPeerIdx {
-		return fmt.Errorf("Want to close with peer %d but connected to %d",
-			peerIdx, currentPeerIdx)
-	}
-	fmt.Printf("fix channel (%d,%d)\n", peerIdx, cIdx)
-
-	qc, err := LNode.GetQchanByIdx(peerIdx, cIdx)
-	if err != nil {
-		return err
-	}
-
-	return SendNextMsg(qc)
+	return nd.BaseWallet.PushTx(tx)
 }
 
 /*
@@ -137,7 +96,7 @@ we might have to send it again anyway.
 
 // SendNextMsg determines what message needs to be sent next
 // based on the channel state.  It then calls the appropriate function.
-func SendNextMsg(qc *qln.Qchan) error {
+func SendNextMsg(qc *Qchan) error {
 	var empty [33]byte
 
 	// RTS
@@ -165,78 +124,8 @@ func SendNextMsg(qc *qln.Qchan) error {
 	return SendREV(qc)
 }
 
-// Push is the shell command which calls PushChannel
-func Push(args []string) error {
-	if len(args) < 3 {
-		return fmt.Errorf("need args: push peerIdx chanIdx amt (times)")
-	}
-	if RemoteCon == nil || RemoteCon.RemotePub == nil {
-		return fmt.Errorf("Not connected to anyone, can't push\n")
-	}
-	// this stuff is all the same as in cclose, should put into a function...
-	peerIdx64, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil {
-		return err
-	}
-	cIdx64, err := strconv.ParseInt(args[1], 10, 32)
-	if err != nil {
-		return err
-	}
-	amt, err := strconv.ParseInt(args[2], 10, 32)
-	if err != nil {
-		return err
-	}
-	times := int64(1)
-	if len(args) > 3 {
-		times, err = strconv.ParseInt(args[3], 10, 32)
-		if err != nil {
-			return err
-		}
-	}
-
-	if amt > 100000000 || amt < 1 {
-		return fmt.Errorf("push %d, max push is 1 coin / 100000000", amt)
-	}
-	peerIdx := uint32(peerIdx64)
-	cIdx := uint32(cIdx64)
-
-	// find the peer index of who we're connected to
-	currentPeerIdx, err := LNode.GetPeerIdx(RemoteCon.RemotePub)
-	if err != nil {
-		return err
-	}
-	if uint32(peerIdx) != currentPeerIdx {
-		return fmt.Errorf("Want to push to peer %d but connected to %d",
-			peerIdx, currentPeerIdx)
-	}
-	fmt.Printf("push %d to (%d,%d) %d times\n", amt, peerIdx, cIdx, times)
-
-	qc, err := LNode.GetQchanByIdx(peerIdx, cIdx)
-	if err != nil {
-		return err
-	}
-	if qc.CloseData.Closed {
-		return fmt.Errorf("channel %d, %d is closed.", peerIdx, cIdx64)
-	}
-	for times > 0 {
-		err = LNode.ReloadQchan(qc)
-		if err != nil {
-			return err
-		}
-
-		err = PushChannel(qc, uint32(amt))
-		if err != nil {
-			return err
-		}
-		// such a hack.. obviously need indicator of when state update complete
-		time.Sleep(time.Millisecond * 25)
-		times--
-	}
-	return nil
-}
-
 // PushChannel initiates a state update by sending an RTS
-func PushChannel(qc *qln.Qchan, amt uint32) error {
+func (nd LnNode) PushChannel(qc *Qchan, amt uint32) error {
 
 	var empty [33]byte
 
@@ -260,7 +149,7 @@ func PushChannel(qc *qln.Qchan, amt uint32) error {
 
 	qc.State.Delta = int32(-amt)
 	// save to db with ONLY delta changed
-	err := LNode.SaveQchanState(qc)
+	err := nd.SaveQchanState(qc)
 	if err != nil {
 		return err
 	}
@@ -268,7 +157,7 @@ func PushChannel(qc *qln.Qchan, amt uint32) error {
 }
 
 // SendRTS based on channel info
-func SendRTS(qc *qln.Qchan) error {
+func SendRTS(qc *Qchan) error {
 	qc.State.StateIdx++
 
 	elkPointR, elkPointT, err := qc.MakeTheirCurElkPoints()
@@ -283,7 +172,7 @@ func SendRTS(qc *qln.Qchan) error {
 	// RTS is op (36), delta (4), ElkPointR (33), ElkPointT (33)
 	// total length 106
 	// could put index as well here but for now index just goes ++ each time.
-	msg := []byte{qln.MSGID_RTS}
+	msg := []byte{MSGID_RTS}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, uspv.U32tB(uint32(-qc.State.Delta))...)
 	msg = append(msg, elkPointR[:]...)
@@ -309,7 +198,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 
 	// deserialize RTS
 	copy(opArr[:], RTSBytes[:36])
-	RTSDelta = uspv.BtU32(RTSBytes[36:40])
+	RTSDelta = lnutil.BtU32(RTSBytes[36:40])
 	copy(RTSElkPointR[:], RTSBytes[40:73])
 	copy(RTSElkPointT[:], RTSBytes[73:])
 
@@ -387,7 +276,7 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 }
 
 // SendACKSIG sends an ACKSIG message based on channel info
-func SendACKSIG(qc *qln.Qchan) error {
+func SendACKSIG(qc *Qchan) error {
 	qc.State.StateIdx++
 	qc.State.MyAmt += int64(qc.State.Delta)
 	qc.State.Delta = 0
@@ -403,7 +292,7 @@ func SendACKSIG(qc *qln.Qchan) error {
 	opArr := uspv.OutPointToBytes(qc.Op)
 	// ACKSIG is op (36), ElkPointR (33), ElkPointT (33), sig (64)
 	// total length 166
-	msg := []byte{qln.MSGID_ACKSIG}
+	msg := []byte{MSGID_ACKSIG}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, theirElkPointR[:]...)
 	msg = append(msg, theirElkPointT[:]...)
@@ -491,7 +380,7 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 }
 
 // SendSIGREV sends a SIGREV message based on channel info
-func SendSIGREV(qc *qln.Qchan) error {
+func SendSIGREV(qc *Qchan) error {
 	// sign their tx with my new HAKD pubkey I just got.
 	sig, err := LNode.SignState(qc)
 	if err != nil {
@@ -507,7 +396,7 @@ func SendSIGREV(qc *qln.Qchan) error {
 
 	// SIGREV is op (36), elk (32), sig (64)
 	// total length ~132
-	msg := []byte{qln.MSGID_SIGREV}
+	msg := []byte{MSGID_SIGREV}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig[:]...)
@@ -591,7 +480,7 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 }
 
 // SendREV sends a REV message based on channel info
-func SendREV(qc *qln.Qchan) error {
+func SendREV(qc *Qchan) error {
 	// get elkrem for revoking *previous* state, so elkrem at index - 1.
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
@@ -601,7 +490,7 @@ func SendREV(qc *qln.Qchan) error {
 	opArr := uspv.OutPointToBytes(qc.Op)
 	// REV is just op (36), elk (32)
 	// total length 68
-	msg := []byte{qln.MSGID_REVOKE}
+	msg := []byte{MSGID_REVOKE}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
 	_, err = RemoteCon.Write(msg)

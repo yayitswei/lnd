@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 
+	"github.com/btcsuite/fastsha256"
+	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
 )
 
 // need this because before I was comparing pointers maybe?
@@ -44,3 +47,18 @@ func OutPointFromBytes(b [36]byte) *wire.OutPoint {
 	return op
 }
 
+func P2WSHify(scriptBytes []byte) []byte {
+	bldr := txscript.NewScriptBuilder()
+	bldr.AddOp(txscript.OP_0)
+	wsh := fastsha256.Sum256(scriptBytes)
+	bldr.AddData(wsh[:])
+	b, _ := bldr.Script() // ignore script errors
+	return b
+}
+
+func DirectWPKHScript(pub [33]byte) []byte {
+	builder := txscript.NewScriptBuilder()
+	builder.AddOp(txscript.OP_0).AddData(btcutil.Hash160(pub[:]))
+	b, _ := builder.Script()
+	return b
+}

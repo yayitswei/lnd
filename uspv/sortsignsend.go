@@ -6,6 +6,7 @@ import (
 	"log"
 	"sort"
 
+	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/txscript"
@@ -168,14 +169,6 @@ func (ts *TxStore) PickUtxos(
 	return rSlice, -nokori, nil
 }
 
-func (t *TxStore) GrabTx(qc *Qchan, idx uint64) (*wire.MsgTx, error) {
-	if qc == nil {
-		return nil, fmt.Errorf("nil channel")
-	}
-
-	return nil, nil
-}
-
 // SendDrop sends 2 chained transactions; one to a 2drop script, and then
 // one spending that to an address.
 // Note that this is completely insecure for any purpose, and
@@ -204,7 +197,7 @@ func (ts *TxStore) SendDrop(
 	builder.AddOp(txscript.OP_1)
 	outpre, _ := builder.Script()
 
-	txout := wire.NewTxOut(sendAmt, P2WSHify(outpre))
+	txout := wire.NewTxOut(sendAmt, lnutil.P2WSHify(outpre))
 	tx.AddTxOut(txout)
 
 	// build input
