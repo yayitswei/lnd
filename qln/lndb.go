@@ -7,6 +7,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/lightningnetwork/lnd/elkrem"
+	"github.com/lightningnetwork/lnd/lndc"
 	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/btcec"
@@ -59,6 +60,8 @@ type LnNode struct {
 	// BaseWallet is the underlying wallet which keeps track of utxos, secrets,
 	// and network i/o
 	BaseWallet UWallet
+
+	RemoteCon *lndc.LNDConn // make a bunch of em later
 
 	// Params live here... AND SCon
 	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)

@@ -315,7 +315,7 @@ func (r *LNRpc) Listen(args NoArgs, reply *StatusReply) error {
 		return err
 	}
 	// todo: say what port and what pubkey in status message
-	reply.Status = fmt.Sprintf("listening on %s", RemoteCon.LocalAddr().String())
+	reply.Status = fmt.Sprintf("listening on %s", LNode.RemoteCon.LocalAddr().String())
 	return nil
 }
 
@@ -335,24 +335,24 @@ func (r *LNRpc) Connect(args ConnectArgs, reply *StatusReply) error {
 	idPriv := SCon.TS.IdKey()
 
 	// Assign remote connection
-	RemoteCon = new(lndc.LNDConn)
+	LNode.RemoteCon = new(lndc.LNDConn)
 
-	err = RemoteCon.Dial(idPriv,
+	err = LNode.RemoteCon.Dial(idPriv,
 		connectNode.NetAddr.String(), connectNode.Base58Adr.ScriptAddress())
 	if err != nil {
 		return err
 	}
 
 	// store this peer in the db
-	_, err = LNode.NewPeer(RemoteCon.RemotePub)
+	_, err = LNode.NewPeer(LNode.RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
 
-	idslice := btcutil.Hash160(RemoteCon.RemotePub.SerializeCompressed())
+	idslice := btcutil.Hash160(LNode.RemoteCon.RemotePub.SerializeCompressed())
 	var newId [16]byte
 	copy(newId[:], idslice[:16])
-	go LNDCReceiver(RemoteCon, newId, GlobalOmniChan)
+	go LNode.LNDCReceiver(LNode.RemoteCon, newId, GlobalOmniChan)
 
 	return nil
 }
@@ -384,7 +384,7 @@ type PushReply struct {
 }
 
 func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
-	if RemoteCon == nil || RemoteCon.RemotePub == nil {
+	if LNode.RemoteCon == nil || LNode.RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone, can't push\n")
 	}
 	if args.Amt > 100000000 || args.Amt < 1 {
@@ -392,7 +392,7 @@ func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
 	}
 
 	// find the peer index of who we're connected to
-	currentPeerIdx, err := LNode.GetPeerIdx(RemoteCon.RemotePub)
+	currentPeerIdx, err := LNode.GetPeerIdx(LNode.RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func (r *LNRpc) Push(args PushArgs, reply *PushReply) error {
 	if err != nil {
 		return err
 	}
-	err = PushChannel(qc, uint32(args.Amt))
+	err = LNode.PushChannel(qc, uint32(args.Amt))
 	if err != nil {
 		return err
 	}

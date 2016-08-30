@@ -2,7 +2,6 @@ package qln
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/lightningnetwork/lnd/lnutil"
 
@@ -18,52 +17,6 @@ const minBal = 10000 // channels have to have 10K sat in them; can make variable
 //func Grab(args []string) error {
 //	return SCon.GrabAll()
 //}
-
-// BreakChannel closes the channel without the other party's involvement.
-// The user causing the channel Break has to wait for the OP_CSV timeout
-// before funds can be recovered.  Break output addresses are already in the
-// DB so you can't specify anything other than which channel to break.
-func (nd LnNode) BreakChannel(args []string) error {
-	// need args, fail
-	if len(args) < 2 {
-		return fmt.Errorf("need args: break peerIdx chanIdx")
-	}
-
-	peerIdx, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil {
-		return err
-	}
-	cIdx, err := strconv.ParseInt(args[1], 10, 32)
-	if err != nil {
-		return err
-	}
-
-	qc, err := nd.GetQchanByIdx(uint32(peerIdx), uint32(cIdx))
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("breaking (%d,%d)\n", qc.KeyGen.Step[3], qc.KeyGen.Step[4])
-	z, err := qc.ElkSnd.AtIndex(0)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("elk send 0: %s\n", z.String())
-	z, err = qc.ElkRcv.AtIndex(0)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("elk recv 0: %s\n", z.String())
-	// set delta to 0...
-	qc.State.Delta = 0
-	tx, err := nd.SignBreakTx(qc)
-	if err != nil {
-		return err
-	}
-
-	// broadcast
-	return nd.BaseWallet.PushTx(tx)
-}
 
 /*
 SendNextMsg logic:
@@ -96,7 +49,7 @@ we might have to send it again anyway.
 
 // SendNextMsg determines what message needs to be sent next
 // based on the channel state.  It then calls the appropriate function.
-func SendNextMsg(qc *Qchan) error {
+func (nd LnNode) SendNextMsg(qc *Qchan) error {
 	var empty [33]byte
 
 	// RTS
@@ -104,7 +57,7 @@ func SendNextMsg(qc *Qchan) error {
 		if qc.State.PrevElkPointR != empty {
 			return fmt.Errorf("delta is %d but prevHAKD full!", qc.State.Delta)
 		}
-		return SendRTS(qc)
+		return nd.SendRTS(qc)
 	}
 
 	// ACKSIG
@@ -112,16 +65,16 @@ func SendNextMsg(qc *Qchan) error {
 		if qc.State.PrevElkPointR == empty {
 			return fmt.Errorf("delta is %d but prevHAKD empty!", qc.State.Delta)
 		}
-		return SendACKSIG(qc)
+		return nd.SendACKSIG(qc)
 	}
 
 	//SIGREV (delta must be 0 by now)
 	if qc.State.PrevElkPointR != empty {
-		return SendSIGREV(qc)
+		return nd.SendSIGREV(qc)
 	}
 
 	// REV
-	return SendREV(qc)
+	return nd.SendREV(qc)
 }
 
 // PushChannel initiates a state update by sending an RTS
@@ -153,11 +106,11 @@ func (nd LnNode) PushChannel(qc *Qchan, amt uint32) error {
 	if err != nil {
 		return err
 	}
-	return SendRTS(qc)
+	return nd.SendRTS(qc)
 }
 
 // SendRTS based on channel info
-func SendRTS(qc *Qchan) error {
+func (nd LnNode) SendRTS(qc *Qchan) error {
 	qc.State.StateIdx++
 
 	elkPointR, elkPointT, err := qc.MakeTheirCurElkPoints()
@@ -177,7 +130,7 @@ func SendRTS(qc *Qchan) error {
 	msg = append(msg, uspv.U32tB(uint32(-qc.State.Delta))...)
 	msg = append(msg, elkPointR[:]...)
 	msg = append(msg, elkPointT[:]...)
-	_, err = RemoteCon.Write(msg)
+	_, err = nd.RemoteCon.Write(msg)
 	if err != nil {
 		return err
 	}
@@ -185,7 +138,7 @@ func SendRTS(qc *Qchan) error {
 }
 
 // RTSHandler takes in an RTS and responds with an ACKSIG (if everything goes OK)
-func RTSHandler(from [16]byte, RTSBytes []byte) {
+func (nd LnNode) RTSHandler(from [16]byte, RTSBytes []byte) {
 
 	if len(RTSBytes) < 106 || len(RTSBytes) > 106 {
 		fmt.Printf("got %d byte RTS, expect 106", len(RTSBytes))
@@ -216,9 +169,9 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 
 	// find who we're talkikng to
 	var peerArr [33]byte
-	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	copy(peerArr[:], nd.RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := LNode.GetQchan(peerArr, opArr)
+	qc, err := nd.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("RTSHandler GetQchan err %s", err.Error())
 		return
@@ -260,14 +213,14 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 	qc.State.ElkPointR = RTSElkPointR           // assign ElkPoints
 	qc.State.ElkPointT = RTSElkPointT           // assign ElkPoints
 	// save delta, ElkPoint to db
-	err = LNode.SaveQchanState(qc)
+	err = nd.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("RTSHandler SaveQchanState err %s", err.Error())
 		return
 	}
 	// saved to db, now proceed to create & sign their tx, and generate their
 	// HAKD pub for them to sign
-	err = SendACKSIG(qc)
+	err = nd.SendACKSIG(qc)
 	if err != nil {
 		fmt.Printf("RTSHandler SendACKSIG err %s", err.Error())
 		return
@@ -276,11 +229,11 @@ func RTSHandler(from [16]byte, RTSBytes []byte) {
 }
 
 // SendACKSIG sends an ACKSIG message based on channel info
-func SendACKSIG(qc *Qchan) error {
+func (nd LnNode) SendACKSIG(qc *Qchan) error {
 	qc.State.StateIdx++
 	qc.State.MyAmt += int64(qc.State.Delta)
 	qc.State.Delta = 0
-	sig, err := LNode.SignState(qc)
+	sig, err := nd.SignState(qc)
 	if err != nil {
 		return err
 	}
@@ -297,12 +250,12 @@ func SendACKSIG(qc *Qchan) error {
 	msg = append(msg, theirElkPointR[:]...)
 	msg = append(msg, theirElkPointT[:]...)
 	msg = append(msg, sig[:]...)
-	_, err = RemoteCon.Write(msg)
+	_, err = nd.RemoteCon.Write(msg)
 	return err
 }
 
 // ACKSIGHandler takes in an ACKSIG and responds with an SIGREV (if everything goes OK)
-func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
+func (nd LnNode) ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 	if len(ACKSIGBytes) < 166 || len(ACKSIGBytes) > 166 {
 		fmt.Printf("got %d byte ACKSIG, expect 166", len(ACKSIGBytes))
 		return
@@ -333,9 +286,9 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 
 	// find who we're talkikng to
 	var peerArr [33]byte
-	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	copy(peerArr[:], nd.RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := LNode.GetQchan(peerArr, opArr)
+	qc, err := nd.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
@@ -366,12 +319,12 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 		return
 	}
 	// verify worked; Save to incremented state to DB with new & old myHAKDpubs
-	err = LNode.SaveQchanState(qc)
+	err = nd.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
 	}
-	err = SendSIGREV(qc)
+	err = nd.SendSIGREV(qc)
 	if err != nil {
 		fmt.Printf("ACKSIGHandler err %s", err.Error())
 		return
@@ -380,9 +333,9 @@ func ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 }
 
 // SendSIGREV sends a SIGREV message based on channel info
-func SendSIGREV(qc *Qchan) error {
+func (nd LnNode) SendSIGREV(qc *Qchan) error {
 	// sign their tx with my new HAKD pubkey I just got.
-	sig, err := LNode.SignState(qc)
+	sig, err := nd.SignState(qc)
 	if err != nil {
 		return err
 	}
@@ -400,12 +353,12 @@ func SendSIGREV(qc *Qchan) error {
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
 	msg = append(msg, sig[:]...)
-	_, err = RemoteCon.Write(msg)
+	_, err = nd.RemoteCon.Write(msg)
 	return err
 }
 
 // SIGREVHandler takes in an SIGREV and responds with a REV (if everything goes OK)
-func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
+func (nd LnNode) SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 
 	if len(SIGREVBytes) < 132 || len(SIGREVBytes) > 132 {
 		fmt.Printf("got %d byte SIGREV, expect 132", len(SIGREVBytes))
@@ -426,9 +379,9 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 
 	// find who we're talkikng to
 	var peerArr [33]byte
-	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	copy(peerArr[:], nd.RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := LNode.GetQchan(peerArr, opArr)
+	qc, err := nd.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
 		return
@@ -464,14 +417,14 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 	// Implement that later though.
 
 	// all verified; Save finished state to DB, puller is pretty much done.
-	err = LNode.SaveQchanState(qc)
+	err = nd.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
 		return
 	}
 
 	fmt.Printf("SIGREV OK, state %d, will send REV\n", qc.State.StateIdx)
-	err = SendREV(qc)
+	err = nd.SendREV(qc)
 	if err != nil {
 		fmt.Printf("SIGREVHandler err %s", err.Error())
 		return
@@ -480,7 +433,7 @@ func SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 }
 
 // SendREV sends a REV message based on channel info
-func SendREV(qc *Qchan) error {
+func (nd LnNode) SendREV(qc *Qchan) error {
 	// get elkrem for revoking *previous* state, so elkrem at index - 1.
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
@@ -493,13 +446,13 @@ func SendREV(qc *Qchan) error {
 	msg := []byte{MSGID_REVOKE}
 	msg = append(msg, opArr[:]...)
 	msg = append(msg, elk.Bytes()...)
-	_, err = RemoteCon.Write(msg)
+	_, err = nd.RemoteCon.Write(msg)
 	return err
 }
 
 // REVHandler takes in an REV and clears the state's prev HAKD.  This is the
 // final message in the state update process and there is no response.
-func REVHandler(from [16]byte, REVBytes []byte) {
+func (nd LnNode) REVHandler(from [16]byte, REVBytes []byte) {
 	if len(REVBytes) != 68 {
 		fmt.Printf("got %d byte REV, expect 68", len(REVBytes))
 		return
@@ -515,9 +468,9 @@ func REVHandler(from [16]byte, REVBytes []byte) {
 
 	// find who we're talkikng to
 	var peerArr [33]byte
-	copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	copy(peerArr[:], nd.RemoteCon.RemotePub.SerializeCompressed())
 	// load qchan & state from DB
-	qc, err := LNode.GetQchan(peerArr, opArr)
+	qc, err := nd.GetQchan(peerArr, opArr)
 	if err != nil {
 		fmt.Printf("REVHandler err %s", err.Error())
 		return
@@ -546,7 +499,7 @@ func REVHandler(from [16]byte, REVBytes []byte) {
 		return
 	}
 	// save to DB (only new elkrem)
-	err = LNode.SaveQchanState(qc)
+	err = nd.SaveQchanState(qc)
 	if err != nil {
 		fmt.Printf("REVHandler err %s", err.Error())
 		return

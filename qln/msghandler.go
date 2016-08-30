@@ -1,14 +1,12 @@
-package main
+package qln
 
 import (
 	"fmt"
 	"net"
-
-	"github.com/lightningnetwork/lnd/qln"
 )
 
 // handles stuff that comes in over the wire.  Not user-initiated.
-func OmniHandler(OmniChan chan []byte) {
+func (nd LnNode) OmniHandler(OmniChan chan []byte) {
 	var from [16]byte
 	for {
 		newdata := <-OmniChan // blocks here
@@ -21,44 +19,44 @@ func OmniHandler(OmniChan chan []byte) {
 		msgid := msg[0]
 
 		// TEXT MESSAGE.  SIMPLE
-		if msgid == qln.MSGID_TEXTCHAT { //it's text
+		if msgid == MSGID_TEXTCHAT { //it's text
 			fmt.Printf("text from %x: %s\n", from, msg[1:])
 			continue
 		}
 		// POINT REQUEST
-		if msgid == qln.MSGID_POINTREQ {
+		if msgid == MSGID_POINTREQ {
 			fmt.Printf("Got point request from %x\n", from)
-			PointReqHandler(from, msg[1:])
+			nd.PointReqHandler(from, msg[1:])
 			continue
 		}
 		// POINT RESPONSE
-		if msgid == qln.MSGID_POINTRESP {
+		if msgid == MSGID_POINTRESP {
 			fmt.Printf("Got point response from %x\n", from)
-			PointRespHandler(from, msg[1:])
+			nd.PointRespHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL DESCRIPTION
-		if msgid == qln.MSGID_CHANDESC {
+		if msgid == MSGID_CHANDESC {
 			fmt.Printf("Got channel description from %x\n", from)
-			QChanDescHandler(from, msg[1:])
+			nd.QChanDescHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL ACKNOWLEDGE
-		if msgid == qln.MSGID_CHANACK {
+		if msgid == MSGID_CHANACK {
 			fmt.Printf("Got channel acknowledgement from %x\n", from)
-			QChanAckHandler(from, msg[1:])
+			nd.QChanAckHandler(from, msg[1:])
 			continue
 		}
 		// HERE'S YOUR CHANNEL
-		if msgid == qln.MSGID_SIGPROOF {
+		if msgid == MSGID_SIGPROOF {
 			fmt.Printf("Got channel proof from %x\n", from)
-			SigProofHandler(from, msg[1:])
+			nd.SigProofHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE REQ
-		if msgid == qln.MSGID_CLOSEREQ {
+		if msgid == MSGID_CLOSEREQ {
 			fmt.Printf("Got close request from %x\n", from)
-			CloseReqHandler(from, msg[1:])
+			nd.CloseReqHandler(from, msg[1:])
 			continue
 		}
 		// CLOSE RESP
@@ -68,27 +66,27 @@ func OmniHandler(OmniChan chan []byte) {
 		//			continue
 		//		}
 		// REQUEST TO SEND
-		if msgid == qln.MSGID_RTS {
+		if msgid == MSGID_RTS {
 			fmt.Printf("Got RTS from %x\n", from)
-			RTSHandler(from, msg[1:])
+			nd.RTSHandler(from, msg[1:])
 			continue
 		}
 		// CHANNEL UPDATE ACKNOWLEDGE AND SIGNATURE
-		if msgid == qln.MSGID_ACKSIG {
+		if msgid == MSGID_ACKSIG {
 			fmt.Printf("Got ACKSIG from %x\n", from)
-			ACKSIGHandler(from, msg[1:])
+			nd.ACKSIGHandler(from, msg[1:])
 			continue
 		}
 		// SIGNATURE AND REVOCATION
-		if msgid == qln.MSGID_SIGREV {
+		if msgid == MSGID_SIGREV {
 			fmt.Printf("Got SIGREV from %x\n", from)
-			SIGREVHandler(from, msg[1:])
+			nd.SIGREVHandler(from, msg[1:])
 			continue
 		}
 		// REVOCATION
-		if msgid == qln.MSGID_REVOKE {
+		if msgid == MSGID_REVOKE {
 			fmt.Printf("Got REVOKE from %x\n", from)
-			REVHandler(from, msg[1:])
+			nd.REVHandler(from, msg[1:])
 			continue
 		}
 		fmt.Printf("Unknown message id byte %x", msgid)
@@ -99,9 +97,9 @@ func OmniHandler(OmniChan chan []byte) {
 // Every lndc has one of these running
 // it listens for incoming messages on the lndc and hands it over
 // to the OmniHandler via omnichan
-func LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
+func (nd LnNode) LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
 	// first store peer in DB if not yet known
-	_, err := LNode.NewPeer(RemoteCon.RemotePub)
+	_, err := nd.NewPeer(nd.RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}

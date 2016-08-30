@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/txscript"
@@ -41,8 +40,7 @@ var (
 
 	LNode qln.LnNode
 
-	GlobalOmniChan chan []byte   // channel for omnihandler
-	RemoteCon      *lndc.LNDConn // one because simple
+	GlobalOmniChan chan []byte // channel for omnihandler
 
 	FundChanStash []*FundReserve // should move this or add a mutex
 )
@@ -59,7 +57,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
 	GlobalOmniChan = make(chan []byte, 10)
-	go OmniHandler(GlobalOmniChan)
+	go LNode.OmniHandler(GlobalOmniChan)
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
 	if err != nil {
@@ -247,13 +245,7 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
-	if cmd == "grab" {
-		err = Grab(args)
-		if err != nil {
-			fmt.Printf("grab error: %s\n", err)
-		}
-		return nil
-	}
+
 	if cmd == "fix" {
 		err = Resume(args)
 		if err != nil {
@@ -305,8 +297,8 @@ func TCPListener(lisIpPort string) error {
 			fmt.Printf("Authed incoming connection from remote %s lnid %x OK\n",
 				newConn.RemoteAddr().String(), newId)
 
-			go LNDCReceiver(newConn, newId, GlobalOmniChan)
-			RemoteCon = newConn
+			go LNode.LNDCReceiver(newConn, newId, GlobalOmniChan)
+			LNode.RemoteCon = newConn
 		}
 	}()
 	return nil
@@ -326,23 +318,23 @@ func Con(args []string) error {
 
 	idPriv := SCon.TS.IdKey()
 
-	RemoteCon = new(lndc.LNDConn)
+	LNode.RemoteCon = new(lndc.LNDConn)
 
-	err = RemoteCon.Dial(
+	err = LNode.RemoteCon.Dial(
 		idPriv, newNode.NetAddr.String(), newNode.Base58Adr.ScriptAddress())
 	if err != nil {
 		return err
 	}
 	// store this peer
-	_, err = LNode.NewPeer(RemoteCon.RemotePub)
+	_, err = LNode.NewPeer(LNode.RemoteCon.RemotePub)
 	if err != nil {
 		return err
 	}
 
-	idslice := btcutil.Hash160(RemoteCon.RemotePub.SerializeCompressed())
+	idslice := btcutil.Hash160(LNode.RemoteCon.RemotePub.SerializeCompressed())
 	var newId [16]byte
 	copy(newId[:], idslice[:16])
-	go LNDCReceiver(RemoteCon, newId, GlobalOmniChan)
+	go LNode.LNDCReceiver(LNode.RemoteCon, newId, GlobalOmniChan)
 
 	return nil
 }
@@ -353,7 +345,7 @@ func Say(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("you have to say something")
 	}
-	if RemoteCon == nil || RemoteCon.RemotePub == nil {
+	if LNode.RemoteCon == nil || LNode.RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone\n")
 	}
 
@@ -363,7 +355,7 @@ func Say(args []string) error {
 	}
 	msg := append([]byte{qln.MSGID_TEXTCHAT}, []byte(chat)...)
 
-	_, err := RemoteCon.Write(msg)
+	_, err := LNode.RemoteCon.Write(msg)
 	return err
 }
 
