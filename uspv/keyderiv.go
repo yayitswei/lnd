@@ -6,9 +6,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-	"github.com/roasbeef/btcutil/hdkeychain"
 )
 
 /*
@@ -18,18 +16,6 @@ The identity key is use 11, peer 0, index 0.
 Channel multisig keys are use 2, peer and index per peer and channel.
 Channel refund keys are use 3, peer and index per peer / channel.
 */
-
-const (
-	UseWallet          = 0 + hdkeychain.HardenedKeyStart
-	UseChannelFund     = 2 + hdkeychain.HardenedKeyStart
-	UseChannelRefund   = 3 + hdkeychain.HardenedKeyStart
-	UseChannelHAKDBase = 4 + hdkeychain.HardenedKeyStart
-	UseChannelElkrem   = 8 + hdkeychain.HardenedKeyStart
-	// links Id and channel. replaces UseChannelFund
-	UseChannelNonce = 10 + hdkeychain.HardenedKeyStart
-
-	UseIdKey = 11 + hdkeychain.HardenedKeyStart
-)
 
 // PrivKeyAddBytes adds bytes to a private key.
 // NOTE that this modifies the key in place, overwriting it!!!!1
@@ -72,78 +58,6 @@ func PrivKeyMult(k *btcec.PrivateKey, n uint32) {
 	k.D.Mul(k.D, bigN)
 	k.D.Mod(k.D, btcec.S256().N)
 	k.X, k.Y = btcec.S256().ScalarBaseMult(k.D.Bytes())
-}
-
-// PubKeyArrAddBytes adds a byte slice to a serialized point.
-// You can't add scalars to a point, so you turn the bytes into a point,
-// then add that point.
-func PubKeyArrAddBytes(p *[33]byte, b []byte) error {
-	pub, err := btcec.ParsePubKey(p[:], btcec.S256())
-	if err != nil {
-		return err
-	}
-	// turn b into a point on the curve
-	bx, by := pub.ScalarBaseMult(b)
-	// add arg point to pubkey point
-	pub.X, pub.Y = btcec.S256().Add(bx, by, pub.X, pub.Y)
-	copy(p[:], pub.SerializeCompressed())
-	return nil
-}
-
-// ###########################
-// HAKD/Elkrem point functions
-
-// AddPointArrs takes two 33 byte serialized points, adds them, and
-// returns the sum as a 33 byte array.
-// Silently returns a zero array if there's an input error
-func AddPubs(a, b [33]byte) [33]byte {
-	var c [33]byte
-	apoint, err := btcec.ParsePubKey(a[:], btcec.S256())
-	if err != nil {
-		return c
-	}
-	bpoint, err := btcec.ParsePubKey(b[:], btcec.S256())
-	if err != nil {
-		return c
-	}
-
-	apoint.X, apoint.Y = btcec.S256().Add(apoint.X, apoint.Y, bpoint.X, bpoint.Y)
-	copy(c[:], apoint.SerializeCompressed())
-
-	return c
-}
-
-// HashToPub turns a 32 byte hash into a 33 byte serialized pubkey
-func PubFromHash(h wire.ShaHash) (p [33]byte) {
-	_, pub := btcec.PrivKeyFromBytes(btcec.S256(), h[:])
-	copy(p[:], pub.SerializeCompressed())
-	return
-}
-
-// IDPointAdd adds an ID pubkey and a derivation point to make a channel pubkey.
-func IDPointAdd(id, dp *[32]byte) ([33]byte, error) {
-
-	cPub := new(btcec.PublicKey)
-	cPub.Curve = btcec.S256()
-	var cPubArr [33]byte
-
-	// deserialize; IDs always start with 02
-	idPub, err := IdToPub(*id)
-	if err != nil {
-		return cPubArr, err
-	}
-	// deserialize; derivation point starts with 03
-	dPoint, err := btcec.ParsePubKey(append([]byte{0x03}, dp[:]...), btcec.S256())
-	if err != nil {
-		return cPubArr, err
-	}
-
-	// add the two points together
-	cPub.X, cPub.Y = btcec.S256().Add(idPub.X, idPub.Y, dPoint.X, dPoint.Y)
-
-	// return the new point, serialized
-	copy(cPubArr[:], cPub.SerializeCompressed())
-	return cPubArr, nil
 }
 
 // IDPrivAdd returns a channel pubkey from the sum of two scalars
@@ -194,7 +108,7 @@ func (t *TxStore) GetWalletPrivkey(idx uint32) *btcec.PrivateKey {
 	kg.Depth = 5
 	kg.Step[0] = 44 + 0x80000000
 	kg.Step[1] = 0 + 0x80000000
-	kg.Step[2] = UseWallet
+	kg.Step[2] = 0 + 0x80000000
 	kg.Step[3] = 0 + 0x80000000
 	kg.Step[4] = idx + 0x80000000
 	return t.PathPrivkey(kg)
@@ -236,128 +150,14 @@ func (t *TxStore) GetUsePub(kg portxo.KeyGen, use uint32) [33]byte {
 	return b
 }
 
-// GetElkremRoot gives the Elkrem sender root hash for a channel.
-func (t *TxStore) GetElkremRoot(kg portxo.KeyGen) wire.ShaHash {
-	kg.Step[2] = UseChannelElkrem
-	priv := t.PathPrivkey(kg)
-	return wire.DoubleSha256SH(priv.Serialize())
-}
-
 // IdKey returns the identity private key
 func (t *TxStore) IdKey() *btcec.PrivateKey {
 	var kg portxo.KeyGen
 	kg.Depth = 5
 	kg.Step[0] = 44 + 0x80000000
 	kg.Step[1] = 0 + 0x80000000
-	kg.Step[2] = UseIdKey
+	kg.Step[2] = 9 + 0x80000000
 	kg.Step[3] = 0 + 0x80000000
 	kg.Step[4] = 0 + 0x80000000
 	return t.PathPrivkey(kg)
 }
-
-func (t *TxStore) IdPub() [33]byte {
-	var b [33]byte
-	k := t.IdKey().PubKey()
-	if k != nil {
-		copy(b[:], k.SerializeCompressed())
-	}
-	return b
-}
-
-// END of use these now
-// =====================================================================
-
-// GetAddress generates and returns the pubkeyhash address for a given path.
-// It will return nil if there's an error / problem.
-//func (t *TxStore) GetAddress(
-//	use, peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
-//	pub := t.GetPubkey(use, peerIdx, cIdx)
-//	if pub == nil {
-//		fmt.Printf("GetAddress %d,%d,%d made nil pub\n", use, peerIdx, cIdx)
-//		return nil
-//	}
-//}
-
-// GetPrivkey generates and returns a private key derived from the seed.
-// It will return nil if there's an error / problem, but there shouldn't be
-// unless the root key itself isn't there or something.
-// All other specialized derivation functions should call this.
-//func (t *TxStore) GetPrivkeyx(use, peerIdx, cIdx uint32) *btcec.PrivateKey {
-//	multiRoot, err := t.rootPrivKey.Child(use + hdkeychain.HardenedKeyStart)
-//	if err != nil {
-//		fmt.Printf("GetPrivkey err %s", err.Error())
-//		return nil
-//	}
-//	peerRoot, err := multiRoot.Child(peerIdx + hdkeychain.HardenedKeyStart)
-//	if err != nil {
-//		fmt.Printf("GetPrivkey err %s", err.Error())
-//		return nil
-//	}
-//	multiChild, err := peerRoot.Child(cIdx + hdkeychain.HardenedKeyStart)
-//	if err != nil {
-//		fmt.Printf("GetPrivkey err %s", err.Error())
-//		return nil
-//	}
-//	priv, err := multiChild.ECPrivKey()
-//	if err != nil {
-//		fmt.Printf("GetPrivkey err %s", err.Error())
-//		return nil
-//	}
-//	//	pubbyte := priv.PubKey().SerializeCompressed()
-//	//	fmt.Printf("- - -generated %d,%d,%d %x\n",
-//	//		use, peerIdx, cIdx, pubbyte[:8])
-//	return priv
-//}
-
-// GetPubkey generates and returns the pubkey for a given path.
-// It will return nil if there's an error / problem.
-//func (t *TxStore) GetPubkey(use, peerIdx, cIdx uint32) *btcec.PublicKey {
-//	priv := t.GetPrivkey(use, peerIdx, cIdx)
-//	if priv == nil {
-//		fmt.Printf("GetPubkey peer %d idx %d failed", peerIdx, cIdx)
-//		return nil
-//	}
-//	return priv.PubKey()
-//}
-
-// ----- Get fund priv/pub replaced with channel / CKDH? -------------------
-
-// ---------------------------------------------------------
-
-// CreateChannelNonce returns the channel nonce used to get a CKDH.
-// Maybe later this nonce can be the hash of some
-// provable info, or a merkle root or something.
-func (t *TxStore) CreateChanNonce(kg portxo.KeyGen) [20]byte {
-	priv := t.GetUsePriv(kg, UseChannelNonce)
-	var nonce [20]byte
-	copy(nonce[:], btcutil.Hash160(priv.Serialize()))
-	return nonce
-}
-
-// CalcCKDH calculates the channel key derivation hash from the two
-// f is funder ID pub, r is receiver ID pub, cn is channel nonce.
-func CalcCKDH(f, r [33]byte, cn [20]byte) wire.ShaHash {
-	pre := make([]byte, 86)
-	copy(pre[:33], f[:])
-	copy(pre[33:66], r[:])
-	copy(pre[66:], cn[:])
-	return wire.DoubleSha256SH(pre)
-}
-
-// CalcChannelPub calculates the two channel pubkeys given a channel nonce.
-// f is funder ID pub, r is receiver ID pub, cn is channel nonce.
-func CalcChanPubs(f, r [33]byte, cn [20]byte) ([33]byte, [33]byte, error) {
-	ckdh := CalcCKDH(f, r, cn)
-	err := PubKeyArrAddBytes(&f, ckdh.Bytes())
-	if err != nil {
-		return f, r, err
-	}
-	err = PubKeyArrAddBytes(&r, ckdh.Bytes())
-	return f, r, err
-}
-
-// GetFundAddress... like GetFundPubkey but hashes.  Useless/remove?
-//func (ts *TxStore) GetFundAddress(
-//	peerIdx, cIdx uint32) *btcutil.AddressWitnessPubKeyHash {
-//	return ts.GetAddress(UseChannelFund, peerIdx, cIdx)
-//}

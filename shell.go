@@ -40,13 +40,9 @@ var (
 	SCon   uspv.SPVCon // global here for now
 
 	LNode qln.LnNode
-
-	GlobalOmniChan chan []byte // channel for omnihandler
-
-	FundChanStash []*FundReserve // should move this or add a mutex
 )
 
-type FundReserve struct {
+type FundReservex struct {
 	PeerIdx       uint32
 	ChanIdx       uint32
 	Cap, InitSend int64
@@ -57,11 +53,6 @@ type FundReserve struct {
 func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
-	GlobalOmniChan = make(chan []byte, 10)
-	err := LNode.Init(lndbFileName)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
@@ -89,6 +80,11 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	err = LNode.Init(lndbFileName, &SCon)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// once we're connected, initiate headers sync

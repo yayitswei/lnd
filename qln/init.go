@@ -2,7 +2,9 @@ package qln
 
 import "github.com/boltdb/bolt"
 
-func (nd *LnNode) Init(dbfilename string) error {
+func (nd *LnNode) Init(dbfilename string, basewal UWallet) error {
+	nd.BaseWallet = basewal
+
 	err := nd.OpenDB(dbfilename)
 	if err != nil {
 		return err

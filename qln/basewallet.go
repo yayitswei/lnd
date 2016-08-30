@@ -9,7 +9,7 @@ import (
 
 type UWallet interface {
 	// Ask for a pubkey based on a bip32 path
-	GetPub(k portxo.KeyGen) [33]byte
+	GetPub(k portxo.KeyGen) *btcec.PublicKey
 
 	// Have GetPriv for now. Get rid of it and have a signing function instead.
 	GetPriv(k portxo.KeyGen) *btcec.PrivateKey
@@ -23,9 +23,11 @@ type UWallet interface {
 
 // GetUsePub gets a pubkey from the base wallet, but first modifies
 // the "use" step
-func (nd *LnNode) GetUsePub(k portxo.KeyGen, use uint32) [33]byte {
+func (nd *LnNode) GetUsePub(k portxo.KeyGen, use uint32) (pubArr [33]byte) {
 	k.Step[2] = use
-	return nd.BaseWallet.GetPub(k)
+	pub := nd.BaseWallet.GetPub(k)
+	copy(pubArr[:], pub.SerializeCompressed())
+	return
 }
 
 // Get rid of this function soon and replace with signing function

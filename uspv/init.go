@@ -7,9 +7,28 @@ import (
 	"net"
 	"os"
 
+	"github.com/lightningnetwork/lnd/portxo"
+	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/wire"
 )
+
+// interface is implemented here--
+func (s *SPVCon) GetPriv(k portxo.KeyGen) *btcec.PrivateKey {
+	return s.TS.PathPrivkey(k)
+}
+
+func (s *SPVCon) GetPub(k portxo.KeyGen) *btcec.PublicKey {
+	return s.TS.PathPubkey(k)
+}
+
+func (s *SPVCon) Params() *chaincfg.Params {
+	return s.Param
+}
+
+func (s *SPVCon) PushTx(tx *wire.MsgTx) error {
+	return s.PushTx(tx)
+}
 
 // OpenPV starts a
 func OpenSPV(remoteNode string, hfn, dbfn string,

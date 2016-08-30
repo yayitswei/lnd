@@ -6,7 +6,6 @@ import (
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
-	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/wire"
 )
 
@@ -116,13 +115,13 @@ func (nd *LnNode) PointReqHandler(from [16]byte, pointReqBytes []byte) {
 	kg.Depth = 5
 	kg.Step[0] = 44 + 0x80000000
 	kg.Step[1] = 0 + 0x80000000
-	kg.Step[2] = uspv.UseChannelFund
+	kg.Step[2] = UseChannelFund
 	kg.Step[3] = peerIdx + 0x80000000
 	kg.Step[4] = cIdx + 0x80000000
 
-	myChanPub := nd.GetUsePub(kg, uspv.UseChannelFund)
-	myRefundPub := nd.GetUsePub(kg, uspv.UseChannelRefund)
-	myHAKDbase := nd.GetUsePub(kg, uspv.UseChannelHAKDBase)
+	myChanPub := nd.GetUsePub(kg, UseChannelFund)
+	myRefundPub := nd.GetUsePub(kg, UseChannelRefund)
+	myHAKDbase := nd.GetUsePub(kg, UseChannelHAKDBase)
 	fmt.Printf("Generated pubkey %x\n", myChanPub)
 
 	msg := []byte{MSGID_POINTRESP}

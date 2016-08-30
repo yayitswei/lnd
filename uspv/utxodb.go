@@ -473,7 +473,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 					newu.KeyGen.Depth = 5
 					newu.KeyGen.Step[0] = 44 + 0x80000000
 					newu.KeyGen.Step[1] = 0 + 0x80000000
-					newu.KeyGen.Step[2] = UseWallet
+					newu.KeyGen.Step[2] = 0x80000000
 					newu.KeyGen.Step[3] = 0x80000000
 					newu.KeyGen.Step[4] = ts.Adrs[k].KeyIdx + 0x80000000
 

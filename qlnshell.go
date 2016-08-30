@@ -16,9 +16,9 @@ func FundChannel(args []string) error {
 	if LNode.RemoteCon == nil || LNode.RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone")
 	}
-	if len(FundChanStash) > 0 {
-		return fmt.Errorf("Other channel creation not done yet")
-	}
+	//	if len(FundChanStash) > 0 {
+	//		return fmt.Errorf("Other channel creation not done yet")
+	//	}
 
 	// this stuff is all the same as in cclose, should put into a function...
 	cCap, err := strconv.ParseInt(args[0], 10, 32)
@@ -51,19 +51,19 @@ func FundChannel(args []string) error {
 
 	var peerArr [33]byte
 	copy(peerArr[:], LNode.RemoteCon.RemotePub.SerializeCompressed())
-	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
-	if err != nil {
-		return err
-	}
+	//	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
+	//	if err != nil {
+	//		return err
+	//	}
 
-	fr := new(FundReserve)
-	fr.PeerIdx = peerIdx
-	fr.ChanIdx = cIdx
-	fr.Cap = cCap
-	fr.InitSend = iSend
+	//	fr := new(FundReserve)
+	//	fr.PeerIdx = peerIdx
+	//	fr.ChanIdx = cIdx
+	//	fr.Cap = cCap
+	//	fr.InitSend = iSend
 	//TODO freeze utxos here
 
-	FundChanStash = append(FundChanStash, fr)
+	//	FundChanStash = append(FundChanStash, fr)
 	msg := []byte{qln.MSGID_POINTREQ}
 	_, err = LNode.RemoteCon.Write(msg)
 	return err
