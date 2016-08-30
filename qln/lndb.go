@@ -41,17 +41,6 @@ Later on we can chop it up so that each channel gets it's own db file.
 
 */
 
-var (
-	BKTPeers   = []byte("pir") // all peer data is in this bucket.
-	KEYIdx     = []byte("idx") // index for key derivation
-	KEYutxo    = []byte("utx") // serialized utxo for the channel
-	KEYUnsig   = []byte("usg") // unsigned fund tx
-	KEYCladr   = []byte("cdr") // coop close address (Don't make fun of my lisp)
-	KEYState   = []byte("ima") // channel state
-	KEYElkRecv = []byte("elk") // elkrem receiver
-	KEYqclose  = []byte("qcl") // channel close outpoint & height
-)
-
 // LnNode is the main struct for the node, keeping track of all channel state and
 // communicating with the underlying UWallet
 type LnNode struct {
@@ -62,6 +51,9 @@ type LnNode struct {
 	BaseWallet UWallet
 
 	RemoteCon *lndc.LNDConn // make a bunch of em later
+
+	// OmniChan is the channel for the OmniHandler
+	OmniChan chan []byte
 
 	// Params live here... AND SCon
 	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)

@@ -352,7 +352,7 @@ func (r *LNRpc) Connect(args ConnectArgs, reply *StatusReply) error {
 	idslice := btcutil.Hash160(LNode.RemoteCon.RemotePub.SerializeCompressed())
 	var newId [16]byte
 	copy(newId[:], idslice[:16])
-	go LNode.LNDCReceiver(LNode.RemoteCon, newId, GlobalOmniChan)
+	go LNode.LNDCReceiver(LNode.RemoteCon, newId)
 
 	return nil
 }

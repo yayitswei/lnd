@@ -49,7 +49,7 @@ we might have to send it again anyway.
 
 // SendNextMsg determines what message needs to be sent next
 // based on the channel state.  It then calls the appropriate function.
-func (nd LnNode) SendNextMsg(qc *Qchan) error {
+func (nd *LnNode) SendNextMsg(qc *Qchan) error {
 	var empty [33]byte
 
 	// RTS
@@ -110,7 +110,7 @@ func (nd LnNode) PushChannel(qc *Qchan, amt uint32) error {
 }
 
 // SendRTS based on channel info
-func (nd LnNode) SendRTS(qc *Qchan) error {
+func (nd *LnNode) SendRTS(qc *Qchan) error {
 	qc.State.StateIdx++
 
 	elkPointR, elkPointT, err := qc.MakeTheirCurElkPoints()
@@ -138,7 +138,7 @@ func (nd LnNode) SendRTS(qc *Qchan) error {
 }
 
 // RTSHandler takes in an RTS and responds with an ACKSIG (if everything goes OK)
-func (nd LnNode) RTSHandler(from [16]byte, RTSBytes []byte) {
+func (nd *LnNode) RTSHandler(from [16]byte, RTSBytes []byte) {
 
 	if len(RTSBytes) < 106 || len(RTSBytes) > 106 {
 		fmt.Printf("got %d byte RTS, expect 106", len(RTSBytes))
@@ -229,7 +229,7 @@ func (nd LnNode) RTSHandler(from [16]byte, RTSBytes []byte) {
 }
 
 // SendACKSIG sends an ACKSIG message based on channel info
-func (nd LnNode) SendACKSIG(qc *Qchan) error {
+func (nd *LnNode) SendACKSIG(qc *Qchan) error {
 	qc.State.StateIdx++
 	qc.State.MyAmt += int64(qc.State.Delta)
 	qc.State.Delta = 0
@@ -255,7 +255,7 @@ func (nd LnNode) SendACKSIG(qc *Qchan) error {
 }
 
 // ACKSIGHandler takes in an ACKSIG and responds with an SIGREV (if everything goes OK)
-func (nd LnNode) ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
+func (nd *LnNode) ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 	if len(ACKSIGBytes) < 166 || len(ACKSIGBytes) > 166 {
 		fmt.Printf("got %d byte ACKSIG, expect 166", len(ACKSIGBytes))
 		return
@@ -333,7 +333,7 @@ func (nd LnNode) ACKSIGHandler(from [16]byte, ACKSIGBytes []byte) {
 }
 
 // SendSIGREV sends a SIGREV message based on channel info
-func (nd LnNode) SendSIGREV(qc *Qchan) error {
+func (nd *LnNode) SendSIGREV(qc *Qchan) error {
 	// sign their tx with my new HAKD pubkey I just got.
 	sig, err := nd.SignState(qc)
 	if err != nil {
@@ -358,7 +358,7 @@ func (nd LnNode) SendSIGREV(qc *Qchan) error {
 }
 
 // SIGREVHandler takes in an SIGREV and responds with a REV (if everything goes OK)
-func (nd LnNode) SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
+func (nd *LnNode) SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 
 	if len(SIGREVBytes) < 132 || len(SIGREVBytes) > 132 {
 		fmt.Printf("got %d byte SIGREV, expect 132", len(SIGREVBytes))
@@ -433,7 +433,7 @@ func (nd LnNode) SIGREVHandler(from [16]byte, SIGREVBytes []byte) {
 }
 
 // SendREV sends a REV message based on channel info
-func (nd LnNode) SendREV(qc *Qchan) error {
+func (nd *LnNode) SendREV(qc *Qchan) error {
 	// get elkrem for revoking *previous* state, so elkrem at index - 1.
 	elk, err := qc.ElkSnd.AtIndex(qc.State.StateIdx - 1)
 	if err != nil {
@@ -452,7 +452,7 @@ func (nd LnNode) SendREV(qc *Qchan) error {
 
 // REVHandler takes in an REV and clears the state's prev HAKD.  This is the
 // final message in the state update process and there is no response.
-func (nd LnNode) REVHandler(from [16]byte, REVBytes []byte) {
+func (nd *LnNode) REVHandler(from [16]byte, REVBytes []byte) {
 	if len(REVBytes) != 68 {
 		fmt.Printf("got %d byte REV, expect 68", len(REVBytes))
 		return

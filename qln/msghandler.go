@@ -6,10 +6,10 @@ import (
 )
 
 // handles stuff that comes in over the wire.  Not user-initiated.
-func (nd LnNode) OmniHandler(OmniChan chan []byte) {
+func (nd *LnNode) OmniHandler() {
 	var from [16]byte
 	for {
-		newdata := <-OmniChan // blocks here
+		newdata := <-nd.OmniChan // blocks here
 		if len(newdata) < 17 {
 			fmt.Printf("got too short a message")
 			continue
@@ -97,7 +97,7 @@ func (nd LnNode) OmniHandler(OmniChan chan []byte) {
 // Every lndc has one of these running
 // it listens for incoming messages on the lndc and hands it over
 // to the OmniHandler via omnichan
-func (nd LnNode) LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) error {
+func (nd *LnNode) LNDCReceiver(l net.Conn, id [16]byte) error {
 	// first store peer in DB if not yet known
 	_, err := nd.NewPeer(nd.RemoteCon.RemotePub)
 	if err != nil {
@@ -116,6 +116,6 @@ func (nd LnNode) LNDCReceiver(l net.Conn, id [16]byte, OmniChan chan []byte) err
 		msg = msg[:n]
 		msg = append(id[:], msg...)
 		//		fmt.Printf("incoming msg %x\n", msg)
-		OmniChan <- msg
+		nd.OmniChan <- msg
 	}
 }

@@ -27,7 +27,8 @@ testing.  It can send and receive coins.  And make / update / close channels.
 const (
 	keyFileName    = "testkey.hex"
 	headerFileName = "headers.bin"
-	dbFileName     = "utxo.db"
+	utxodbFileName = "utxo.db"
+	lndbFileName   = "ln.db"
 	// this is my local testnet node, replace it with your own close by.
 	// Random internet testnet nodes usually work but sometimes don't, so
 	// maybe I should test against different versions out there.
@@ -57,7 +58,11 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")
 	GlobalOmniChan = make(chan []byte, 10)
-	go LNode.OmniHandler(GlobalOmniChan)
+	err := LNode.Init(lndbFileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
 	if err != nil {
@@ -68,7 +73,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	// setup spvCon
 
 	SCon, err = uspv.OpenSPV(
-		SPVHostAdr, headerFileName, dbFileName, &Store, true, false, Params)
+		SPVHostAdr, headerFileName, utxodbFileName, &Store, true, false, Params)
 	if err != nil {
 		log.Printf("can't connect: %s", err.Error())
 		log.Fatal(err) // back to fatal when can't connect
@@ -297,7 +302,7 @@ func TCPListener(lisIpPort string) error {
 			fmt.Printf("Authed incoming connection from remote %s lnid %x OK\n",
 				newConn.RemoteAddr().String(), newId)
 
-			go LNode.LNDCReceiver(newConn, newId, GlobalOmniChan)
+			go LNode.LNDCReceiver(newConn, newId)
 			LNode.RemoteCon = newConn
 		}
 	}()
@@ -334,7 +339,7 @@ func Con(args []string) error {
 	idslice := btcutil.Hash160(LNode.RemoteCon.RemotePub.SerializeCompressed())
 	var newId [16]byte
 	copy(newId[:], idslice[:16])
-	go LNode.LNDCReceiver(LNode.RemoteCon, newId, GlobalOmniChan)
+	go LNode.LNDCReceiver(LNode.RemoteCon, newId)
 
 	return nil
 }

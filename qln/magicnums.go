@@ -32,9 +32,20 @@ const (
 	UseChannelFund     = 2 + hdkeychain.HardenedKeyStart
 	UseChannelRefund   = 3 + hdkeychain.HardenedKeyStart
 	UseChannelHAKDBase = 4 + hdkeychain.HardenedKeyStart
-	UseChannelElkrem   = 8 + hdkeychain.HardenedKeyStart
+	UseChannelElkrem   = 8888 + hdkeychain.HardenedKeyStart
 	// links Id and channel. replaces UseChannelFund
 	UseChannelNonce = 10 + hdkeychain.HardenedKeyStart
 
 	UseIdKey = 11 + hdkeychain.HardenedKeyStart
+)
+
+var (
+	BKTPeers   = []byte("pir") // all peer data is in this bucket.
+	KEYIdx     = []byte("idx") // index for key derivation
+	KEYutxo    = []byte("utx") // serialized utxo for the channel
+	KEYUnsig   = []byte("usg") // unsigned fund tx
+	KEYCladr   = []byte("cdr") // coop close address (Don't make fun of my lisp)
+	KEYState   = []byte("ima") // channel state
+	KEYElkRecv = []byte("elk") // elkrem receiver
+	KEYqclose  = []byte("qcl") // channel close outpoint & height
 )
