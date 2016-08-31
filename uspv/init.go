@@ -13,7 +13,8 @@ import (
 	"github.com/roasbeef/btcd/wire"
 )
 
-// interface is implemented here--
+// --- Uwallet interface ----
+
 func (s *SPVCon) GetPriv(k portxo.KeyGen) *btcec.PrivateKey {
 	return s.TS.PathPrivkey(k)
 }
