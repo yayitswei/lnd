@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/boltdb/bolt"
+	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/chaincfg"
@@ -20,8 +22,10 @@ type TxStore struct {
 	// could get rid of adr slice, it's just an in-ram cache...
 	Adrs    []MyAdr  // endeavouring to acquire capital
 	StateDB *bolt.DB // place to write all this down
-	// can make a map of *bolt.DBs later for lots-o-channels
-	xlocalFilter *bloom.Filter // local bloom filter for hard mode
+
+	// Set of frozen utxos not to use... they point to the tx using em
+	FreezeSet   map[wire.OutPoint]*FrozenTx
+	FreezeMutex sync.Mutex
 
 	// Params live here... AND SCon
 	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)
@@ -30,30 +34,10 @@ type TxStore struct {
 	rootPrivKey *hdkeychain.ExtendedKey
 }
 
-type Utxoz struct { // cash money.
-	Op wire.OutPoint // where
-
-	// all the info needed to spend
-	KeyIdx uint32 // index for private key needed to sign / spend
-	Value  int64  // higher is better
-
-	// not actually needed but nice to know
-	AtHeight int32 // block height where this tx was confirmed, 0 for unconf
-
-	// SpendLag indicates the delay after which the utxo can be spent.
-	// for most utxos, they can be spent whenever.  3 values have other meanings:
-	// -1 means immediately grabbable invalid channel close.
-	// 0 means normal PKH, non-witness
-	// 1 means normal WPKH, witnessy
-	// > 1 means time-locked channel close. (so min supported delay is 2 blocks)
-	// actually restricted to uint16 from channel; maybe change to that...
-	SpendLag int32 // if a SH channel close output (or coinbase!)
-
-	// if a channel close tx output, fromPeer will be non-zero
-	// in that case, KeyIdx is the PeerIdx for key derivation
-	PeerIdx uint32
-
-	//	IsWit bool // true if p2wpkh output
+type FrozenTx struct {
+	Ins  []*portxo.PorTxo
+	Outs []*wire.TxOut
+	Txid wire.ShaHash
 }
 
 // Stxo is a utxo that has moved on.
@@ -74,6 +58,7 @@ func NewTxStore(rootkey *hdkeychain.ExtendedKey, p *chaincfg.Params) TxStore {
 	var txs TxStore
 	txs.rootPrivKey = rootkey
 	txs.Param = p
+	txs.FreezeSet = make(map[wire.OutPoint]*FrozenTx)
 	return txs
 }
 
@@ -166,7 +151,7 @@ func CheckDoubleSpends(
 		for _, argIn := range argTx.TxIn {
 			// iterate through inputs of compTx
 			for _, compIn := range compTx.TxIn {
-				if OutPointsEqual(
+				if lnutil.OutPointsEqual(
 					argIn.PreviousOutPoint, compIn.PreviousOutPoint) {
 					// found double spend
 					dubs = append(dubs, &compTxid)
@@ -201,154 +186,6 @@ func TxToString(tx *wire.MsgTx) string {
 	return str
 }
 
-// need this because before I was comparing pointers maybe?
-// so they were the same outpoint but stored in 2 places so false negative?
-func OutPointsEqual(a, b wire.OutPoint) bool {
-	if !a.Hash.IsEqual(&b.Hash) {
-		return false
-	}
-	return a.Index == b.Index
-}
-
-/*----- serialization for tx outputs ------- */
-
-// outPointToBytes turns an outpoint into 36 bytes.
-func OutPointToBytes(op wire.OutPoint) (b [36]byte) {
-	var buf bytes.Buffer
-	_, err := buf.Write(op.Hash.Bytes())
-	if err != nil {
-		return
-	}
-	// write 4 byte outpoint index within the tx to spend
-	err = binary.Write(&buf, binary.BigEndian, op.Index)
-	if err != nil {
-		return
-	}
-	copy(b[:], buf.Bytes())
-
-	return
-}
-
-// OutPointFromBytes gives you an outpoint from 36 bytes.
-// since 36 is enforced, it doesn't error
-func OutPointFromBytes(b [36]byte) *wire.OutPoint {
-	op := new(wire.OutPoint)
-	_ = op.Hash.SetBytes(b[:32])
-	op.Index = BtU32(b[32:])
-	return op
-}
-
-/*----- serialization for utxos ------- */
-/* Utxos serialization:
-byte length   desc   at offset
-
-32	txid		0
-4	idx		32
-4	height	36
-4	keyidx	40
-8	amt		44
-4	spndble 52
-4	frmpeer 56
-
-end len 	60
-*/
-
-// ToBytes turns a Utxo into some bytes.
-// note that the txid is the first 36 bytes and in our use cases will be stripped
-// off, but is left here for other applications
-/*
-func (u *Utxo) ToBytes() ([]byte, error) {
-	var buf bytes.Buffer
-	// write 32 byte txid of the utxo
-	_, err := buf.Write(u.Op.Hash.Bytes())
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte outpoint index within the tx to spend
-	err = binary.Write(&buf, binary.BigEndian, u.Op.Index)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte height of utxo
-	err = binary.Write(&buf, binary.BigEndian, u.AtHeight)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte key index of utxo
-	err = binary.Write(&buf, binary.BigEndian, u.KeyIdx)
-	if err != nil {
-		return nil, err
-	}
-	// write 8 byte amount of money at the utxo
-	err = binary.Write(&buf, binary.BigEndian, u.Value)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte spendable height value
-	err = binary.Write(&buf, binary.BigEndian, u.SpendLag)
-	if err != nil {
-		return nil, err
-	}
-	// write 4 byte from peer value
-	err = binary.Write(&buf, binary.BigEndian, u.PeerIdx)
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-// UtxoFromBytes turns bytes into a Utxo.  Note it wants the txid and outindex
-// in the first 36 bytes, which isn't stored that way in the boldDB,
-// but can be easily appended.
-func UtxoFromBytes(b []byte) (Utxo, error) {
-	var u Utxo
-	if b == nil {
-		return u, fmt.Errorf("nil input slice")
-	}
-	buf := bytes.NewBuffer(b)
-	if buf.Len() < 60 { // utxos are 53 bytes
-		return u, fmt.Errorf("Got %d bytes for utxo, expect 60", buf.Len())
-	}
-	// read 32 byte txid
-	err := u.Op.Hash.SetBytes(buf.Next(32))
-	if err != nil {
-		return u, err
-	}
-	// read 4 byte outpoint index within the tx to spend
-	err = binary.Read(buf, binary.BigEndian, &u.Op.Index)
-	if err != nil {
-		return u, err
-	}
-	// read 4 byte height of utxo
-	err = binary.Read(buf, binary.BigEndian, &u.AtHeight)
-	if err != nil {
-		return u, err
-	}
-	// read 4 byte key index of utxo
-	err = binary.Read(buf, binary.BigEndian, &u.KeyIdx)
-	if err != nil {
-		return u, err
-	}
-	// read 8 byte amount of money at the utxo
-	err = binary.Read(buf, binary.BigEndian, &u.Value)
-	if err != nil {
-		return u, err
-	}
-	// read 4 byte spendable height value
-	err = binary.Read(buf, binary.BigEndian, &u.SpendLag)
-	if err != nil {
-		return u, err
-	}
-	// read 4 byte from peer value
-	err = binary.Read(buf, binary.BigEndian, &u.PeerIdx)
-	if err != nil {
-		return u, err
-	}
-
-	return u, nil
-}
-*/
 /*----- serialization for stxos ------- */
 /* Stxo serialization:
 byte length   desc   at offset

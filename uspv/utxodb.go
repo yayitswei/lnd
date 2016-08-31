@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/txscript"
@@ -375,6 +376,12 @@ func (ts *TxStore) PopulateAdrs(lastKey uint32) error {
 	return nil
 }
 
+// ExportUtxo is really IMport utxo on this side.
+// Not implemented yet.  Fix "ingest many" at the same time eh?
+func (s *SPVCon) ExportUtxo(*portxo.PorTxo) error {
+	return nil
+}
+
 func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	return ts.IngestMany([]*wire.MsgTx{tx}, height)
 }
@@ -422,7 +429,7 @@ func (ts *TxStore) IngestMany(txs []*wire.MsgTx, height int32) (uint32, error) {
 		cachedShas[i] = utilTx.Sha()
 		// before entering into db, serialize all inputs of ingested txs
 		for _, txin := range tx.TxIn {
-			spentOPs = append(spentOPs, OutPointToBytes(txin.PreviousOutPoint))
+			spentOPs = append(spentOPs, lnutil.OutPointToBytes(txin.PreviousOutPoint))
 			spentTxIdx = append(spentTxIdx, uint32(i)) // save tx it came from
 		}
 	}

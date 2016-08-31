@@ -1,6 +1,7 @@
 package uspv
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -8,25 +9,143 @@ import (
 
 	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
-	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-	"github.com/roasbeef/btcutil/bloom"
 	"github.com/roasbeef/btcutil/txsort"
 )
 
-func (s *SPVCon) PongBack(nonce uint64) {
-	mpong := wire.NewMsgPong(nonce)
+// Build a tx, kindof like with SendCoins, but don't sign or broadcast.
+// Segwit inputs only.  Freeze the utxos used so the tx can be signed and broadcast
+// later.  Use only segwit utxos.  Return the txid, and indexes of where the txouts
+// in the argument slice ended up in the final tx.
+// Bunch of redundancy with SendMany, maybe move that to a shared function...
+//NOTE this does not support multiple txouts with identical pkscripts in one tx.
+// The code would be trivial; it's not supported on purpose.  Use unique pkscripts.
+func (s *SPVCon) MaybeSend(txos []*wire.TxOut) (*wire.ShaHash, []uint32, error) {
+	var err error
+	var totalSend int64
+	dustCutoff := int64(20000) // below this amount, just give to miners
+	satPerByte := int64(80)    // satoshis per byte fee; have as arg later
 
-	s.outMsgQueue <- mpong
-	return
+	// make an initial txo copy so we can find where the outputs end up in final tx
+	initTxos := make([]*wire.TxOut, len(txos))
+	finalIndex := make([]uint32, len(txos))
+	copy(initTxos, txos)
+
+	// check for negative...?
+	for _, txo := range txos {
+		totalSend += txo.Value
+	}
+
+	// start access to utxos
+	s.TS.FreezeMutex.Lock()
+
+	// get inputs for this tx
+	// This might not be enough for the fee if the inputs line up right...
+	utxos, overshoot, err := s.TS.PickUtxos(totalSend, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// estimate fee with outputs, see if change should be truncated
+	fee := EstFee(utxos, txos, satPerByte)
+
+	// add a change output if we have enough extra
+	if overshoot-fee > dustCutoff {
+		changeOut, err := s.TS.NewChangeOut(overshoot - fee)
+		if err != nil {
+			return nil, nil, err
+		}
+		txos = append(txos, changeOut)
+	}
+
+	// BuildDontSign gets the txid.  Also sorts txin, txout slices in place
+	txid, err := s.TS.BuildDontSign(utxos, txos)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// build frozen tx for later broadcast
+	fTx := new(FrozenTx)
+	fTx.Ins = utxos
+	fTx.Outs = txos
+	fTx.Txid = txid
+
+	for _, utxo := range utxos {
+		s.TS.FreezeSet[utxo.Op] = fTx
+	}
+	// done adding to frozen set
+	s.TS.FreezeMutex.Unlock()
+
+	// figure out where outputs ended up after adding the change output and sorting
+	for i, initTxo := range initTxos {
+		for j, finalTxo := range txos {
+			// If pkscripts match, this is where it ended up.
+			// if you're sending different amounts to the same address, this
+			// might not work!  Don't re-use addresses!
+			if bytes.Equal(initTxo.PkScript, finalTxo.PkScript) {
+				finalIndex[i] = uint32(j)
+			}
+		}
+	}
+
+	return &txid, finalIndex, nil
 }
 
-func (s *SPVCon) SendFilter(f *bloom.Filter) {
-	s.outMsgQueue <- f.MsgFilterLoad()
+// Sign and broadcast a tx previously built with MaybeSend.  This clears the freeze
+// on the utxos but they're not utxos anymore anyway.
+func (s *SPVCon) ReallySend(txid *wire.ShaHash) error {
+	// start frozen set access
+	s.TS.FreezeMutex.Lock()
+	// get the transaction
+	frozenTx, err := s.TS.FindFreezeTx(txid)
+	if err != nil {
+		return err
+	}
+	// delete inputs from frozen set (they're gone anyway, but just to clean it up)
+	for _, txin := range frozenTx.Ins {
+		delete(s.TS.FreezeSet, txin.Op)
+	}
+	// done with frozen set
+	s.TS.FreezeMutex.Unlock()
 
-	return
+	tx, err := s.TS.BuildAndSign(frozenTx.Ins, frozenTx.Outs)
+	if err != nil {
+		return err
+	}
+
+	return s.NewOutgoingTx(tx)
+}
+
+// Cancel the hold on a tx previously built with MaybeSend.  Clears freeze on
+// utxos so they can be used somewhere else.
+func (s *SPVCon) NahDontSend(txid *wire.ShaHash) error {
+	// start frozen set access
+	s.TS.FreezeMutex.Lock()
+	// get the transaction
+	frozenTx, err := s.TS.FindFreezeTx(txid)
+	if err != nil {
+		return err
+	}
+	// go through all its inputs, and remove those outpoints from the frozen set
+	for _, txin := range frozenTx.Ins {
+		delete(s.TS.FreezeSet, txin.Op)
+	}
+	// done with frozen set
+	s.TS.FreezeMutex.Unlock()
+	return nil
+}
+
+// FindFreezeTx looks through the frozen map to find a tx.  Error if it can't find it
+func (ts *TxStore) FindFreezeTx(txid *wire.ShaHash) (*FrozenTx, error) {
+	for op := range ts.FreezeSet {
+		frozenTxid := ts.FreezeSet[op].Txid
+		if frozenTxid.IsEqual(txid) {
+			return ts.FreezeSet[op], nil
+		}
+	}
+	return nil, fmt.Errorf("couldn't find %s in frozen set", txid.String())
 }
 
 // Rebroadcast sends an inv message of all the unconfirmed txs the db is
@@ -118,6 +237,16 @@ func (ts *TxStore) PickUtxos(
 		return nil, 0, err
 	}
 
+	// remove frozen utxos from allUtxo slice.  Iterate backwards / trailing delete
+	for i := len(allUtxos) - 1; i >= 0; i-- {
+		_, frozen := ts.FreezeSet[allUtxos[i].Op]
+		if frozen {
+			// faster than append, and we're sorting a few lines later anyway
+			allUtxos[i] = allUtxos[len(allUtxos)-1] // redundant if at last index
+			allUtxos = allUtxos[:len(allUtxos)-1]   // trim last element
+		}
+	}
+
 	// start with utxos sorted by value.
 	// smallest and unconfirmed last (because it's reversed)
 	sort.Sort(sort.Reverse(allUtxos))
@@ -142,7 +271,7 @@ func (ts *TxStore) PickUtxos(
 			continue
 		}
 		// yeah, lets add this utxo!
-		rSlice = append(rSlice, *utxo)
+		rSlice = append(rSlice, utxo)
 		nokori -= utxo.Value
 		// if nokori is positive, don't bother checking fee yet.
 		if nokori < 0 {
@@ -311,15 +440,42 @@ func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, e
 	// make user specified txout and add to tx
 	txout := wire.NewTxOut(sendAmt, outAdrScript)
 
-	return ts.BuildAndSign([]portxo.PorTxo{u}, []*wire.TxOut{txout})
+	return ts.BuildAndSign([]*portxo.PorTxo{&u}, []*wire.TxOut{txout})
+}
+
+// Builds tx from inputs and outputs, returns txid.  Sorts.  Doesn't sign.
+func (ts *TxStore) BuildDontSign(
+	utxos []*portxo.PorTxo, txos []*wire.TxOut) (wire.ShaHash, error) {
+
+	// make the tx
+	tx := wire.NewMsgTx()
+	// add all the txouts
+	for _, txo := range txos {
+		tx.AddTxOut(txo)
+	}
+	// add all the txins
+	for i, u := range utxos {
+		tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
+		// set sequence field if it's in the portxo
+		if u.Seq > 1 {
+			tx.TxIn[i].Sequence = u.Seq
+		}
+	}
+	// sort in place before signing
+	txsort.InPlaceSort(tx)
+	return tx.TxSha(), nil
 }
 
 // Build and sign builds a tx from a slice of utxos and txOuts.
 // It then signs all the inputs and returns the tx.  Should
 // pretty much always work for any inputs.
 func (ts *TxStore) BuildAndSign(
-	utxos []portxo.PorTxo, txos []*wire.TxOut) (*wire.MsgTx, error) {
+	utxos []*portxo.PorTxo, txos []*wire.TxOut) (*wire.MsgTx, error) {
 	var err error
+
+	// sort utxos first.  I think this works.
+	sort.Sort(portxo.TxoSliceByBip69(utxos))
+
 	// make the tx
 	tx := wire.NewMsgTx()
 	// add all the txouts, direct from the argument slice
@@ -334,6 +490,8 @@ func (ts *TxStore) BuildAndSign(
 			tx.TxIn[i].Sequence = u.Seq
 		}
 	}
+	// sort txouts in place before signing.  txins are already sorted from above
+	txsort.InPlaceSort(tx)
 
 	// generate tx-wide hashCache for segwit stuff
 	// might not be needed (non-witness) but make it anyway
@@ -402,6 +560,7 @@ func (ts *TxStore) SendCoins(
 			"%d addresses and %d amounts", len(adrs), len(sendAmts))
 	}
 	var err error
+	var txos []*wire.TxOut
 	var totalSend int64
 	dustCutoff := int64(20000) // below this amount, just give to miners
 	satPerByte := int64(80)    // satoshis per byte fee; have as arg later
@@ -410,7 +569,6 @@ func (ts *TxStore) SendCoins(
 		totalSend += amt
 	}
 
-	tx := wire.NewMsgTx() // make new tx
 	// add non-change (arg) outputs
 	for i, adr := range adrs {
 		// make address script 76a914...88ac or 0014...
@@ -420,81 +578,58 @@ func (ts *TxStore) SendCoins(
 		}
 		// make user specified txout and add to tx
 		txout := wire.NewTxOut(sendAmts[i], outAdrScript)
-		tx.AddTxOut(txout)
+		txos = append(txos, txout)
 	}
 
-	changeOut, err := ts.NewChangeOut(0)
-	if err != nil {
-		return nil, err
-	}
-	tx.AddTxOut(changeOut)
 	// get inputs for this tx
+	// This might not be enough for the fee if the inputs line up right...
 	utxos, overshoot, err := ts.PickUtxos(totalSend, false)
 	if err != nil {
 		return nil, err
 	}
 	fmt.Printf("Overshot by %d, can make change output\n", overshoot)
-	// add inputs into tx
-	for _, u := range utxos {
-		tx.AddTxIn(wire.NewTxIn(&u.Op, nil, nil))
-	}
 
 	// estimate fee with outputs, see if change should be truncated
-	fee := EstFee(tx, satPerByte)
-	changeOut.Value = overshoot - fee
-	if changeOut.Value < dustCutoff {
-		if changeOut.Value < 0 {
-			fmt.Printf("Warning, tx probably has insufficient fee\n")
+	fee := EstFee(utxos, txos, satPerByte)
+
+	// add a change output if we have enough extra
+	if overshoot-fee > dustCutoff {
+		changeOut, err := ts.NewChangeOut(overshoot - fee)
+		if err != nil {
+			return nil, err
 		}
-		// remove last output (change) : not worth it
-		tx.TxOut = tx.TxOut[:len(tx.TxOut)-1]
+		txos = append(txos, changeOut)
 	}
 
-	// sort tx -- this only will change txouts since inputs are already sorted
-	txsort.InPlaceSort(tx)
-
-	return ts.BuildAndSign(utxos, tx.TxOut)
+	return ts.BuildAndSign(utxos, txos)
 }
 
-// EstFee gives a fee estimate based on a tx and a sat/Byte target.
-// The TX should have all outputs, including the change address already
-// populated (with potentially 0 amount.  Also it should have all inputs
-// populated, but inputs don't need to have sigscripts or witnesses
-// (it'll guess the sizes of sigs/wits that arent' filled in).
-func EstFee(otx *wire.MsgTx, spB int64) int64 {
-	mtsig := make([]byte, 72)
-	mtpub := make([]byte, 33)
-
-	tx := otx.Copy()
-
-	// iterate through txins, replacing subscript sigscripts with noise
-	// sigs or witnesses
-	for _, txin := range tx.TxIn {
-		// check wpkh
-		if len(txin.SignatureScript) == 22 &&
-			txin.SignatureScript[0] == 0x00 && txin.SignatureScript[1] == 0x14 {
-			txin.SignatureScript = nil
-			txin.Witness = make([][]byte, 2)
-			txin.Witness[0] = mtsig
-			txin.Witness[1] = mtpub
-		} else if len(txin.SignatureScript) == 34 &&
-			txin.SignatureScript[0] == 0x00 && txin.SignatureScript[1] == 0x20 {
-			// p2wsh -- sig lenght is a total guess!
-			txin.SignatureScript = nil
-			txin.Witness = make([][]byte, 3)
-			// 3 sigs? totally guessing here
-			txin.Witness[0] = mtsig
-			txin.Witness[1] = mtsig
-			txin.Witness[2] = mtsig
-		} else {
-			// assume everything else is p2pkh.  Even though it's not
-			txin.Witness = nil
-			txin.SignatureScript = make([]byte, 105) // len of p2pkh sigscript
+// EstFee gives a fee estimate based on a input / output set and a sat/Byte target.
+// It guesses the final tx size based on:
+// Txouts: 8 bytes + pkscript length
+// Txins by mode:
+// P2 PKH is op,seq (40) + pub(33) + sig(71) = 144
+// P2 WPKH is op,seq(40) + [(33+71 / 4) = 26] = 66
+// P2 WSH is op,seq(40) + [75(script) + 71]/4 (36) = 76
+// Total guess on the p2wsh one, see if that's accurate
+func EstFee(txins []*portxo.PorTxo, txouts []*wire.TxOut, spB int64) int64 {
+	size := int64(40) // around 40 bytes for a change output and nlock time
+	// iterate through txins, guessing size based on mode
+	for _, txin := range txins {
+		switch txin.Mode {
+		case portxo.TxoP2PKHComp: // non witness is about 150 bytes
+			size += 144
+		case portxo.TxoP2WPKHComp:
+			size += 66
+		case portxo.TxoP2WSHComp:
+			size += 76
+		default:
+			size += 150 // huh?
 		}
 	}
-	fmt.Printf(TxToString(tx))
-	size := int64(blockchain.GetMsgTxVirtualSize(tx))
-	tx.SerializeSize()
+	for _, txout := range txouts {
+		size += 8 + int64(len(txout.PkScript))
+	}
 	fmt.Printf("%d spB, est vsize %d, fee %d\n", spB, size, size*spB)
 	return size * spB
 }

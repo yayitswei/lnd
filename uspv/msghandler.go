@@ -6,6 +6,7 @@ import (
 
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/roasbeef/btcutil/bloom"
 )
 
 func (s *SPVCon) incomingMessageHandler() {
@@ -267,4 +268,17 @@ func (s *SPVCon) InvHandler(m *wire.MsgInv) {
 			}
 		}
 	}
+}
+
+func (s *SPVCon) PongBack(nonce uint64) {
+	mpong := wire.NewMsgPong(nonce)
+
+	s.outMsgQueue <- mpong
+	return
+}
+
+func (s *SPVCon) SendFilter(f *bloom.Filter) {
+	s.outMsgQueue <- f.MsgFilterLoad()
+
+	return
 }

@@ -42,14 +42,6 @@ var (
 	LNode qln.LnNode
 )
 
-type FundReservex struct {
-	PeerIdx       uint32
-	ChanIdx       uint32
-	Cap, InitSend int64
-	Roundup       int64
-	FrozenTxos    []*wire.OutPoint
-}
-
 func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
 	fmt.Printf("Not yet well integrated, but soon.\n")

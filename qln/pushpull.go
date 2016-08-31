@@ -5,7 +5,6 @@ import (
 
 	"github.com/lightningnetwork/lnd/lnutil"
 
-	"github.com/lightningnetwork/lnd/uspv"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
 )
@@ -121,13 +120,13 @@ func (nd *LnNode) SendRTS(qc *Qchan) error {
 	fmt.Printf("will send RTS with delta:%d elkPR %x\n",
 		qc.State.Delta, elkPointR[:4])
 
-	opArr := uspv.OutPointToBytes(qc.Op)
+	opArr := lnutil.OutPointToBytes(qc.Op)
 	// RTS is op (36), delta (4), ElkPointR (33), ElkPointT (33)
 	// total length 106
 	// could put index as well here but for now index just goes ++ each time.
 	msg := []byte{MSGID_RTS}
 	msg = append(msg, opArr[:]...)
-	msg = append(msg, uspv.U32tB(uint32(-qc.State.Delta))...)
+	msg = append(msg, lnutil.U32tB(uint32(-qc.State.Delta))...)
 	msg = append(msg, elkPointR[:]...)
 	msg = append(msg, elkPointT[:]...)
 	_, err = nd.RemoteCon.Write(msg)
@@ -242,7 +241,7 @@ func (nd *LnNode) SendACKSIG(qc *Qchan) error {
 		return err
 	}
 
-	opArr := uspv.OutPointToBytes(qc.Op)
+	opArr := lnutil.OutPointToBytes(qc.Op)
 	// ACKSIG is op (36), ElkPointR (33), ElkPointT (33), sig (64)
 	// total length 166
 	msg := []byte{MSGID_ACKSIG}
@@ -345,7 +344,7 @@ func (nd *LnNode) SendSIGREV(qc *Qchan) error {
 		return err
 	}
 
-	opArr := uspv.OutPointToBytes(qc.Op)
+	opArr := lnutil.OutPointToBytes(qc.Op)
 
 	// SIGREV is op (36), elk (32), sig (64)
 	// total length ~132
@@ -440,7 +439,7 @@ func (nd *LnNode) SendREV(qc *Qchan) error {
 		return err
 	}
 
-	opArr := uspv.OutPointToBytes(qc.Op)
+	opArr := lnutil.OutPointToBytes(qc.Op)
 	// REV is just op (36), elk (32)
 	// total length 68
 	msg := []byte{MSGID_REVOKE}

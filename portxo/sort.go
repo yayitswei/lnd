@@ -7,7 +7,7 @@ import (
 )
 
 // txoSliceByBip69 is a sortable txo slice - same algo as txsort / BIP69
-type TxoSliceByBip69 []PorTxo
+type TxoSliceByBip69 []*PorTxo
 
 // Sort utxos just like txins -- Len, Less, Swap
 func (s TxoSliceByBip69) Len() int      { return len(s) }
