@@ -163,6 +163,28 @@ func Shellparse(cmdslice []string) error {
 		}
 		return nil
 	}
+	if cmd == "msend" {
+		err = MSend(args)
+		if err != nil {
+			fmt.Printf("Msend error: %s\n", err)
+		}
+		return nil
+	}
+	if cmd == "rsend" {
+		err = RSend(args)
+		if err != nil {
+			fmt.Printf("Rsend error: %s\n", err)
+		}
+		return nil
+	}
+	if cmd == "nsend" {
+		err = NSend(args)
+		if err != nil {
+			fmt.Printf("Nsend error: %s\n", err)
+		}
+		return nil
+	}
+
 	if cmd == "fan" { // fan-out tx
 		err = Fan(args)
 		if err != nil {
@@ -708,6 +730,101 @@ func Send(args []string) error {
 		return err
 	}
 	return SCon.NewOutgoingTx(tx)
+}
+
+// Msend mayyybe sends.
+func MSend(args []string) error {
+	if SCon.RBytes == 0 {
+		return fmt.Errorf("Can't send, spv connection broken")
+	}
+	// get all utxos from the database
+	allUtxos, err := SCon.TS.GetAllUtxos()
+	if err != nil {
+		return err
+	}
+	var score int64 // score is the sum of all utxo amounts.  highest score wins.
+	// add all the utxos up to get the score
+	for _, u := range allUtxos {
+		score += u.Value
+	}
+
+	// score is 0, cannot unlock 'send coins' acheivement
+	if score == 0 {
+		return fmt.Errorf("You don't have money.  Work hard.")
+	}
+	// need args, fail
+	if len(args) < 2 {
+		return fmt.Errorf("need args: msend address amount(satoshis)")
+	}
+	adr, err := btcutil.DecodeAddress(args[0], SCon.TS.Param)
+	if err != nil {
+		fmt.Printf("error parsing %s as address\t", args[0])
+		return err
+	}
+	amt, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil {
+		return err
+	}
+	if amt < 1000 {
+		return fmt.Errorf("can't send %d, too small", amt)
+	}
+
+	fmt.Printf("send %d to address: %s \n",
+		amt, adr.String())
+
+	// make address script 76a914...88ac or 0014...
+	outAdrScript, err := txscript.PayToAddrScript(adr)
+	if err != nil {
+		return err
+	}
+	// make user specified txout and add to tx
+	txout := wire.NewTxOut(amt, outAdrScript)
+	txos := []*wire.TxOut{txout}
+
+	txid, idxs, err := SCon.MaybeSend(txos)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("got txid %s. Requested output is at index %d\n",
+		txid.String(), idxs[0])
+	return nil
+}
+
+// Rsend really sends
+func RSend(args []string) error {
+	if SCon.RBytes == 0 {
+		return fmt.Errorf("Can't send, spv connection broken")
+	}
+	// need args, fail
+	if len(args) < 1 {
+		return fmt.Errorf("need args: rsend txid")
+	}
+
+	txid, err := wire.NewShaHashFromStr(args[0])
+	if err != nil {
+		return err
+	}
+
+	return SCon.ReallySend(txid)
+}
+
+// Nsend nah doesn't send
+func NSend(args []string) error {
+	if SCon.RBytes == 0 {
+		return fmt.Errorf("Can't send, spv connection broken")
+	}
+	// need args, fail
+	if len(args) < 1 {
+		return fmt.Errorf("need args: nsend txid")
+	}
+
+	txid, err := wire.NewShaHashFromStr(args[0])
+	if err != nil {
+		return err
+	}
+
+	return SCon.NahDontSend(txid)
 }
 
 func Help(args []string) error {

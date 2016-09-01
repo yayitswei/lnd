@@ -40,10 +40,10 @@ func (s *SPVCon) MaybeSend(txos []*wire.TxOut) (*wire.ShaHash, []uint32, error) 
 
 	// start access to utxos
 	s.TS.FreezeMutex.Lock()
-
-	// get inputs for this tx
+	defer s.TS.FreezeMutex.Unlock()
+	// get inputs for this tx.  Only segwit
 	// This might not be enough for the fee if the inputs line up right...
-	utxos, overshoot, err := s.TS.PickUtxos(totalSend, false)
+	utxos, overshoot, err := s.TS.PickUtxos(totalSend, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -76,7 +76,7 @@ func (s *SPVCon) MaybeSend(txos []*wire.TxOut) (*wire.ShaHash, []uint32, error) 
 		s.TS.FreezeSet[utxo.Op] = fTx
 	}
 	// done adding to frozen set
-	s.TS.FreezeMutex.Unlock()
+	//	s.TS.FreezeMutex.Unlock()
 
 	// figure out where outputs ended up after adding the change output and sorting
 	for i, initTxo := range initTxos {
@@ -96,8 +96,10 @@ func (s *SPVCon) MaybeSend(txos []*wire.TxOut) (*wire.ShaHash, []uint32, error) 
 // Sign and broadcast a tx previously built with MaybeSend.  This clears the freeze
 // on the utxos but they're not utxos anymore anyway.
 func (s *SPVCon) ReallySend(txid *wire.ShaHash) error {
+	fmt.Printf("Reallysend %s\n", txid.String())
 	// start frozen set access
 	s.TS.FreezeMutex.Lock()
+	defer s.TS.FreezeMutex.Unlock()
 	// get the transaction
 	frozenTx, err := s.TS.FindFreezeTx(txid)
 	if err != nil {
@@ -105,10 +107,9 @@ func (s *SPVCon) ReallySend(txid *wire.ShaHash) error {
 	}
 	// delete inputs from frozen set (they're gone anyway, but just to clean it up)
 	for _, txin := range frozenTx.Ins {
+		fmt.Printf("\t remove %s from frozen outpoints\n", txin.Op.String())
 		delete(s.TS.FreezeSet, txin.Op)
 	}
-	// done with frozen set
-	s.TS.FreezeMutex.Unlock()
 
 	tx, err := s.TS.BuildAndSign(frozenTx.Ins, frozenTx.Outs)
 	if err != nil {
@@ -121,8 +122,10 @@ func (s *SPVCon) ReallySend(txid *wire.ShaHash) error {
 // Cancel the hold on a tx previously built with MaybeSend.  Clears freeze on
 // utxos so they can be used somewhere else.
 func (s *SPVCon) NahDontSend(txid *wire.ShaHash) error {
+	fmt.Printf("Nahdontsend %s\n", txid.String())
 	// start frozen set access
 	s.TS.FreezeMutex.Lock()
+	defer s.TS.FreezeMutex.Unlock()
 	// get the transaction
 	frozenTx, err := s.TS.FindFreezeTx(txid)
 	if err != nil {
@@ -130,10 +133,11 @@ func (s *SPVCon) NahDontSend(txid *wire.ShaHash) error {
 	}
 	// go through all its inputs, and remove those outpoints from the frozen set
 	for _, txin := range frozenTx.Ins {
+		fmt.Printf("\t remove %s from frozen outpoints\n", txin.Op.String())
 		delete(s.TS.FreezeSet, txin.Op)
 	}
-	// done with frozen set
-	s.TS.FreezeMutex.Unlock()
+	//	// done with frozen set
+	//	s.TS.FreezeMutex.Unlock()
 	return nil
 }
 
@@ -416,6 +420,13 @@ func (ts *TxStore) SendDrop(
 // SendOne is for the sweep function, and doesn't do change.
 // Probably can get rid of this for real txs.
 func (ts *TxStore) SendOne(u portxo.PorTxo, adr btcutil.Address) (*wire.MsgTx, error) {
+
+	ts.FreezeMutex.Lock()
+	defer ts.FreezeMutex.Unlock()
+	_, frozen := ts.FreezeSet[u.Op]
+	if frozen {
+		return nil, fmt.Errorf("%s is frozen, can't spend", u.Op.String())
+	}
 
 	curHeight, err := ts.GetDBSyncHeight()
 	if err != nil {
