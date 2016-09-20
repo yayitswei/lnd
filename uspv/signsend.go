@@ -229,6 +229,7 @@ func (s *SPVCon) NewOutgoingTx(tx *wire.MsgTx) error {
 // if "ow" is true, only gives witness utxos (for channel funding)
 func (ts *TxStore) PickUtxos(
 	amtWanted int64, ow bool) (portxo.TxoSliceByBip69, int64, error) {
+
 	satPerByte := int64(80) // satoshis per byte fee; have as arg later
 	curHeight, err := ts.GetDBSyncHeight()
 	if err != nil {

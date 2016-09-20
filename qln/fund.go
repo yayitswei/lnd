@@ -3,9 +3,13 @@ package qln
 import (
 	"fmt"
 
+	"li.lan/tx/lnd/qln"
+	"li.lan/tx/lnd/uspv"
+
 	"github.com/lightningnetwork/lnd/elkrem"
 	"github.com/lightningnetwork/lnd/lnutil"
 	"github.com/lightningnetwork/lnd/portxo"
+	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
 )
 
@@ -113,11 +117,11 @@ func (nd *LnNode) PointReqHandler(from [16]byte, pointReqBytes []byte) {
 
 	var kg portxo.KeyGen
 	kg.Depth = 5
-	kg.Step[0] = 44 + 0x80000000
-	kg.Step[1] = 0 + 0x80000000
+	kg.Step[0] = 44 | 1<<31
+	kg.Step[1] = 0 | 1<<31
 	kg.Step[2] = UseChannelFund
-	kg.Step[3] = peerIdx + 0x80000000
-	kg.Step[4] = cIdx + 0x80000000
+	kg.Step[3] = peerIdx | 1<<31
+	kg.Step[4] = cIdx | 1<<31
 
 	myChanPub := nd.GetUsePub(kg, UseChannelFund)
 	myRefundPub := nd.GetUsePub(kg, UseChannelRefund)
@@ -135,118 +139,104 @@ func (nd *LnNode) PointReqHandler(from [16]byte, pointReqBytes []byte) {
 // FundChannel makes a multisig address with the node connected to...
 func (nd LnNode) PointRespHandler(from [16]byte, pointRespBytes []byte) error {
 	// not sure how to do this yet
-	/*
-		if len(FundChanStash) == 0 {
-			return fmt.Errorf("Got point response but no channel creation in progress")
-		}
-		fr := FundChanStash[0]
-		//TODO : check that pointResp is from the same peer as the FundReserve peer
 
-		satPerByte := int64(80)
-		capBytes := uspv.I64tB(fr.Cap)
+	if nd.InProg.PeerIdx == 0 {
+		return fmt.Errorf("Got point response but no channel creation in progress")
+	}
 
-		if len(pointRespBytes) != 99 {
-			return fmt.Errorf("PointRespHandler err: pointRespBytes %d bytes, expect 99\n",
-				len(pointRespBytes))
-		}
-		var theirPub [33]byte
-		copy(theirPub[:], pointRespBytes[:33])
+	if len(pointRespBytes) != 99 {
+		return fmt.Errorf("PointRespHandler err: pointRespBytes %d bytes, expect 99\n",
+			len(pointRespBytes))
+	}
 
-		var theirRefundPub [33]byte
-		copy(theirRefundPub[:], pointRespBytes[33:66])
+	copy(nd.InProg.theirPub[:], pointRespBytes[:33])
+	copy(nd.InProg.theirRefundPub[:], pointRespBytes[33:66])
+	copy(nd.InProg.theirHAKDbase[:], pointRespBytes[66:])
 
-		var theirHAKDbase [33]byte
-		copy(theirHAKDbase[:], pointRespBytes[66:])
+	// should put these pubkeys somewhere huh.
 
-		// make sure their pubkey is a pubkey
-		_, err := btcec.ParsePubKey(theirPub[:], btcec.S256())
-		if err != nil {
-			return fmt.Errorf("PubRespHandler err %s", err.Error())
-		}
+	// make sure their pubkey is a pubkey
+	_, err := btcec.ParsePubKey(nd.InProg.theirPub[:], btcec.S256())
+	if err != nil {
+		return fmt.Errorf("PubRespHandler err %s", err.Error())
+	}
+	//TODO check here that we actually want to proceed
+	// (make sure their index is the same as in the InProg)
 
-		tx := wire.NewMsgTx() // make new tx
+	var peerArr [33]byte
+	copy(peerArr[:], nd.RemoteCon.RemotePub.SerializeCompressed())
 
-		// first get inputs. comes sorted from PickUtxos.
-		utxos, overshoot, err := SCon.TS.PickUtxos(fr.Cap, true)
-		if err != nil {
-			return err
-		}
-		if overshoot < 0 {
-			return fmt.Errorf("witness utxos undershoot by %d", -overshoot)
-		}
-		//TODO use frozen utxos
-		// add all the inputs to the tx
-		for _, utxo := range utxos {
-			tx.AddTxIn(wire.NewTxIn(&utxo.Op, nil, nil))
-		}
-		// estimate fee
-		fee := uspv.EstFee(tx, satPerByte)
-		// create change output
-		changeOut, err := SCon.TS.NewChangeOut(overshoot - fee)
-		if err != nil {
-			return err
-		}
+	// make channel (not in db) just for keys / elk
+	var qc Qchan
+	qc.KeyGen.Depth = 5
+	qc.KeyGen.Step[0] = 44 | 1<<31
+	qc.KeyGen.Step[1] = 0 | 1<<31
+	qc.KeyGen.Step[2] = UseChannelFund
+	qc.KeyGen.Step[3] = nd.InProg.PeerIdx | 1<<31
+	qc.KeyGen.Step[4] = nd.InProg.ChanIdx | 1<<31
 
-		tx.AddTxOut(changeOut) // add change output
+	qc.MyPub = nd.GetUsePub(qc.KeyGen, UseChannelFund)
+	qc.MyRefundPub = nd.GetUsePub(qc.KeyGen, UseChannelRefund)
+	qc.MyHAKDBase = nd.GetUsePub(qc.KeyGen, UseChannelHAKDBase)
 
-		var peerArr [33]byte
-		copy(peerArr[:], RemoteCon.RemotePub.SerializeCompressed())
+	// derive elkrem sender root from HD keychain
+	qc.ElkSnd = elkrem.NewElkremSender(nd.GetElkremRoot(qc.KeyGen))
 
-		// save partial tx to db; populate output, get their channel pubkey
-		op, err := LNode.MakeFundTx(tx, fr.Cap, fr.PeerIdx, fr.ChanIdx,
-			peerArr, theirPub, theirRefundPub, theirHAKDbase)
-		if err != nil {
-			return err
-		}
-		// don't need to add to filters; we'll pick the TX up anyway because it
-		// spends our utxos.
+	// get txo for channel
+	txo, err := FundTxOut(qc.MyPub, nd.InProg.theirPub, nd.InProg.Amt)
+	if err != nil {
+		return err
+	}
 
-		// tx saved in DB.  Next then notify peer (then sign and broadcast)
-		fmt.Printf("tx:%s ", uspv.TxToString(tx))
-		// load qchan from DB (that we just saved) to generate elkrem / sig / etc
-		// this is kindof dumb; remove later.
-		opArr := uspv.OutPointToBytes(*op)
-		qc, err := LNode.GetQchan(peerArr, opArr)
-		if err != nil {
-			return err
-		}
+	txid, idxs, err := nd.BaseWallet.MaybeSend([]*wire.TxOut{txo})
+	if err != nil {
+		return err
+	}
+	// should only have 1 index, which we use
+	if len(idxs) != 1 {
+		return fmt.Errorf("got %d indexes from MaybeSend (expect 1)", len(idxs))
+	}
+	nd.InProg.op = wire.NewOutPoint(txid, idxs[0])
 
-		// create initial state
-		qc.State.StateIdx = 1
-		qc.State.MyAmt = qc.Value - fr.InitSend
+	// nothing saved to db yet, but
+	// since there's an outpoint in InProg, we did call MaybeSend()
 
-		err = LNode.SaveQchanState(qc)
-		if err != nil {
-			return err
-		}
+	// should watch for this tx.  Maybe after broadcasting
 
-		theirElkPointR, theirElkPointT, err := qc.MakeTheirCurElkPoints()
-		if err != nil {
-			return err
-		}
+	opArr := lnutil.OutPointToBytes(*nd.InProg.op)
 
-		elk, err := qc.ElkSnd.AtIndex(0)
-		if err != nil {
-			return err
-		}
+	// create initial state for elkrem points
+	qc.State.StateIdx = 1
 
-		initPayBytes := uspv.I64tB(fr.InitSend) // also will be an arg
-		// description is outpoint (36), mypub(33), myrefund(33),
-		// myHAKDbase(33), capacity (8),
-		// initial payment (8), ElkPointR (33), ElkPointT (33), elk0 (32)
-		// total length 249
-		msg := []byte{qln.MSGID_CHANDESC}
-		msg = append(msg, opArr[:]...)
-		msg = append(msg, qc.MyPub[:]...)
-		msg = append(msg, qc.MyRefundPub[:]...)
-		msg = append(msg, qc.MyHAKDBase[:]...)
-		msg = append(msg, capBytes...)
-		msg = append(msg, initPayBytes...)
-		msg = append(msg, theirElkPointR[:]...)
-		msg = append(msg, theirElkPointT[:]...)
-		msg = append(msg, elk.Bytes()...)
-		_, err = RemoteCon.Write(msg)
-	*/
+	theirElkPointR, theirElkPointT, err := qc.MakeTheirCurElkPoints()
+	if err != nil {
+		return err
+	}
+
+	elk, err := qc.ElkSnd.AtIndex(0)
+	if err != nil {
+		return err
+	}
+
+	initPayBytes := uspv.I64tB(nd.InProg.InitSend) // also will be an arg
+	capBytes := lnutil.I64tB(nd.InProg.Amt)
+
+	// description is outpoint (36), mypub(33), myrefund(33),
+	// myHAKDbase(33), capacity (8),
+	// initial payment (8), ElkPointR (33), ElkPointT (33), elk0 (32)
+	// total length 249
+	msg := []byte{qln.MSGID_CHANDESC}
+	msg = append(msg, opArr[:]...)
+	msg = append(msg, qc.MyPub[:]...)
+	msg = append(msg, qc.MyRefundPub[:]...)
+	msg = append(msg, qc.MyHAKDBase[:]...)
+	msg = append(msg, capBytes...)
+	msg = append(msg, initPayBytes...)
+	msg = append(msg, theirElkPointR[:]...)
+	msg = append(msg, theirElkPointT[:]...)
+	msg = append(msg, elk.Bytes()...)
+	_, err = nd.RemoteCon.Write(msg)
+
 	return nil
 }
 

@@ -16,9 +16,10 @@ func FundChannel(args []string) error {
 	if LNode.RemoteCon == nil || LNode.RemoteCon.RemotePub == nil {
 		return fmt.Errorf("Not connected to anyone")
 	}
-	//	if len(FundChanStash) > 0 {
-	//		return fmt.Errorf("Other channel creation not done yet")
-	//	}
+
+	if LNode.InProg.PeerIdx != 0 {
+		return fmt.Errorf("channel with peer %d not done yet", LNode.InProg.PeerIdx)
+	}
 
 	// this stuff is all the same as in cclose, should put into a function...
 	cCap, err := strconv.ParseInt(args[0], 10, 32)
@@ -39,31 +40,28 @@ func FundChannel(args []string) error {
 		return fmt.Errorf("Cant send %d in %d capacity channel",
 			iSend, cCap)
 	}
-	// get inputs. comes sorted from PickUtxos.
-	// add these into fundreserve to freeze them
-	_, overshoot, err := SCon.TS.PickUtxos(cCap, true)
+
+	// see if we have enough money.  Doesn't freeze here though, just
+	// checks for ability to fund.  Freeze happens when we receive the response.
+	// Could fail if we run out of money before calling MaybeSend()
+	_, _, err = SCon.TS.PickUtxos(cCap, true)
 	if err != nil {
 		return err
-	}
-	if overshoot < 0 {
-		return fmt.Errorf("witness utxos undershoot by %d", -overshoot)
 	}
 
 	var peerArr [33]byte
 	copy(peerArr[:], LNode.RemoteCon.RemotePub.SerializeCompressed())
-	//	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
-	//	if err != nil {
-	//		return err
-	//	}
 
-	//	fr := new(FundReserve)
-	//	fr.PeerIdx = peerIdx
-	//	fr.ChanIdx = cIdx
-	//	fr.Cap = cCap
-	//	fr.InitSend = iSend
-	//TODO freeze utxos here
+	peerIdx, cIdx, err := LNode.NextIdxForPeer(peerArr)
+	if err != nil {
+		return err
+	}
 
-	//	FundChanStash = append(FundChanStash, fr)
+	LNode.InProg.ChanIdx = cIdx
+	LNode.InProg.PeerIdx = peerIdx
+	LNode.InProg.Amt = cCap
+	LNode.InProg.InitSend = iSend
+
 	msg := []byte{qln.MSGID_POINTREQ}
 	_, err = LNode.RemoteCon.Write(msg)
 	return err

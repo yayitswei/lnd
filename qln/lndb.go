@@ -55,8 +55,20 @@ type LnNode struct {
 	// OmniChan is the channel for the OmniHandler
 	OmniChan chan []byte
 
+	InProg *InFlightFund
+
 	// Params live here... AND SCon
 	Param *chaincfg.Params // network parameters (testnet3, segnet, etc)
+}
+
+// InFlightFund is the mem chache of the current constructed channel
+type InFlightFund struct {
+	PeerIdx, ChanIdx uint32
+	Amt, InitSend    int64
+
+	theirPub, theirRefundPub, theirHAKDbase [33]byte
+
+	op *wire.OutPoint
 }
 
 // CountKeysInBucket is needed for NewPeer.  Counts keys in a bucket without
@@ -159,6 +171,56 @@ func (nd *LnNode) GetPeerIdx(pub *btcec.PublicKey) (uint32, error) {
 	})
 	return idx, err
 }
+
+//nd.InProg, peerArr, theirPub, theirRefundPub, theirHAKDbase
+
+//func (nd *LnNode) RegisterQChan(ff InFlightFund,
+//	peerPub, theirPub, theirRefundPub, theirHAKDbase [33]byte) (*Qchan, error) {
+
+//	var err error
+
+//	// make channel to save to db
+//	var qc Qchan
+//	qc.TheirPub = theirPub
+//	qc.TheirRefundPub = theirRefundPub
+//	qc.TheirHAKDBase = theirHAKDbase
+//	qc.Height = -1
+//	qc.KeyGen.Depth = 5
+//	qc.KeyGen.Step[0] = 44 | 1<<31
+//	qc.KeyGen.Step[1] = 0 | 1<<31
+//	qc.KeyGen.Step[2] = UseChannelFund
+//	qc.KeyGen.Step[3] = ff.PeerIdx | 1<<31
+//	qc.KeyGen.Step[4] = ff.ChanIdx | 1<<31
+
+//	qc.Value = ff.Amt
+//	qc.Mode = portxo.TxoP2WSHComp
+
+//	// save channel to db.  It has no state, and has no outpoint yet
+//	err = nd.LnDB.Update(func(btx *bolt.Tx) error {
+//		prs := btx.Bucket(BKTPeers) // go into bucket for all peers
+//		if prs == nil {
+//			return fmt.Errorf("MakeMultiTx: no peers")
+//		}
+//		pr := prs.Bucket(peerId[:]) // go into this peers bucket
+//		if pr == nil {
+//			return fmt.Errorf("MakeMultiTx: peer %x not found", peerId)
+//		}
+//		// serialize channel
+//		qcBytes, err := qc.ToBytes()
+//		if err != nil {
+//			return err
+//		}
+
+//		// save qchannel in the bucket; it has no state yet
+//		err = qcBucket.Put(KEYutxo, qcBytes)
+//		if err != nil {
+//			return err
+//		}
+
+//	})
+
+//	return nil, nil
+//}
 
 // MakeFundTx fills out a channel funding tx.
 // You need to give it a partial tx with the inputs and change output

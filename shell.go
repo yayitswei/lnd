@@ -44,7 +44,6 @@ var (
 
 func shell(deadend string, deadend2 *chaincfg.Params) {
 	fmt.Printf("LND spv shell v0.0\n")
-	fmt.Printf("Not yet well integrated, but soon.\n")
 
 	// read key file (generate if not found)
 	rootPriv, err := uspv.ReadKeyFileToECPriv(keyFileName, Params)
@@ -56,7 +55,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 	// setup spvCon
 
 	SCon, err = uspv.OpenSPV(
-		SPVHostAdr, headerFileName, utxodbFileName, &Store, true, false, Params)
+		SPVHostAdr, headerFileName, utxodbFileName, &Store, false, false, Params)
 	if err != nil {
 		log.Printf("can't connect: %s", err.Error())
 		log.Fatal(err) // back to fatal when can't connect
@@ -67,7 +66,7 @@ func shell(deadend string, deadend2 *chaincfg.Params) {
 		log.Fatal(err)
 	}
 	if tip == 0 { // DB has never been used, set to birthday
-		tip = 925800 // hardcoded; later base on keyfile date?
+		tip = 928500 // hardcoded; later base on keyfile date?
 		err = SCon.TS.SetDBSyncHeight(tip)
 		if err != nil {
 			log.Fatal(err)
