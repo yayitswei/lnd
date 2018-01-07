@@ -182,7 +182,7 @@ func lndMain() error {
 	}
 	sCreds := credentials.NewTLS(tlsConf)
 	serverOpts := []grpc.ServerOption{grpc.Creds(sCreds)}
-	grpcEndpoint := fmt.Sprintf("localhost:%d", loadedConfig.RPCPort)
+	grpcEndpoint := fmt.Sprintf(":%d", loadedConfig.RPCPort)
 	restEndpoint := fmt.Sprintf(":%d", loadedConfig.RESTPort)
 	cCreds, err := credentials.NewClientTLSFromFile(cfg.TLSCertPath,
 		"")
